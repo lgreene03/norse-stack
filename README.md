@@ -6,6 +6,7 @@
 [![Huginn CI](https://github.com/lgreene03/huginn/actions/workflows/ci.yml/badge.svg)](https://github.com/lgreene03/huginn/actions/workflows/ci.yml)
 [![Sleipnir CI](https://github.com/lgreene03/sleipnir/actions/workflows/ci.yml/badge.svg)](https://github.com/lgreene03/sleipnir/actions/workflows/ci.yml)
 [![muninn-py CI](https://github.com/lgreene03/muninn-py/actions/workflows/ci.yml/badge.svg)](https://github.com/lgreene03/muninn-py/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 Norse Stack is a four-service distributed trading system that ingests market data, computes deterministic features, executes quantitative strategies, and routes orders to exchanges. Named after figures from Norse mythology, each service has a single responsibility and communicates via Kafka (Redpanda).
 
