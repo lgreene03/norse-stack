@@ -45,6 +45,7 @@ phase() { echo -e "\n${CYAN}${BOLD}═══ $1 ═══${NC}"; }
 
 FAILURES=0
 
+# shellcheck disable=SC2317
 cleanup() {
   if [ "$TEARDOWN" = true ]; then
     info "Tearing down stack..."
