@@ -43,6 +43,6 @@ parent/
 | 8088  | Redpanda Console   |
 | 9002  | MinIO API          |
 | 9003  | MinIO Console      |
-| 5433  | PostgreSQL (Muninn)|
+| 5437  | PostgreSQL (Muninn)|
 | 5436  | PostgreSQL (Huginn)|
 | 19092 | Redpanda (Kafka)   |

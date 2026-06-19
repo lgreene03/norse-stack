@@ -49,7 +49,7 @@ services:
       POSTGRES_USER: muninn
       POSTGRES_PASSWORD: muninn
     ports:
-      - "5433:5432"
+      - "5437:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U muninn"]
       interval: 5s
