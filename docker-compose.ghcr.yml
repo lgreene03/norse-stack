@@ -1,0 +1,35 @@
+# GHCR override — boot the engine services from prebuilt images instead of
+# building them from sibling checkouts.
+#
+# Use this when you have NOT cloned ../muninn, ../huginn, ../sleipnir and just
+# want to run the stack from published images:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+#   # or: make up-ghcr
+#
+# The image tag defaults to "latest"; override per service or all at once:
+#
+#   HUGINN_TAG=v0.2.0 SLEIPNIR_TAG=v0.2.0 MUNINN_TAG=v0.2.0 \
+#     docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+#
+# NOTE: huginn and sleipnir publish images via their release.yml workflows
+# (ghcr.io/lgreene03/<svc>, tagged by semver and short SHA). These images only
+# exist once a release/tag has been pushed — if a tag has not been published yet
+# the pull will fail; in that case use the build path (`make up` / the default
+# `docker compose up -d --build`) which builds from the sibling checkouts.
+#
+# `image:` here OVERRIDES the `build:` block from docker-compose.yml for these
+# services, so no sibling checkout is required for them.
+
+services:
+  muninn:
+    image: ghcr.io/lgreene03/muninn:${MUNINN_TAG:-latest}
+    build: !reset null
+
+  huginn:
+    image: ghcr.io/lgreene03/huginn:${HUGINN_TAG:-latest}
+    build: !reset null
+
+  sleipnir:
+    image: ghcr.io/lgreene03/sleipnir:${SLEIPNIR_TAG:-latest}
+    build: !reset null

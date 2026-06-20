@@ -10,3 +10,12 @@ Thumbs.db
 
 # Docker volumes
 data/
+
+# Python (test/coverage artifacts produced by the services CI job)
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+coverage.xml
+coverage.json
+coverage-badge.svg

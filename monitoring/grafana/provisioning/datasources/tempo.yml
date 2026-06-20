@@ -1,0 +1,31 @@
+apiVersion: 1
+
+datasources:
+  - name: Tempo
+    type: tempo
+    access: proxy
+    uid: tempo
+    url: http://tempo:3200
+    editable: false
+    jsonData:
+      # Service-graph view backed by the span/service-graph metrics that
+      # Tempo's metrics_generator remote-writes into Prometheus.
+      serviceMap:
+        datasourceUid: prometheus
+      nodeGraph:
+        enabled: true
+      # Trace-to-metrics: jump from a span to RED metrics in Prometheus.
+      tracesToMetrics:
+        datasourceUid: prometheus
+      # Trace-to-logs: jump from a span to correlated logs. Points at the
+      # Prometheus datasource as a placeholder target until a log store
+      # (e.g. Loki) is added; span/service tags carry the correlation.
+      tracesToLogsV2:
+        datasourceUid: prometheus
+        spanStartTimeShift: "-1h"
+        spanEndTimeShift: "1h"
+        filterByTraceID: true
+        filterBySpanID: false
+        tags:
+          - key: service.name
+            value: service

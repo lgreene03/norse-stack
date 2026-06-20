@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -30,8 +31,14 @@ import urllib.request
 import urllib.error
 from datetime import datetime, timezone
 
-from kafka import KafkaProducer
-from kafka.errors import KafkaConnectionError
+try:
+    from kafka import KafkaProducer
+    from kafka.errors import KafkaConnectionError
+except ImportError:  # pragma: no cover - allows importing pure helpers in tests
+    KafkaProducer = None
+
+    class KafkaConnectionError(Exception):
+        pass
 
 KAFKA_BROKERS = os.environ.get("KAFKA_BROKERS", "redpanda:29092")
 OBI_TOPIC = os.environ.get("OBI_TOPIC", "features.obi.v1")
@@ -51,6 +58,31 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 log = logging.getLogger("obi-bridge")
+
+
+def resolve_code_version():
+    """Resolve the running code version for event provenance.
+
+    Prefers an explicit CODE_VERSION / GIT_SHA env (injected at build time),
+    falling back to `git rev-parse` when a checkout is present, then to
+    "unknown" so the field is always populated.
+    """
+    for var in ("CODE_VERSION", "GIT_SHA"):
+        val = os.environ.get(var)
+        if val:
+            return val.strip()
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            stderr=subprocess.DEVNULL,
+        )
+        return out.decode().strip()
+    except Exception:
+        return "unknown"
+
+
+CODE_VERSION = resolve_code_version()
 
 shutdown = False
 
@@ -190,7 +222,7 @@ def compute_volatility(klines):
 
     ranges = []
     for i, k in enumerate(klines[-14:]):
-        high, low, close = float(k[2]), float(k[3]), float(k[4])
+        high, low = float(k[2]), float(k[3])
         if i == 0:
             tr = high - low
         else:
@@ -278,7 +310,6 @@ class RegimeDetector:
         self.prices = {}  # symbol -> deque of closes
 
     def update(self, symbol, price):
-        import math
         from collections import deque
         if symbol not in self.prices:
             self.prices[symbol] = deque(maxlen=self.window + 1)
@@ -357,24 +388,67 @@ def compute_oi_change(current_oi, prev_oi):
     return (current_oi - prev_oi) / prev_oi
 
 
+def ms_to_iso(epoch_ms):
+    """Convert an exchange epoch-millis timestamp to an ISO-8601 Z string."""
+    return datetime.fromtimestamp(epoch_ms / 1000.0, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+
+
+def kline_window(klines):
+    """Return (window_start_ms, window_end_ms) from a kline series.
+
+    Binance klines are arrays where index 0 is the bar open time and index 6
+    is the bar close time, both epoch millis. The most recent bar's close
+    time is the canonical event/window-end time; the first bar's open time is
+    the window start. Returns (None, None) when no usable klines are present.
+    """
+    if not klines:
+        return None, None
+    try:
+        window_start = int(klines[0][0])
+        window_end = int(klines[-1][6])
+        return window_start, window_end
+    except (IndexError, ValueError, TypeError):
+        return None, None
+
+
 def build_feature_event(instrument, metrics, mom_5m, mom_1m, mom_15m,
                         volatility, volume, fear_greed, funding_rate,
                         oi_change, ml_score, ml_ready, news_sentiment,
-                        regime_info=None):
-    now = datetime.now(timezone.utc)
-    now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    epoch_ms = int(now.timestamp() * 1000)
+                        regime_info=None, window_start_ms=None,
+                        window_end_ms=None, input_event_ids=None):
+    ingest = datetime.now(timezone.utc)
+    ingest_str = ingest.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # eventTime / window are stamped from exchange-provided data times so the
+    # event is replay-deterministic and joins cleanly with future labels.
+    # Wall-clock is kept separately as ingestTime. When the exchange window is
+    # unavailable (e.g. empty kline response) fall back to ingest time so the
+    # event still validates, but flag it via ingestTime divergence.
+    if window_end_ms is not None:
+        event_str = ms_to_iso(window_end_ms)
+        epoch_ms = int(window_end_ms)
+    else:
+        event_str = ingest_str
+        epoch_ms = int(ingest.timestamp() * 1000)
+
+    window_start_str = ms_to_iso(window_start_ms) if window_start_ms is not None else event_str
+    window_end_str = ms_to_iso(window_end_ms) if window_end_ms is not None else event_str
 
     regime = regime_info or {}
 
     return {
         "eventId": str(uuid.uuid4()),
-        "eventTime": now_str,
+        "eventTime": event_str,
+        "ingestTime": ingest_str,
+        "codeVersion": CODE_VERSION,
+        "inputEventIds": list(input_event_ids or []),
         "featureName": "obi",
         "featureVersion": "v1",
         "instrument": instrument,
-        "windowStart": now_str,
-        "windowEnd": now_str,
+        "windowStart": window_start_str,
+        "windowEnd": window_end_str,
         "signalTimeMs": epoch_ms,
         "values": {
             # Core OBI
@@ -416,6 +490,9 @@ def build_feature_event(instrument, metrics, mom_5m, mom_1m, mom_15m,
 
 
 def connect_kafka(retries=30, delay=2):
+    if KafkaProducer is None:
+        log.error("kafka-python not installed; cannot connect to Kafka")
+        sys.exit(1)
     for attempt in range(1, retries + 1):
         try:
             producer = KafkaProducer(
@@ -610,11 +687,25 @@ def main():
                 regime_detector.update(symbol, metrics["mid"])
                 regime_info = regime_detector.classify(symbol)
 
+                # Provenance: exchange data-window from the 5m kline series and
+                # the snapshot ids of the inputs that produced this feature
+                # (orderbook lastUpdateId + kline close time).
+                window_start_ms, window_end_ms = kline_window(klines_5m)
+                input_event_ids = []
+                book_update_id = book.get("lastUpdateId")
+                if book_update_id is not None:
+                    input_event_ids.append(f"orderbook:{symbol}:{book_update_id}")
+                if window_end_ms is not None:
+                    input_event_ids.append(f"kline5m:{symbol}:{window_end_ms}")
+
                 event = build_feature_event(
                     instrument, metrics, mom_5m, mom_1m, mom_15m,
                     volatility, volume, fear_greed, funding_rate,
                     oi_change, ml_score, ml_ready, news_sentiment,
                     regime_info,
+                    window_start_ms=window_start_ms,
+                    window_end_ms=window_end_ms,
+                    input_event_ids=input_event_ids,
                 )
 
                 producer.send(OBI_TOPIC, key=instrument, value=event)

@@ -10,6 +10,15 @@
 
 Norse Stack is a 15-container distributed crypto trading system that ingests live Binance market data, computes 10 independent signal layers, executes quantitative strategies with regime-aware threshold adaptation, routes orders through TWAP/VWAP execution algorithms, and monitors everything through Prometheus and Grafana. Named after figures from Norse mythology.
 
+> **Backtest numbers, with the honesty attached:** see **[docs/RESULTS.md](docs/RESULTS.md)** for actual backtester output (per-strategy Sharpe/MDD/hit-rate, buy-and-hold benchmark, walk-forward) plus an explicit caveat block. Short answer up front: a single short live run with a handful of fills *cannot* produce a meaningful Sharpe, and the page explains exactly why.
+
+### Why this isn't a toy / what's novel
+
+- **Deterministic replay parity.** Muninn's feature engine produces byte-identical output from the same input events, so a backtest and a live run share one computation path — enforced by [`huginn/internal/backtest/parity_test.go`](https://github.com/lgreene03/huginn/blob/main/internal/backtest/parity_test.go) and Muninn's [ADR-0002 event-id determinism](https://github.com/lgreene03/muninn/blob/main/docs/adr/0002-event-id-determinism.md).
+- **Live-orderbook microstructure signals.** Signals are computed from real Binance L2 order books (order-book imbalance, VPIN, micro-price, VWAP) rather than from OHLC candles — see [`services/obi-bridge`](services/obi-bridge) and Muninn's [ADR-0008 multi-exchange adapter framework](https://github.com/lgreene03/muninn/blob/main/docs/adr/0008-multi-exchange-adapter-framework.md).
+- **Walk-forward validation, not in-sample curve-fitting.** Anchored expanding-train / sliding-test validation with explicit multiple-testing warnings — [`huginn/cmd/walkforward`](https://github.com/lgreene03/huginn/blob/main/cmd/walkforward/main.go), [ADR-0007 walk-forward calibration](https://github.com/lgreene03/huginn/blob/main/docs/adr/0007-walk-forward-calibration-workflow.md), and the negative result is published in [docs/RESULTS.md](docs/RESULTS.md).
+- **Honest sim-execution boundary.** Strategy and execution are separate services; Sleipnir runs a sim exchange by default and the boundary is documented as a deliberate decision in [ADR-0002 (stack)](docs/adr/0002-sim-only-execution-boundary.md) and [Huginn ADR-0003 dual-mode executor](https://github.com/lgreene03/huginn/blob/main/docs/adr/0003-dual-mode-paper-live-executor.md).
+
 ---
 
 ## Architecture
@@ -104,14 +113,44 @@ Exchange → Muninn (trades → features via Redpanda)
 
 ### Clone and boot
 
+> **Important — this repo builds the engine services (Muninn, Huginn, Sleipnir)
+> from sibling checkouts.** A bare `git clone` of `norse-stack` alone does **not**
+> contain `../muninn`, `../huginn`, or `../sleipnir`, so a plain
+> `docker compose up -d` will fail with a *build context not found* error until
+> those siblings exist. Pick one of the two paths below.
+
+**Path A — one-command bootstrap (recommended).** Clones the sibling repos, then
+builds and boots everything:
+
 ```bash
 git clone https://github.com/lgreene03/norse-stack.git
 cd norse-stack
-./scripts/clone-all.sh
-docker compose up -d
+make bootstrap        # = scripts/clone-all.sh  +  docker compose up -d --build
 ```
 
-This starts all 15 containers. No exchange credentials needed — Sleipnir runs in simulated mode, Obi-Bridge connects to Binance's public (unauthenticated) WebSocket streams.
+Equivalent without `make`:
+
+```bash
+./scripts/clone-all.sh        # clone ../muninn ../huginn ../sleipnir ../muninn-py
+docker compose up -d --build  # build from those siblings and boot
+```
+
+**Path B — prebuilt images, no sibling checkouts.** Huginn and Sleipnir publish
+images to GHCR via their `release.yml` workflows. Once images are published you
+can skip cloning the engine repos entirely:
+
+```bash
+make up-ghcr
+# = docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+```
+
+The [`docker-compose.ghcr.yml`](docker-compose.ghcr.yml) override swaps the
+engine services' `build:` for `image: ghcr.io/lgreene03/<svc>:${TAG:-latest}`.
+**Failure mode:** if no image tag has been published yet, the pull fails — fall
+back to Path A (build from source). Pin a tag with
+`HUGINN_TAG=… SLEIPNIR_TAG=… MUNINN_TAG=…`.
+
+Either path starts all 15 containers. No exchange credentials needed — Sleipnir runs in simulated mode, Obi-Bridge connects to Binance's public (unauthenticated) WebSocket streams.
 
 ### Run the end-to-end smoke test
 
@@ -194,12 +233,16 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 
 | Metric | Value |
 |--------|-------|
-| Total lines of code | ~35,000 |
 | Languages | Java, Go, Python, TypeScript |
 | Docker containers | 15 |
 | Signal layers | 10 |
-| Test count | 400+ (unit, integration, contract, determinism, e2e) |
 | Kafka topics | 3 (features, intents, fills) + prices |
+| Architecture Decision Records | 28 across the stack (Muninn 14, Huginn 7, Sleipnir 7) + stack-level ADRs in [`docs/adr/`](docs/adr/) |
+
+> Test and line-count totals are intentionally not asserted here — they drift the
+> moment code changes and an unsourced figure is worse than none. The real,
+> current test counts are whatever the per-repo CI runs report; click the CI
+> badges at the top of this README for the authoritative numbers.
 
 ---
 
@@ -223,10 +266,13 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 
 ## Documentation
 
+- **[Backtest Results](docs/RESULTS.md)** — real backtester/calibrator/walk-forward output with an honest caveat block
+- **[Demo Assets](docs/demo/)** — asciinema cast of the smoke test + Grafana dashboard snapshots (via `scripts/record-demo.sh`)
 - **[Quant Curriculum](docs/QUANT_CURRICULUM.md)** — 10-chapter ground-up guide to quantitative trading, taught through the Norse Stack
-- **Muninn**: 23 steering docs, 9 ADRs, demo walkthrough, deployment guide
-- **Huginn**: Architecture, strategies, risk model, calibration
-- **Sleipnir**: Contracts, integration test guides, operational runbook
+- **[Stack ADRs](docs/adr/)** — Redpanda choice, sim-only execution boundary, topic topology
+- **Muninn**: steering docs, [14 ADRs](https://github.com/lgreene03/muninn/tree/main/docs/adr), demo walkthrough, deployment guide
+- **Huginn**: [7 ADRs](https://github.com/lgreene03/huginn/tree/main/docs/adr), architecture, strategies, risk model, calibration
+- **Sleipnir**: [7 ADRs](https://github.com/lgreene03/sleipnir/tree/main/docs/adr), contracts, integration test guides, operational runbook
 - **muninn-py**: API reference, getting-started guide, example notebooks
 
 ---

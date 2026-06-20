@@ -1,0 +1,5 @@
+# Pinned for reproducible Docker builds (recruiter-5).
+# Bragi is otherwise stdlib-only; kafka-python is the sole runtime dependency.
+# Pinned to 2.x (the API-stable line the other Kafka services target) so a
+# silent 3.x major jump can't change consumer semantics under us.
+kafka-python==2.3.2

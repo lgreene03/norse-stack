@@ -1,0 +1,4 @@
+# Pinned for reproducible Docker builds (recruiter-5).
+# News Sentinel pulls RSS via feedparser and talks to Ollama over plain HTTP
+# (urllib, stdlib); feedparser is its only third-party dependency.
+feedparser==6.0.12

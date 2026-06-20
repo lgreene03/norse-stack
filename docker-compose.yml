@@ -108,6 +108,24 @@ services:
       mc mb --ignore-existing local/muninn-checkpoints;
       "
 
+  # ── Topic provisioning ────────────────────────────────────────────────
+  # Creates Kafka topics with explicit partitions + retention/cleanup policy
+  # instead of relying on broker auto-create defaults (unbounded). Mirrors the
+  # minio-init bucket step. Idempotent — safe to re-run. Per-topic rationale
+  # lives in docs/CONTRACTS.md.
+  topic-init:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.3.1
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "/provision-topics.sh"]
+    environment:
+      BROKERS: redpanda:29092
+      RPK: rpk
+    volumes:
+      - ./scripts/provision-topics.sh:/provision-topics.sh:ro
+    restart: "no"
+
   # ── Application services ──────────────────────────────────────────────
 
   muninn:
@@ -133,6 +151,7 @@ services:
       MUNINN_STORAGE_S3_SECRET_KEY: minioadmin
       MUNINN_INGESTION_BINANCE_ENABLED: "true"
       MUNINN_INGESTION_COINBASE_ENABLED: "false"
+      OTEL_EXPORTER_OTLP_ENDPOINT: tempo:4317
     restart: unless-stopped
 
   huginn:
@@ -164,6 +183,7 @@ services:
       KAFKA_PRICE_TOPIC: "prices.realtime.v1"
       SERVER_PORT: "8081"
       GRPC_PORT: "50051"
+      OTEL_EXPORTER_OTLP_ENDPOINT: tempo:4317
     restart: unless-stopped
 
   sleipnir:
@@ -185,6 +205,7 @@ services:
       RATE_LIMIT_RPS: "10.0"
       PORT: "8080"
       DB_PATH: /app/data/sleipnir.db
+      OTEL_EXPORTER_OTLP_ENDPOINT: tempo:4317
     volumes:
       - sleipnir-data:/app/data
     restart: unless-stopped
@@ -283,10 +304,32 @@ services:
 
   # ── Observability ─────────────────────────────────────────────────────
 
+  # Distributed tracing collector. Huginn → Sleipnir spans propagate via W3C
+  # TraceContext on Kafka headers and land here over OTLP/gRPC (port 4317).
+  # Services only export when OTEL_EXPORTER_OTLP_ENDPOINT is set (see below);
+  # with this collector present, the endpoint is wired by default.
+  tempo:
+    image: grafana/tempo:2.5.0
+    command: ["-config.file=/etc/tempo.yaml"]
+    ports:
+      - "3200:3200"  # Tempo HTTP / query API
+      - "4317:4317"  # OTLP gRPC ingest
+    volumes:
+      - ./monitoring/tempo.yaml:/etc/tempo.yaml:ro
+    mem_limit: 512m
+    restart: unless-stopped
+
   prometheus:
     image: prom/prometheus:v2.53.0
     ports:
       - "9091:9090"
+    # remote-write-receiver lets Tempo's metrics_generator push service-graph /
+    # span metrics here so Grafana's service-graph view has data. The default
+    # config-file + scrape flags must be restated when overriding command.
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-remote-write-receiver
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     depends_on:

@@ -5,6 +5,15 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    # Nightly end-to-end smoke run (registry/build flakiness is tolerated).
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+    inputs:
+      run_e2e:
+        description: "Run the end-to-end smoke job"
+        type: boolean
+        default: false
 
 jobs:
   validate:
@@ -28,3 +37,144 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate monitoring config (prometheus + grafana provisioning)
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml
+          python scripts/validate-monitoring.py
+
+  services:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # has_tests: services whose tests are wired here. odin/obi-bridge/
+          # huginn-ai ship unit tests; bragi/news-sentinel are lint-only until
+          # their owning agents add tests.
+          - service: odin
+            has_tests: "true"
+          - service: obi-bridge
+            has_tests: "true"
+          - service: huginn-ai
+            has_tests: "true"
+          - service: bragi
+            has_tests: "false"
+          - service: news-sentinel
+            has_tests: "false"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        working-directory: services/${{ matrix.service }}
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+          # Each service pins its runtime deps in requirements.txt (reproducible
+          # builds — recruiter-5). Install them so imports resolve under pytest.
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          if [ "${{ matrix.has_tests }}" = "true" ]; then
+            pip install pytest pytest-cov
+          fi
+
+      - name: Lint (ruff)
+        working-directory: services/${{ matrix.service }}
+        run: ruff check .
+
+      - name: Test (pytest + coverage)
+        if: matrix.has_tests == 'true'
+        working-directory: services/${{ matrix.service }}
+        run: |
+          python -m pytest tests/ -q \
+            --cov=. --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            --cov-report=json:coverage.json
+
+      - name: Coverage summary + badge
+        if: matrix.has_tests == 'true'
+        working-directory: services/${{ matrix.service }}
+        env:
+          SERVICE: ${{ matrix.service }}
+        run: |
+          # Render a self-contained Shields-style coverage badge (no external
+          # service or token required) and append a coverage line to the run
+          # summary. Done in Python to avoid fragile shell heredocs.
+          python - <<'PY'
+          import json, os
+          pct = round(json.load(open("coverage.json"))["totals"]["percent_covered"], 1)
+          color = "brightgreen" if pct >= 80 else "yellow" if pct >= 60 else "red"
+          svg = (
+              '<svg xmlns="http://www.w3.org/2000/svg" width="124" height="20" '
+              f'role="img" aria-label="coverage: {pct}%">'
+              '<rect width="70" height="20" fill="#555"/>'
+              f'<rect x="70" width="54" height="20" fill="{color}"/>'
+              '<g fill="#fff" text-anchor="middle" '
+              'font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="11">'
+              '<text x="35" y="14">coverage</text>'
+              f'<text x="97" y="14">{pct}%</text></g></svg>'
+          )
+          with open("coverage-badge.svg", "w") as fh:
+              fh.write(svg)
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a") as fh:
+                  fh.write(f"### {os.environ['SERVICE']} coverage: {pct}%\n")
+          PY
+
+      - name: Upload coverage artifacts
+        if: matrix.has_tests == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.service }}
+          path: |
+            services/${{ matrix.service }}/coverage.xml
+            services/${{ matrix.service }}/coverage-badge.svg
+          if-no-files-found: warn
+
+      - name: Upload coverage to Codecov
+        if: matrix.has_tests == 'true'
+        uses: codecov/codecov-action@v4
+        continue-on-error: true
+        with:
+          files: services/${{ matrix.service }}/coverage.xml
+          flags: ${{ matrix.service }}
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+  e2e-smoke:
+    # Gated: only on the nightly schedule or an explicit manual dispatch.
+    # Registry pulls and multi-repo builds are flaky in CI, so failure here does
+    # not break the PR signal (continue-on-error on the run step).
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_e2e)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Clone sibling service repos
+        continue-on-error: true
+        run: ./scripts/clone-all.sh
+
+      - name: End-to-end smoke test
+        id: smoke
+        continue-on-error: true
+        run: ./scripts/smoke.sh --teardown
+
+      - name: Report smoke result
+        run: |
+          echo "smoke outcome: ${{ steps.smoke.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.smoke.outcome }}" != "success" ]; then
+            echo "::warning::e2e smoke did not pass (tolerated: registry/build flakiness)"
+          fi

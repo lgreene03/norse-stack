@@ -1,0 +1,10 @@
+# Pinned to the 2.x line (matches the other Kafka services) for reproducible
+# builds; the consumer/producer API is stable across 2.x.
+kafka-python==2.3.2
+# Pinned: model training/serving correctness depends on stable XGBoost +
+# scikit-learn behaviour (predict_proba calibration, metric semantics).
+# Compatible-release ranges keep security patches flowing while preventing a
+# silent major-version jump from changing model outputs under us.
+xgboost>=2.0,<4.0
+numpy>=1.26,<3.0
+scikit-learn>=1.4,<2.0
