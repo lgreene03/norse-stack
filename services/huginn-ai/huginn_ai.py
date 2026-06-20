@@ -507,17 +507,24 @@ class ModelManager:
                 log.warning("Rejected fill (%s): %r", reason, fill)
                 return
 
-            # Dedup on execution_id.
+            # Dedup on execution_id, falling back to a composite key when it's
+            # empty/missing — deduping on a blank execution_id would collapse
+            # every such fill into one "duplicate" and starve the model of
+            # training labels.
             exec_id = fill.get("execution_id")
-            if exec_id is not None:
-                if exec_id in self._seen_exec_set:
-                    metrics.inc("fills_duplicate_total")
-                    return
-                self._seen_exec_set.add(exec_id)
-                if len(self._seen_exec_ids) == self._seen_exec_ids.maxlen:
-                    evicted = self._seen_exec_ids[0]
-                    self._seen_exec_set.discard(evicted)
-                self._seen_exec_ids.append(exec_id)
+            if not exec_id:
+                exec_id = "{}|{}|{}|{}|{}".format(
+                    fill.get("order_id", ""), fill.get("timestamp", ""),
+                    fill.get("side", ""), fill.get("quantity", ""),
+                    fill.get("fill_price", ""))
+            if exec_id in self._seen_exec_set:
+                metrics.inc("fills_duplicate_total")
+                return
+            self._seen_exec_set.add(exec_id)
+            if len(self._seen_exec_ids) == self._seen_exec_ids.maxlen:
+                evicted = self._seen_exec_ids[0]
+                self._seen_exec_set.discard(evicted)
+            self._seen_exec_ids.append(exec_id)
 
             metrics.inc("fills_processed_total")
 

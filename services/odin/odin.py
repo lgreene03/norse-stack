@@ -243,19 +243,25 @@ class PerformanceTracker:
                 log.warning("Rejected fill (%s): %r", reason, fill)
                 return
 
-            # Dedup on execution_id: the consumer reads from the earliest
-            # offset, so a restart replays the whole topic. Without this guard
-            # every fill would be double-counted on each restart.
+            # Dedup so a restart (consumer reads from earliest) doesn't
+            # double-count. Prefer execution_id, but fall back to a composite
+            # key when it's empty/missing: some fill sources (e.g. the sim
+            # connector's older path) leave execution_id blank, and deduping on
+            # a blank key would collapse EVERY such fill into one "duplicate".
             exec_id = fill.get("execution_id")
-            if exec_id is not None:
-                if exec_id in self._seen_execution_set:
-                    counters.inc("fills_duplicate_total")
-                    return
-                self._seen_execution_set.add(exec_id)
-                if len(self._seen_execution_ids) == self._seen_execution_ids.maxlen:
-                    evicted = self._seen_execution_ids[0]
-                    self._seen_execution_set.discard(evicted)
-                self._seen_execution_ids.append(exec_id)
+            if not exec_id:
+                exec_id = "{}|{}|{}|{}|{}".format(
+                    fill.get("order_id", ""), fill.get("timestamp", ""),
+                    fill.get("side", ""), fill.get("quantity", ""),
+                    fill.get("fill_price", ""))
+            if exec_id in self._seen_execution_set:
+                counters.inc("fills_duplicate_total")
+                return
+            self._seen_execution_set.add(exec_id)
+            if len(self._seen_execution_ids) == self._seen_execution_ids.maxlen:
+                evicted = self._seen_execution_ids[0]
+                self._seen_execution_set.discard(evicted)
+            self._seen_execution_ids.append(exec_id)
 
             self.fills.append(fill)
             counters.inc("fills_processed_total")

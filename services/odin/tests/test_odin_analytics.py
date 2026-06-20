@@ -205,6 +205,32 @@ def test_distinct_execution_ids_both_processed(tracker):
     assert len(tracker.fills) == 2
 
 
+def test_empty_execution_id_distinct_fills_not_collapsed(tracker):
+    # Regression: sim/legacy fills carry an empty execution_id. Deduping on a
+    # blank key collapsed every such fill into one "duplicate" (Odin showed 2
+    # fills while Huginn had 22). The composite-key fallback must keep distinct
+    # fills distinct.
+    tracker.add_fill({"execution_id": "", "order_id": "o1", "instrument": "BTC",
+                      "side": "BUY", "quantity": 1, "fill_price": 100,
+                      "timestamp": "2026-06-20T00:00:00+00:00"})
+    tracker.add_fill({"execution_id": "", "order_id": "o2", "instrument": "BTC",
+                      "side": "SELL", "quantity": 1, "fill_price": 101,
+                      "timestamp": "2026-06-20T00:00:01+00:00"})
+    assert len(tracker.fills) == 2
+
+
+def test_empty_execution_id_exact_replay_deduped(tracker):
+    # The same empty-id fill replayed on restart must still dedup via the
+    # composite key (order_id|timestamp|side|qty|price).
+    f = {"execution_id": "", "order_id": "o1", "instrument": "BTC",
+         "side": "BUY", "quantity": 1, "fill_price": 100,
+         "timestamp": "2026-06-20T00:00:00+00:00"}
+    tracker.add_fill(dict(f))
+    tracker.add_fill(dict(f))
+    assert len(tracker.fills) == 1
+    assert odin.counters.snapshot().get("fills_duplicate_total") == 1
+
+
 # ---------------------------------------------------------------------------
 # Timestamp parse + drawdown duration (quant-19)
 # ---------------------------------------------------------------------------
