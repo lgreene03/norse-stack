@@ -8,55 +8,89 @@
 [![muninn-py CI](https://github.com/lgreene03/muninn-py/actions/workflows/ci.yml/badge.svg)](https://github.com/lgreene03/muninn-py/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Norse Stack is a four-service distributed trading system that ingests market data, computes deterministic features, executes quantitative strategies, and routes orders to exchanges. Named after figures from Norse mythology, each service has a single responsibility and communicates via Kafka (Redpanda).
+Norse Stack is a 15-container distributed crypto trading system that ingests live Binance market data, computes 10 independent signal layers, executes quantitative strategies with regime-aware threshold adaptation, routes orders through TWAP/VWAP execution algorithms, and monitors everything through Prometheus and Grafana. Named after figures from Norse mythology.
 
 ---
 
 ## Architecture
 
 ```
-                            ┌──────────────────────────────────────────────┐
-                            │              Norse Stack                     │
-                            │                                              │
-  Exchange ──WebSocket──►   │  ┌─────────┐   features   ┌─────────┐      │
-  (Binance)                 │  │ MUNINN  │──────────────►│ HUGINN  │      │
-                            │  │ Feature │   (Redpanda)  │ Strategy│      │
-                            │  │ Engine  │               │ Engine  │      │
-                            │  └─────────┘               └────┬────┘      │
-                            │       ▲                         │           │
-                            │       │                    intents          │
-                            │   muninn-py                     │           │
-                            │   (Research                     ▼           │
-                            │    SDK)                   ┌──────────┐      │
-                            │                           │ SLEIPNIR │      │
-                            │                           │ Execution│──►Exchange
-                            │                           │ Gateway  │◄──(fills)
-                            │                           └──────────┘      │
-                            └──────────────────────────────────────────────┘
+                        ┌──────────────────────────────────────────────────────────────┐
+  Binance               │                        Norse Stack                           │
+  (WebSocket) ──────►   │                                                              │
+                        │  ┌──────────┐  features  ┌──────────┐  intents  ┌──────────┐ │
+                        │  │ MUNINN   │───────────►│  HUGINN  │─────────►│ SLEIPNIR │ │
+                        │  │ Feature  │  (Kafka)   │ Strategy │  (Kafka) │ Execution│ │
+                        │  │ Engine   │            │ Engine   │◄─────────│ Gateway  │ │
+                        │  └──────────┘            └────┬─────┘  fills   └──────────┘ │
+                        │       │                       │                      │       │
+                        │       │              ┌────────┼────────┐             │       │
+                        │       ▼              ▼        ▼        ▼             │       │
+                        │  ┌──────────┐  ┌─────────┐ ┌──────┐ ┌─────────┐    │       │
+                        │  │OBI-BRIDGE│  │  ODIN   │ │BRAGI │ │HUGINN-AI│    │       │
+                        │  │ 10-Layer │  │Analytics│ │Explain│ │  ML/    │    │       │
+                        │  │ Signals  │  │ Monitor │ │Engine │ │ XGBoost │    │       │
+                        │  └──────────┘  └─────────┘ └──────┘ └─────────┘    │       │
+                        │       │                                             │       │
+                        │       ▼              ┌──────────────────┐           │       │
+                        │  ┌──────────┐        │   OBSERVABILITY  │           │       │
+                        │  │  NEWS    │        │  ┌────────────┐  │           │       │
+                        │  │ SENTINEL │        │  │ Prometheus │  │           │       │
+                        │  │ LLM/NLP  │        │  │  + Grafana │  │           │       │
+                        │  └──────────┘        │  └────────────┘  │           │       │
+                        │                      └──────────────────┘           │       │
+                        └──────────────────────────────────────────────────────────────┘
 ```
 
 ### Services
 
-| Service | Language | Role | Repo |
-|---------|----------|------|------|
-| **[Muninn](https://github.com/lgreene03/muninn)** | Java 21 / Spring Boot | Feature computation engine. Ingests market data, computes deterministic streaming features (VWAP, OBI), serves them via Kafka topics and a Query API. Central claim: any value emitted live is reproducible byte-for-byte via replay. | [repo](https://github.com/lgreene03/muninn) · [docs](https://lgreene03.github.io/muninn) |
-| **[Huginn](https://github.com/lgreene03/huginn)** | Go 1.25 | Strategy execution engine. Consumes features, runs pluggable trading strategies (OBI, VPIN, EMA Crossover, VWAP Deviation), manages risk controls, and publishes order intents. Includes a React operator dashboard. | [repo](https://github.com/lgreene03/huginn) · [docs](https://lgreene03.github.io/huginn) |
-| **[Sleipnir](https://github.com/lgreene03/sleipnir)** | Go 1.25 | Order execution gateway. Bridges Huginn's intents to Binance via REST/WebSocket, enforces rate limits and pre-trade risk, reports fills back over Kafka. Sim mode for testing without credentials. | [repo](https://github.com/lgreene03/sleipnir) |
-| **[muninn-py](https://github.com/lgreene03/muninn-py)** | Python 3.10+ | Research SDK and CLI. Pulls features into Polars/pandas DataFrames, computes IC/forward returns, includes a Streamlit dashboard. | [repo](https://github.com/lgreene03/muninn-py) · [docs](https://lgreene03.github.io/muninn-py) |
+| Service | Language | Role |
+|---------|----------|------|
+| **[Muninn](https://github.com/lgreene03/muninn)** | Java 21 / Spring Boot | Market data ingestion, deterministic feature computation, S3/Postgres storage |
+| **[Huginn](https://github.com/lgreene03/huginn)** | Go 1.25 | Strategy execution with 4 pluggable strategies, risk controls, portfolio management, gRPC API |
+| **[Sleipnir](https://github.com/lgreene03/sleipnir)** | Go 1.25 | Order execution gateway with TWAP/VWAP algorithms, rate limiting, pre-trade risk |
+| **Obi-Bridge** | Python | Real-time 10-layer signal computation from live Binance order books |
+| **Odin** | Python | Performance analytics: Sharpe, Sortino, CVaR, VaR, Monte Carlo, correlation matrix |
+| **Bragi** | Python | Trade explainability engine with human-readable decision logs |
+| **Huginn-AI** | Python | XGBoost ML signal predictor with online retraining |
+| **News Sentinel** | Python | LLM-powered crypto news sentiment via Ollama |
+| **[muninn-py](https://github.com/lgreene03/muninn-py)** | Python | Research SDK: Polars DataFrames, IC analysis, Streamlit dashboard |
+
+### Signal Layers (Obi-Bridge)
+
+The bridge computes 10 independent signal layers from live Binance data, each capturing a different market dimension:
+
+| # | Signal | Description |
+|---|--------|-------------|
+| 1 | Order Book Imbalance | Bid/ask volume ratio near the spread |
+| 2 | Multi-TF Momentum | Price change across 1m, 5m, 15m windows |
+| 3 | Volatility Regime | Bollinger width + ATR classification |
+| 4 | Volume Ratio | Current vs. rolling average volume |
+| 5 | Fear & Greed Index | Market-wide sentiment indicator |
+| 6 | Funding Rate | Perpetual futures positioning pressure |
+| 7 | Open Interest Cascade | Futures contract count delta |
+| 8 | ML Confidence | XGBoost prediction probability |
+| 9 | News Sentiment | Ollama LLM headline analysis |
+| 10 | Regime Detection | Hurst exponent + autocorrelation classification |
 
 ### Data Flow
 
 ```
 Exchange → Muninn (trades → features via Redpanda)
-       → features.obi.v1, features.vwap.1m.v1, ...
+       → features.obi.v1
               ↓
-         Huginn (feature → strategy signal → order intent)
+  Obi-Bridge (10-layer signal computation)
+       → features.obi.v1 (enriched)
+              ↓
+         Huginn (feature → regime-aware strategy → order intent)
        → executions.intents.v1
               ↓
-         Sleipnir (intent → risk check → rate limit → exchange submit)
+         Sleipnir (intent → risk → rate limit → TWAP/VWAP → exchange)
        → executions.fills.v1
               ↓
          Huginn (fill → portfolio update → PnL tracking)
+              ↓
+    Odin (analytics) + Bragi (explainability) + Prometheus/Grafana (metrics)
 ```
 
 ---
@@ -68,21 +102,16 @@ Exchange → Muninn (trades → features via Redpanda)
 - Docker and Docker Compose
 - Git
 
-### Clone all repos
+### Clone and boot
 
 ```bash
 git clone https://github.com/lgreene03/norse-stack.git
 cd norse-stack
 ./scripts/clone-all.sh
-```
-
-### Boot the full stack
-
-```bash
 docker compose up -d
 ```
 
-This starts Muninn, Huginn, Sleipnir (sim mode), Redpanda, PostgreSQL, and MinIO. No exchange credentials needed — Sleipnir runs in simulated mode.
+This starts all 15 containers. No exchange credentials needed — Sleipnir runs in simulated mode, Obi-Bridge connects to Binance's public (unauthenticated) WebSocket streams.
 
 ### Run the end-to-end smoke test
 
@@ -90,28 +119,73 @@ This starts Muninn, Huginn, Sleipnir (sim mode), Redpanda, PostgreSQL, and MinIO
 ./scripts/smoke.sh
 ```
 
-The smoke test validates the full pipeline: sends a synthetic trade to Muninn, verifies the feature is computed, confirms Huginn fires a strategy signal, and checks that Sleipnir produces a fill.
+### Capture data for walk-forward backtesting
 
-### Endpoints
+```bash
+./scripts/capture-features.sh              # run for a few hours, Ctrl+C to stop
+cd ../huginn
+go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
+```
 
-| Service | URL | Description |
-|---------|-----|-------------|
-| Muninn API | http://localhost:8080 | Feature Query API, Swagger UI |
-| Muninn Feature Stream | http://localhost:8080/api/v1/features/stream | Live SSE feature stream |
-| Huginn API | http://localhost:8083 | Strategy snapshot, metrics |
-| Huginn Dashboard | http://localhost:8084 | React operator dashboard |
-| Sleipnir API | http://localhost:8085 | Health, readiness, metrics |
-| Redpanda Console | http://localhost:8088 | Kafka topic browser |
-| MinIO Console | http://localhost:9003 | S3 storage browser |
+---
+
+## Endpoints
+
+| Port | Service | URL |
+|------|---------|-----|
+| 8080 | Muninn API | http://localhost:8080 |
+| 8083 | Huginn API | http://localhost:8083/api/snapshot |
+| 8084 | Huginn Dashboard | http://localhost:8084 |
+| 8085 | Sleipnir API | http://localhost:8085/healthz |
+| 8086 | Odin Analytics | http://localhost:8086/api/analytics |
+| 8087 | Bragi Explainer | http://localhost:8087/api/decisions |
+| 8088 | Redpanda Console | http://localhost:8088 |
+| 8089 | News Sentinel | http://localhost:8089/api/sentiment |
+| 8092 | Huginn-AI ML | http://localhost:8092/api/model/status |
+| 9091 | Prometheus | http://localhost:9091 |
+| 3001 | Grafana | http://localhost:3001 (admin/norse) |
+| 50051 | Huginn gRPC | `grpcurl -plaintext localhost:50051 huginn.HuginnService/GetSnapshot` |
+
+---
+
+## Key Features
+
+### Strategy Engine (Huginn)
+- 4 pluggable strategies: OBI Threshold, VPIN Breakout, EMA Crossover, VWAP Deviation
+- Regime-aware threshold adaptation using Hurst exponent and autocorrelation
+- Sub-second exit monitoring via real-time price tick consumer
+- Signal-to-decision latency: p50 ~3ms (Prometheus histogram)
+- gRPC API with dynamic proto descriptors (no protoc, full reflection support)
+- Walk-forward backtester with anchored expanding window validation
+
+### Execution Gateway (Sleipnir)
+- TWAP: equal-sized slices at uniform time intervals
+- VWAP: volume-weighted slices using configurable intraday U-shaped profile
+- Token-bucket rate limiting, per-instrument size caps, daily order limits
+- Boot-time order reconciliation against exchange state
+- Sim mode for credential-free testing
+
+### Analytics (Odin)
+- Rolling Sharpe and Sortino ratios (1h, 6h, 24h windows)
+- CVaR at 95th percentile, Calmar ratio, half-Kelly criterion
+- Portfolio VaR: variance-covariance method with diversification benefit
+- Monte Carlo permutation test for strategy significance
+- Cross-asset correlation matrix
+- Per-instrument P&L breakdown with win rate and profit factor
+
+### Observability
+- Prometheus scraping Huginn and Sleipnir metrics (15s interval)
+- 11-panel auto-provisioned Grafana dashboard: signal-to-decision latency (p50/p95/p99), feature event age, orders by side, risk halt status, max drawdown gauge, portfolio value, realized PnL, and more
+- Distributed tracing via OpenTelemetry (Tempo-compatible)
 
 ---
 
 ## Key Design Decisions
 
-- **Deterministic replay.** Muninn's feature engine produces byte-identical outputs from the same input events, enforced by ArchUnit rules and CI integration tests. This is the load-bearing architectural invariant.
-- **One computation path.** Live and replay use the same code — there is no separate batch pipeline. What runs in production is what runs in backtest.
-- **Kafka-native boundaries.** Services communicate exclusively through Redpanda topics. No shared databases, no direct RPC. Each service owns its state.
-- **Local-first.** The full stack runs on a single machine under Docker Compose. No cloud services required for development or testing.
+- **Deterministic replay.** Muninn's feature engine produces byte-identical outputs from the same input events, enforced by ArchUnit rules and CI integration tests.
+- **One computation path.** Live and replay use the same code — no separate batch pipeline.
+- **Kafka-native boundaries.** Services communicate exclusively through Redpanda topics. No shared databases, no direct RPC (except Huginn's optional gRPC for programmatic queries).
+- **Local-first.** The full 15-container stack runs on a single machine. No cloud services required.
 - **Sim mode everywhere.** Sleipnir's sim exchange and Muninn's synthetic trade ingestion mean the entire pipeline is testable without exchange credentials.
 
 ---
@@ -120,12 +194,12 @@ The smoke test validates the full pipeline: sends a synthetic trade to Muninn, v
 
 | Metric | Value |
 |--------|-------|
-| Total lines of code | ~30,000 |
+| Total lines of code | ~35,000 |
 | Languages | Java, Go, Python, TypeScript |
+| Docker containers | 15 |
+| Signal layers | 10 |
 | Test count | 400+ (unit, integration, contract, determinism, e2e) |
-| Architecture Decision Records | 14 |
-| Steering documents | 23 |
-| Commits | 200+ |
+| Kafka topics | 3 (features, intents, fills) + prices |
 
 ---
 
@@ -134,24 +208,26 @@ The smoke test validates the full pipeline: sends a synthetic trade to Muninn, v
 | Layer | Technology |
 |-------|-----------|
 | Feature Engine | Java 21, Spring Boot 3.5, DuckDB, Parquet, Iceberg |
-| Strategy Engine | Go 1.25, Kafka (segmentio), Prometheus |
-| Execution Gateway | Go 1.25, Binance REST/WS, SQLite, token-bucket rate limiter |
+| Strategy Engine | Go 1.25, Kafka (segmentio), Prometheus, gRPC |
+| Execution Gateway | Go 1.25, Binance REST/WS, SQLite, TWAP/VWAP algos |
+| Signal Bridge | Python 3.10+, Binance WebSocket, regime detection |
+| Analytics | Python 3.10+, Monte Carlo, variance-covariance VaR |
+| ML Pipeline | Python, XGBoost, online retraining |
 | Research SDK | Python 3.10+, Polars, pandas, Pydantic v2, httpx |
 | Message Broker | Redpanda (Kafka-compatible) |
 | Storage | PostgreSQL 16, MinIO (S3-compatible), Parquet/Iceberg |
-| Observability | Prometheus, Grafana, Tempo (distributed tracing) |
-| Infrastructure | Docker Compose, Terraform (AWS reference), Helm |
+| Observability | Prometheus, Grafana, OpenTelemetry/Tempo |
+| Infrastructure | Docker Compose |
 
 ---
 
 ## Documentation
 
-Each service maintains its own detailed documentation:
-
-- **Muninn**: 23 steering docs, 9 ADRs, demo walkthrough, deployment guide → [Reading Guide](https://github.com/lgreene03/muninn/blob/main/docs/steering/READING_GUIDE.md)
-- **Huginn**: MkDocs site with architecture, strategies, risk model, calibration → [Docs](https://lgreene03.github.io/huginn)
-- **Sleipnir**: Contracts, integration test guides, operational runbook → [Repo](https://github.com/lgreene03/sleipnir)
-- **muninn-py**: MkDocs API reference, getting-started guide, example notebooks → [Docs](https://lgreene03.github.io/muninn-py)
+- **[Quant Curriculum](docs/QUANT_CURRICULUM.md)** — 10-chapter ground-up guide to quantitative trading, taught through the Norse Stack
+- **Muninn**: 23 steering docs, 9 ADRs, demo walkthrough, deployment guide
+- **Huginn**: Architecture, strategies, risk model, calibration
+- **Sleipnir**: Contracts, integration test guides, operational runbook
+- **muninn-py**: API reference, getting-started guide, example notebooks
 
 ---
 
