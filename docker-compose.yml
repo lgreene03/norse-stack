@@ -1,4 +1,7 @@
-# Norse Stack — all four services on a shared Redpanda broker.
+# Norse Stack — distributed quantitative trading infrastructure.
+#
+# Live mode: real Binance market data → features → strategy → sim execution.
+# No API keys required — uses unauthenticated public market data streams.
 #
 # Usage:
 #   docker compose up -d --build
@@ -7,8 +10,6 @@
 #
 # Requires sibling checkouts: ../muninn, ../huginn, ../sleipnir
 # Run ./scripts/clone-all.sh to set up all repos.
-# Sleipnir runs in sim mode (no Binance credentials needed).
-# Huginn runs with live_execution=true (publishes intents to Kafka).
 
 services:
 
@@ -31,6 +32,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
 
   redpanda-console:
     image: docker.redpanda.com/redpandadata/console:v3.1.0
@@ -41,6 +43,7 @@ services:
       - "8088:8080"
     environment:
       KAFKA_BROKERS: redpanda:29092
+    restart: unless-stopped
 
   postgres-muninn:
     image: postgres:16-alpine
@@ -57,6 +60,7 @@ services:
       retries: 5
     volumes:
       - pgdata-muninn:/var/lib/postgresql/data
+    restart: unless-stopped
 
   postgres-huginn:
     image: postgres:16-alpine
@@ -73,6 +77,7 @@ services:
       retries: 5
     volumes:
       - pgdata-huginn:/var/lib/postgresql/data
+    restart: unless-stopped
 
   minio:
     image: minio/minio:RELEASE.2025-01-20T14-49-07Z
@@ -88,6 +93,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   minio-init:
     image: minio/mc:RELEASE.2025-01-17T23-25-50Z
@@ -125,8 +131,9 @@ services:
       MUNINN_STORAGE_S3_ENDPOINT: http://minio:9000
       MUNINN_STORAGE_S3_ACCESS_KEY: minioadmin
       MUNINN_STORAGE_S3_SECRET_KEY: minioadmin
-      MUNINN_INGESTION_BINANCE_ENABLED: "false"
+      MUNINN_INGESTION_BINANCE_ENABLED: "true"
       MUNINN_INGESTION_COINBASE_ENABLED: "false"
+    restart: unless-stopped
 
   huginn:
     build:
@@ -140,20 +147,24 @@ services:
     ports:
       - "8083:8081"
       - "8084:8084"
+      - "50051:50051"
     environment:
       KAFKA_BROKERS: redpanda:29092
       KAFKA_TOPICS: features.obi.v1
       KAFKA_GROUP_ID: huginn-paper-trader
       STRATEGY_NAME: obi
-      STRATEGY_THRESHOLD: "0.7"
-      STRATEGY_ORDER_SIZE: "0.01"
+      STRATEGY_THRESHOLD: "0.95"
+      STRATEGY_ORDER_SIZE: "0.001"
       LIVE_EXECUTION: "true"
       KAFKA_INTENTS_TOPIC: executions.intents.v1
       KAFKA_FILLS_TOPIC: executions.fills.v1
       DATABASE_ENABLED: "true"
       DATABASE_URL: postgres://postgres:postgres@postgres-huginn:5432/huginn?sslmode=disable
-      CAPITAL_INITIAL_CASH: "100000"
+      CAPITAL_INITIAL_CASH: "1000"
+      KAFKA_PRICE_TOPIC: "prices.realtime.v1"
       SERVER_PORT: "8081"
+      GRPC_PORT: "50051"
+    restart: unless-stopped
 
   sleipnir:
     build:
@@ -170,11 +181,158 @@ services:
       KAFKA_FILLS_TOPIC: executions.fills.v1
       KAFKA_CONSUMER_GROUP: sleipnir-gateway
       EXCHANGE_BACKEND: sim
+      SIM_TX_COST_BPS: "10"
       RATE_LIMIT_RPS: "10.0"
       PORT: "8080"
       DB_PATH: /app/data/sleipnir.db
     volumes:
       - sleipnir-data:/app/data
+    restart: unless-stopped
+
+  # ── Live data bridge ──────────────────────────────────────────────────
+
+  obi-bridge:
+    build:
+      context: ./services/obi-bridge
+      dockerfile: Dockerfile
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKERS: redpanda:29092
+      OBI_TOPIC: features.obi.v1
+      SYMBOLS: "BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,DOGEUSDT"
+      POLL_INTERVAL: "60"
+      BOOK_LEVELS: "20"
+      OBI_THRESHOLD: "0.95"
+    mem_limit: 256m
+    restart: unless-stopped
+
+  # ── Analytics & Explainability ───────────────────────────────────────
+
+  odin:
+    build:
+      context: ./services/odin
+      dockerfile: Dockerfile
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    ports:
+      - "8086:8086"
+    environment:
+      KAFKA_BROKERS: redpanda:29092
+      FILLS_TOPIC: executions.fills.v1
+      PORT: "8086"
+      INITIAL_CASH: "1000"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8086/healthz',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    mem_limit: 256m
+    restart: unless-stopped
+
+  bragi:
+    build:
+      context: ./services/bragi
+      dockerfile: Dockerfile
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    ports:
+      - "8087:8087"
+    environment:
+      KAFKA_BROKERS: redpanda:29092
+      FEATURES_TOPIC: features.obi.v1
+      FILLS_TOPIC: executions.fills.v1
+      OBI_THRESHOLD: "0.95"
+      PORT: "8087"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8087/healthz',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    mem_limit: 256m
+    restart: unless-stopped
+
+  # ── ML & Intelligence ─────────────────────────────────────────────────
+
+  huginn-ai:
+    build:
+      context: ./services/huginn-ai
+      dockerfile: Dockerfile
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    ports:
+      - "8092:8091"
+    environment:
+      KAFKA_BROKERS: redpanda:29092
+      FEATURES_TOPIC: features.obi.v1
+      FILLS_TOPIC: executions.fills.v1
+      PORT: "8091"
+      MIN_SAMPLES: "15"
+      RETRAIN_INTERVAL: "30"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8091/healthz',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    mem_limit: 512m
+    restart: unless-stopped
+
+  # ── Observability ─────────────────────────────────────────────────────
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      huginn:
+        condition: service_started
+    mem_limit: 256m
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: norse
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    mem_limit: 256m
+    restart: unless-stopped
+
+  # ── Intelligence ─────────────────────────────────────────────────────
+
+  news-sentinel:
+    build:
+      context: ./services/news-sentinel
+      dockerfile: Dockerfile
+    ports:
+      - "8089:8089"
+    environment:
+      OLLAMA_HOST: "http://host.docker.internal:11434"
+      OLLAMA_MODEL: "qwen2.5:14b"
+      POLL_INTERVAL: "300"
+      PORT: "8089"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8089/healthz',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    mem_limit: 256m
+    restart: unless-stopped
 
 volumes:
   sleipnir-data:
