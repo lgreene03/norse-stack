@@ -284,3 +284,34 @@ def test_get_recent_trades_respects_limit(tracker):
     out = tracker.get_recent_trades(limit=3)
     # The 3 most recent (7,8,9), newest first.
     assert [t["net_pnl"] for t in out] == [9.0, 8.0, 7.0]
+
+
+# ---------------------------------------------------------------------------
+# Consumer-thread liveness for /healthz (sre-resilience-5)
+# ---------------------------------------------------------------------------
+
+def test_liveness_ok_before_started():
+    lv = odin.Liveness()
+    ok, age = lv.status()
+    # Before the consumer loop registers, health must report OK (so container
+    # startup isn't failed closed during Kafka connect/retry).
+    assert ok is True
+    assert age is None
+
+
+def test_liveness_fresh_beat_is_ok():
+    lv = odin.Liveness()
+    lv.mark_started()
+    lv.beat()
+    ok, age = lv.status()
+    assert ok is True
+    assert age is not None and age >= 0
+
+
+def test_liveness_stale_beat_is_degraded(monkeypatch):
+    lv = odin.Liveness()
+    lv.mark_started()
+    # Force a stale beat by shrinking the staleness threshold below the age.
+    monkeypatch.setattr(odin, "HEALTH_MAX_STALENESS_SECS", -1.0)
+    ok, age = lv.status()
+    assert ok is False

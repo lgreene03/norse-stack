@@ -50,6 +50,7 @@ parent/
 | 5437  | PostgreSQL (Muninn)|
 | 5436  | PostgreSQL (Huginn)|
 | 9091  | Prometheus         |
+| 9093  | Alertmanager       |
 | 3001  | Grafana            |
 | 50051 | Huginn gRPC        |
 | 19092 | Redpanda (Kafka)   |

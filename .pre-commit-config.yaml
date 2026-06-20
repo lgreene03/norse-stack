@@ -1,0 +1,13 @@
+# Pre-commit hooks for norse-stack.
+#
+# Install once per clone:
+#   pip install pre-commit && pre-commit install
+#
+# The gitleaks hook is the local mirror of the CI `secret-scan` job: it blocks a
+# commit that introduces a hard-coded credential before it ever reaches a push,
+# so contributors get the same backstop locally that CI enforces on the PR.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks

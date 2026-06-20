@@ -33,7 +33,19 @@ from kafka.errors import KafkaConnectionError
 
 KAFKA_BROKERS = os.environ.get("KAFKA_BROKERS", "redpanda:29092")
 FILLS_TOPIC = os.environ.get("FILLS_TOPIC", "executions.fills.v1")
+DLQ_TOPIC = os.environ.get("FILLS_DLQ_TOPIC", "executions.fills.v1.dlq")
 PORT = int(os.environ.get("PORT", "8086"))
+
+# CORS: default to "*" to preserve existing behaviour, but allow locking the
+# allowed origin down to a single configured value in hardened deployments.
+ACCESS_CONTROL_ALLOW_ORIGIN = os.environ.get("ACCESS_CONTROL_ALLOW_ORIGIN", "*")
+
+# Liveness: the consumer thread stamps a heartbeat each poll cycle. /healthz
+# returns 503 once the heartbeat is older than this many seconds, so a wedged
+# consumer thread is detectable even while the HTTP server stays up. Generous
+# default avoids flapping on an idle (but healthy) stream — the heartbeat is
+# published every cycle regardless of whether any message arrived.
+HEALTH_MAX_STALENESS_SECS = float(os.environ.get("HEALTH_MAX_STALENESS_SECS", "120"))
 
 # When true, open positions in the equity curve / drawdown / VaR are marked to
 # the last seen trade price instead of average cost. Defaults to False so the
@@ -82,6 +94,42 @@ class Counters:
 
 
 counters = Counters()
+
+
+class Liveness:
+    """Tracks the consumer thread's last-progress timestamp.
+
+    The consumer stamps `beat()` once per poll cycle (whether or not a message
+    arrived) so /healthz can distinguish a live-but-idle loop from a wedged
+    one. `started` flips true after the consumer connects; until then /healthz
+    reports healthy so container startup isn't failed closed during Kafka
+    connect/retry.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._last_beat = None
+        self._started = False
+
+    def mark_started(self):
+        with self._lock:
+            self._started = True
+            self._last_beat = time.monotonic()
+
+    def beat(self):
+        with self._lock:
+            self._last_beat = time.monotonic()
+
+    def status(self):
+        """Return (ok, age_secs_or_None). ok=True before the loop has started."""
+        with self._lock:
+            if not self._started or self._last_beat is None:
+                return True, None
+            age = time.monotonic() - self._last_beat
+            return age <= HEALTH_MAX_STALENESS_SECS, age
+
+
+liveness = Liveness()
 
 
 def handle_signal(signum, frame):
@@ -826,9 +874,18 @@ class OdinHandler(BaseHTTPRequestHandler):
             self._json_response(tracker.get_equity_curve())
         elif self.path == "/api/trades":
             self._json_response(tracker.get_recent_trades())
-        elif self.path == "/healthz":
-            self._json_response({"status": "ok", "service": "odin",
-                                 "counters": counters.snapshot()})
+        elif self.path == "/healthz" or self.path == "/readyz":
+            ok, age = liveness.status()
+            payload = {
+                "status": "ok" if ok else "degraded",
+                "service": "odin",
+                "consumer_alive": ok,
+                "consumer_last_beat_age_secs": (
+                    round(age, 1) if age is not None else None
+                ),
+                "counters": counters.snapshot(),
+            }
+            self._json_response(payload, status=200 if ok else 503)
         elif self.path == "/metrics":
             self._text_response(counters.render_prometheus())
         else:
@@ -838,15 +895,15 @@ class OdinHandler(BaseHTTPRequestHandler):
         body = text.encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; version=0.0.4")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", ACCESS_CONTROL_ALLOW_ORIGIN)
         self.end_headers()
         self.wfile.write(body)
 
-    def _json_response(self, data):
+    def _json_response(self, data, status=200):
         body = json.dumps(data, indent=2).encode()
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", ACCESS_CONTROL_ALLOW_ORIGIN)
         self.end_headers()
         self.wfile.write(body)
 
@@ -854,15 +911,33 @@ class OdinHandler(BaseHTTPRequestHandler):
         pass
 
 
+def _make_dlq_producer():
+    """Best-effort DLQ producer. Returns a KafkaProducer or None.
+
+    Poison records (undecodable JSON) are republished to DLQ_TOPIC so they are
+    not lost. If a producer can't be constructed we degrade to counter-only:
+    the record is still skipped (never stalls the batch), just not republished.
+    """
+    try:
+        from kafka import KafkaProducer
+        return KafkaProducer(bootstrap_servers=KAFKA_BROKERS)
+    except Exception as e:  # pragma: no cover - depends on kafka availability
+        log.warning("DLQ producer unavailable (%s); decode failures counter-only", e)
+        return None
+
+
 def consume_fills():
     for attempt in range(30):
         try:
+            # Deserialize raw bytes here and decode JSON per-message below, so a
+            # single poison record raises inside our per-message try/except
+            # (incrementing a counter + DLQ) instead of bubbling out of poll()
+            # and stalling/dropping the rest of the batch.
             consumer = KafkaConsumer(
                 FILLS_TOPIC,
                 bootstrap_servers=KAFKA_BROKERS,
                 group_id="odin-analytics",
                 auto_offset_reset="earliest",
-                value_deserializer=lambda v: json.loads(v.decode("utf-8")),
                 consumer_timeout_ms=1000,
             )
             log.info("Connected to Kafka, consuming %s", FILLS_TOPIC)
@@ -874,26 +949,48 @@ def consume_fills():
         log.error("Failed to connect to Kafka")
         return
 
+    dlq_producer = _make_dlq_producer()
+    liveness.mark_started()
+
     while not shutdown:
         try:
             records = consumer.poll(timeout_ms=1000)
+            # Heartbeat once per poll cycle, whether or not records arrived, so
+            # /healthz reflects loop liveness rather than message arrival rate.
+            liveness.beat()
             for tp, messages in records.items():
                 for msg in messages:
-                    fill = msg.value
+                    # Per-message decode: a bad record is isolated to itself.
+                    try:
+                        fill = json.loads(msg.value.decode("utf-8"))
+                    except (ValueError, TypeError, UnicodeDecodeError) as de:
+                        counters.inc("decode_failure_total")
+                        log.warning("Dropping undecodable fill record: %s", de)
+                        if dlq_producer is not None:
+                            try:
+                                dlq_producer.send(DLQ_TOPIC, value=msg.value)
+                            except Exception as pe:  # pragma: no cover
+                                counters.inc("dlq_publish_failure_total")
+                                log.warning("DLQ publish failed: %s", pe)
+                        continue
+
                     tracker.add_fill(fill)
-                    log.info(
-                        "Fill: %s %s %s @ $%.2f (fee: $%.4f)",
-                        fill.get("side", "?"),
-                        fill.get("quantity", 0),
-                        fill.get("instrument", "?"),
-                        float(fill.get("fill_price", 0)),
-                        float(fill.get("transaction_cost", 0)),
-                    )
+                    if isinstance(fill, dict):
+                        log.info(
+                            "Fill: %s %s %s @ $%.2f (fee: $%.4f)",
+                            fill.get("side", "?"),
+                            fill.get("quantity", 0),
+                            fill.get("instrument", "?"),
+                            float(fill.get("fill_price", 0) or 0),
+                            float(fill.get("transaction_cost", 0) or 0),
+                        )
         except Exception as e:
             log.error("Consumer error: %s", e)
             time.sleep(1)
 
     consumer.close()
+    if dlq_producer is not None:
+        dlq_producer.close()
 
 
 def main():

@@ -46,6 +46,20 @@ RETRAIN_INTERVAL = int(os.environ.get("RETRAIN_INTERVAL", "50"))
 FEATURE_BUFFER_SIZE = int(os.environ.get("FEATURE_BUFFER_SIZE", "100"))
 CONSUMER_GROUP = os.environ.get("CONSUMER_GROUP", "huginn-ai-ml")
 
+# DLQ topics for poison (undecodable) records, one per source topic.
+FEATURES_DLQ_TOPIC = os.environ.get(
+    "FEATURES_DLQ_TOPIC", f"{FEATURES_TOPIC}.dlq"
+)
+FILLS_DLQ_TOPIC = os.environ.get("FILLS_DLQ_TOPIC", f"{FILLS_TOPIC}.dlq")
+
+# CORS: default "*" preserves existing behaviour; lock to a single origin in
+# hardened deployments via ACCESS_CONTROL_ALLOW_ORIGIN.
+ACCESS_CONTROL_ALLOW_ORIGIN = os.environ.get("ACCESS_CONTROL_ALLOW_ORIGIN", "*")
+
+# Liveness: each consumer thread stamps a heartbeat per poll cycle; /healthz
+# returns 503 once ALL started consumers are stale beyond this threshold.
+HEALTH_MAX_STALENESS_SECS = float(os.environ.get("HEALTH_MAX_STALENESS_SECS", "120"))
+
 # Sample buffer cap: bound memory for the labeled/pending training set.
 MAX_SAMPLES = int(os.environ.get("MAX_SAMPLES", "2000"))
 
@@ -136,6 +150,61 @@ class Metrics:
 
 
 metrics = Metrics()
+
+
+class Liveness:
+    """Per-thread last-progress tracker for /healthz liveness.
+
+    Each named consumer registers and beats once per poll cycle. /healthz is
+    healthy until every registered consumer has gone stale (so one wedged
+    consumer degrades readiness while still surfacing which one). Before any
+    consumer registers, health is reported OK so container startup isn't failed
+    closed during Kafka connect/retry.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._beats = {}  # name -> monotonic timestamp
+
+    def register(self, name):
+        with self._lock:
+            self._beats[name] = time.monotonic()
+
+    def beat(self, name):
+        with self._lock:
+            self._beats[name] = time.monotonic()
+
+    def status(self):
+        """Return (ok, detail). ok=True before any consumer registers."""
+        with self._lock:
+            if not self._beats:
+                return True, {}
+            now = time.monotonic()
+            detail = {}
+            any_alive = False
+            for name, ts in self._beats.items():
+                age = now - ts
+                alive = age <= HEALTH_MAX_STALENESS_SECS
+                any_alive = any_alive or alive
+                detail[name] = {"alive": alive, "age_secs": round(age, 1)}
+            return any_alive, detail
+
+
+liveness = Liveness()
+
+
+def _make_dlq_producer():
+    """Best-effort DLQ producer. Returns a KafkaProducer or None.
+
+    Used to republish poison (undecodable) records so they aren't silently
+    lost. If construction fails we degrade to counter-only handling.
+    """
+    try:
+        from kafka import KafkaProducer
+        return KafkaProducer(bootstrap_servers=KAFKA_BROKERS)
+    except Exception as e:  # pragma: no cover - depends on kafka availability
+        log.warning("DLQ producer unavailable (%s); decode failures counter-only", e)
+        return None
 
 
 def _git_sha():
@@ -1004,8 +1073,16 @@ class HuginnAIHandler(BaseHTTPRequestHandler):
         elif path == "/metrics":
             self._text_response(metrics.render_prometheus())
 
-        elif path == "/healthz":
-            self._json_response({"status": "ok", "service": "huginn-ai"})
+        elif path == "/healthz" or path == "/readyz":
+            ok, detail = liveness.status()
+            self._json_response(
+                {
+                    "status": "ok" if ok else "degraded",
+                    "service": "huginn-ai",
+                    "consumers": detail,
+                },
+                status=200 if ok else 503,
+            )
 
         else:
             self.send_error(404)
@@ -1014,7 +1091,7 @@ class HuginnAIHandler(BaseHTTPRequestHandler):
         body = json.dumps(data, indent=2).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", ACCESS_CONTROL_ALLOW_ORIGIN)
         self.end_headers()
         self.wfile.write(body)
 
@@ -1022,7 +1099,7 @@ class HuginnAIHandler(BaseHTTPRequestHandler):
         body = text.encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; version=0.0.4")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", ACCESS_CONTROL_ALLOW_ORIGIN)
         self.end_headers()
         self.wfile.write(body)
 
@@ -1036,12 +1113,14 @@ class HuginnAIHandler(BaseHTTPRequestHandler):
 def _connect_consumer(topics, group_id, retries=30, delay=2):
     for attempt in range(1, retries + 1):
         try:
+            # Raw-bytes deserialization: JSON decode happens per-message in the
+            # consume loops so one poison record is isolated (counter + DLQ)
+            # instead of raising out of poll() and stalling the whole batch.
             consumer = KafkaConsumer(
                 *topics,
                 bootstrap_servers=KAFKA_BROKERS,
                 group_id=group_id,
                 auto_offset_reset="earliest",
-                value_deserializer=lambda v: json.loads(v.decode("utf-8")),
                 consumer_timeout_ms=1000,
             )
             log.info(
@@ -1060,17 +1139,48 @@ def _connect_consumer(topics, group_id, retries=30, delay=2):
     return None
 
 
+def _decode_or_dlq(msg, dlq_producer, dlq_topic, counter_name):
+    """Decode a message's JSON value, isolating poison records.
+
+    Returns the decoded value or None. On failure increments `counter_name`,
+    logs, and republishes the raw bytes to `dlq_topic` (best-effort).
+    """
+    try:
+        return json.loads(msg.value.decode("utf-8"))
+    except (ValueError, TypeError, UnicodeDecodeError) as de:
+        metrics.inc(counter_name)
+        log.warning("Dropping undecodable record (%s): %s", dlq_topic, de)
+        if dlq_producer is not None:
+            try:
+                dlq_producer.send(dlq_topic, value=msg.value)
+            except Exception as pe:  # pragma: no cover
+                metrics.inc("dlq_publish_failure_total")
+                log.warning("DLQ publish failed: %s", pe)
+        return None
+
+
 def consume_features():
     consumer = _connect_consumer([FEATURES_TOPIC], CONSUMER_GROUP)
     if consumer is None:
         return
 
+    dlq_producer = _make_dlq_producer()
+    liveness.register("features")
+
     while not shutdown:
         try:
             records = consumer.poll(timeout_ms=1000)
+            liveness.beat("features")
             for tp, messages in records.items():
                 for msg in messages:
-                    event = msg.value
+                    event = _decode_or_dlq(
+                        msg, dlq_producer, FEATURES_DLQ_TOPIC,
+                        "features_decode_failure_total",
+                    )
+                    if event is None or not isinstance(event, dict):
+                        if event is not None:
+                            metrics.inc("features_decode_failure_total")
+                        continue
                     instrument = event.get("instrument", "")
                     event_time = event.get("eventTime", "")
                     event_id = event.get("eventId", "")
@@ -1090,6 +1200,8 @@ def consume_features():
             time.sleep(1)
 
     consumer.close()
+    if dlq_producer is not None:
+        dlq_producer.close()
 
 
 def consume_fills():
@@ -1097,12 +1209,21 @@ def consume_fills():
     if consumer is None:
         return
 
+    dlq_producer = _make_dlq_producer()
+    liveness.register("fills")
+
     while not shutdown:
         try:
             records = consumer.poll(timeout_ms=1000)
+            liveness.beat("fills")
             for tp, messages in records.items():
                 for msg in messages:
-                    fill = msg.value
+                    fill = _decode_or_dlq(
+                        msg, dlq_producer, FILLS_DLQ_TOPIC,
+                        "fills_decode_failure_total",
+                    )
+                    if fill is None:
+                        continue
                     manager.add_fill(fill)
                     if isinstance(fill, dict):
                         log.info(
@@ -1118,6 +1239,8 @@ def consume_fills():
             time.sleep(1)
 
     consumer.close()
+    if dlq_producer is not None:
+        dlq_producer.close()
 
 
 # ---------------------------------------------------------------------------

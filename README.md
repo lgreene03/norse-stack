@@ -182,6 +182,7 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 | 8089 | News Sentinel | http://localhost:8089/api/sentiment |
 | 8092 | Huginn-AI ML | http://localhost:8092/api/model/status |
 | 9091 | Prometheus | http://localhost:9091 |
+| 9093 | Alertmanager | http://localhost:9093 |
 | 3001 | Grafana | http://localhost:3001 (admin/norse) |
 | 50051 | Huginn gRPC | `grpcurl -plaintext localhost:50051 huginn.HuginnService/GetSnapshot` |
 
@@ -213,9 +214,18 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 - Per-instrument P&L breakdown with win rate and profit factor
 
 ### Observability
-- Prometheus scraping Huginn and Sleipnir metrics (15s interval)
+- Prometheus scraping Huginn, Sleipnir, Odin, Huginn-AI, and Muninn metrics (15s interval)
+- Alert rules (`monitoring/alerts/`) for pipeline stalls (no features/fills), fill rejection & duplicate bursts, model/state persistence failures, and target-down, routed through Alertmanager
 - 11-panel auto-provisioned Grafana dashboard: signal-to-decision latency (p50/p95/p99), feature event age, orders by side, risk halt status, max drawdown gauge, portfolio value, realized PnL, and more
 - Distributed tracing via OpenTelemetry (Tempo-compatible)
+
+### Python service resilience
+- **Per-message decode isolation:** odin/bragi/huginn-ai decode each Kafka record inside its own try/except; a poison (undecodable) record increments a `*_decode_failure_total` counter and is republished to a `<topic>.dlq` topic (best-effort) instead of stalling or dropping the rest of the batch.
+- **Consumer-thread liveness:** each consumer publishes a per-cycle heartbeat. `/healthz` (odin, bragi, huginn-ai) and `/readyz` (news-sentinel) return `503` once the heartbeat is stale beyond `HEALTH_MAX_STALENESS_SECS`, so a wedged consumer is detectable even while the HTTP server is up. Health reports OK until the loop has started so container startup isn't failed closed during Kafka connect/retry.
+- **Bragi replay-safety:** Bragi consumes from `earliest` (configurable via `AUTO_OFFSET_RESET`) and dedups on feature `eventId` / fill `execution_id` with a bounded seen-set, so a restart rebuilds the decision log without losing or double-counting events.
+- **News Sentinel honest Ollama state:** sentiment is only counted when Ollama returns a genuinely parsed classification. Failed/unparsed responses increment `ollama_failures`, tag the headline `unclassified`, and exclude it from aggregate sentiment (no falsely-neutral signal). `/api/status` exposes `ollama_status` (`ok`/`degraded`).
+- **obi-bridge batched flush:** the producer flushes once per poll cycle (all symbols together) rather than synchronously per message.
+- **Configurable CORS:** the read-only HTTP APIs default to `Access-Control-Allow-Origin: *` but can be locked to a single origin via `ACCESS_CONTROL_ALLOW_ORIGIN` (see `.env.example`).
 
 ---
 

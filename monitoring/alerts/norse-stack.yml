@@ -1,0 +1,145 @@
+# Norse Stack alert rules.
+#
+# Referenced from monitoring/prometheus.yml via rule_files. Metric names below
+# are the real series exposed by each service:
+#   huginn      → huginn_features_consumed_total, huginn_fills_executed_total,
+#                 huginn_strategy_state_persist_errors_total  (job: huginn)
+#   huginn-ai   → huginn_fills_processed_total, huginn_fills_rejected_total,
+#                 huginn_fills_duplicate_total,
+#                 huginn_model_persist_failures_total          (job: huginn-ai)
+#   odin        → odin_fills_processed_total, odin_fills_rejected_total,
+#                 odin_fills_duplicate_total                    (job: odin)
+#   sleipnir    → sleipnir_orders_filled_total                 (job: sleipnir)
+#
+# The huginn and huginn-ai services share the `huginn_` metric prefix but expose
+# disjoint metric names, so series never collide; the `job` label disambiguates
+# regardless. Validate edits with:
+#   docker run --rm -v "$PWD/monitoring/alerts:/alerts" prom/prometheus:v2.53.0 \
+#     promtool check rules /alerts/norse-stack.yml
+
+groups:
+  # ── Pipeline liveness: data must keep flowing ───────────────────────────
+  - name: norse-pipeline-liveness
+    rules:
+      # Huginn stopped consuming OBI features — the strategy is starved.
+      - alert: HuginnNoFeatures
+        expr: sum(rate(huginn_features_consumed_total[5m])) == 0
+        for: 5m
+        labels:
+          severity: critical
+          area: pipeline
+        annotations:
+          summary: "Huginn is consuming no features"
+          description: "No huginn_features_consumed_total over the last 5m — the feature stream (obi-bridge → features.obi.v1) may be down."
+
+      # No fills produced anywhere in the execution path for 10m.
+      - alert: NoFillsExecuted
+        expr: sum(rate(huginn_fills_executed_total[10m])) == 0
+        for: 10m
+        labels:
+          severity: warning
+          area: pipeline
+        annotations:
+          summary: "No fills executed in the last 10m"
+          description: "huginn_fills_executed_total rate is zero — execution may be halted or the intents/fills topics stalled."
+
+      # Sleipnir, the execution gateway, is filling no orders.
+      - alert: SleipnirNoFills
+        expr: sum(rate(sleipnir_orders_filled_total[10m])) == 0
+        for: 10m
+        labels:
+          severity: warning
+          area: pipeline
+        annotations:
+          summary: "Sleipnir filled no orders in the last 10m"
+          description: "sleipnir_orders_filled_total rate is zero — the execution gateway may be disconnected from the intents topic."
+
+  # ── Fill quality: rejections & duplicates ───────────────────────────────
+  - name: norse-fill-quality
+    rules:
+      # Burst of rejected fills relative to processed (huginn-ai accounting).
+      - alert: HuginnAiFillsRejectedBurst
+        expr: |
+          sum(rate(huginn_fills_rejected_total[5m]))
+            /
+          clamp_min(sum(rate(huginn_fills_processed_total[5m])), 1) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+          area: fills
+        annotations:
+          summary: "huginn-ai rejecting >20% of fills"
+          description: "Over 20% of fills are being rejected (huginn_fills_rejected_total / huginn_fills_processed_total) over 5m."
+
+      # Odin (analytics) seeing a burst of rejected fills.
+      - alert: OdinFillsRejectedBurst
+        expr: |
+          sum(rate(odin_fills_rejected_total[5m]))
+            /
+          clamp_min(sum(rate(odin_fills_processed_total[5m])), 1) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+          area: fills
+        annotations:
+          summary: "Odin rejecting >20% of fills"
+          description: "Over 20% of fills are being rejected in Odin (odin_fills_rejected_total / odin_fills_processed_total) over 5m."
+
+      # Duplicate fills indicate at-least-once redelivery not being de-duped.
+      - alert: HuginnAiDuplicateFills
+        expr: sum(rate(huginn_fills_duplicate_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          area: fills
+        annotations:
+          summary: "huginn-ai observing duplicate fills"
+          description: "huginn_fills_duplicate_total is increasing — duplicate fill events are being delivered and de-duped; investigate redelivery."
+
+      - alert: OdinDuplicateFills
+        expr: sum(rate(odin_fills_duplicate_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          area: fills
+        annotations:
+          summary: "Odin observing duplicate fills"
+          description: "odin_fills_duplicate_total is increasing — duplicate fill events are reaching analytics; investigate redelivery."
+
+  # ── Model & state persistence ───────────────────────────────────────────
+  - name: norse-persistence
+    rules:
+      # huginn-ai failed to persist a trained model.
+      - alert: HuginnAiModelPersistFailures
+        expr: increase(huginn_model_persist_failures_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          area: ml
+        annotations:
+          summary: "huginn-ai model persistence failing"
+          description: "huginn_model_persist_failures_total increased in the last 10m — a trained model could not be saved; predictions may be stale."
+
+      # huginn strategy state failed to persist (risk of state loss on restart).
+      - alert: HuginnStatePersistErrors
+        expr: increase(huginn_strategy_state_persist_errors_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+          area: persistence
+        annotations:
+          summary: "Huginn strategy state persistence failing"
+          description: "huginn_strategy_state_persist_errors_total increased in the last 10m — strategy state may be lost on restart."
+
+  # ── Target health: scrape targets must be up ────────────────────────────
+  - name: norse-target-health
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+          area: monitoring
+        annotations:
+          summary: "Prometheus target {{ $labels.job }} is down"
+          description: "Target {{ $labels.instance }} (job {{ $labels.job }}) has been unreachable for >2m (up == 0)."

@@ -708,8 +708,10 @@ def main():
                     input_event_ids=input_event_ids,
                 )
 
+                # Enqueue the event; flush is batched once per poll cycle
+                # (after the symbol loop) instead of per-message, so the hot
+                # loop doesn't pay a synchronous broker round-trip per send.
                 producer.send(OBI_TOPIC, key=instrument, value=event)
-                producer.flush()
                 stats[symbol]["published"] += 1
                 seq += 1
 
@@ -738,6 +740,14 @@ def main():
             except Exception as e:
                 stats[symbol]["errors"] += 1
                 log.error("[%s] Unexpected error: %s", symbol, e)
+
+        # Flush once per poll cycle so all symbols' events for this cycle are
+        # durably sent together, amortizing the broker round-trip across the
+        # batch instead of blocking on every individual send.
+        try:
+            producer.flush()
+        except Exception as e:
+            log.error("Kafka flush error: %s", e)
 
         time.sleep(POLL_INTERVAL)
 

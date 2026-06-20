@@ -40,6 +40,17 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:14b")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "300"))
 PORT = int(os.environ.get("PORT", "8089"))
 
+# CORS: default "*" preserves existing behaviour; lock to a single origin in
+# hardened deployments via ACCESS_CONTROL_ALLOW_ORIGIN.
+ACCESS_CONTROL_ALLOW_ORIGIN = os.environ.get("ACCESS_CONTROL_ALLOW_ORIGIN", "*")
+
+# Liveness: the background poller stamps a heartbeat each cycle; /readyz (and
+# /healthz) return 503 once it goes stale beyond this threshold. Default is
+# generous relative to POLL_INTERVAL so a long Ollama batch doesn't flap it.
+HEALTH_MAX_STALENESS_SECS = float(
+    os.environ.get("HEALTH_MAX_STALENESS_SECS", str(max(POLL_INTERVAL * 3, 120)))
+)
+
 RSS_FEEDS = {
     "coindesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
     "cointelegraph": "https://cointelegraph.com/rss",
@@ -98,7 +109,11 @@ class HeadlineStore:
         self.headlines = []          # list of dicts, newest last
         self.seen_hashes = set()     # title hashes for dedup
         self.ollama_last_ok = None   # timestamp of last successful Ollama call
+        self.ollama_failures = 0     # cumulative failed/unparsed Ollama calls
+        self.ollama_ok_count = 0     # cumulative genuinely-parsed responses
         self.feeds_active = set()
+        # Poller liveness heartbeat (monotonic seconds); None until first cycle.
+        self.last_poll_monotonic = None
 
     def has_seen(self, title_hash):
         with self.lock:
@@ -112,6 +127,23 @@ class HeadlineStore:
     def mark_ollama_ok(self):
         with self.lock:
             self.ollama_last_ok = datetime.now(timezone.utc).isoformat()
+            self.ollama_ok_count += 1
+
+    def mark_ollama_failure(self):
+        with self.lock:
+            self.ollama_failures += 1
+
+    def beat_poll(self):
+        with self.lock:
+            self.last_poll_monotonic = time.monotonic()
+
+    def liveness(self):
+        """Return (ok, age_secs_or_None). ok=True before the first poll cycle."""
+        with self.lock:
+            if self.last_poll_monotonic is None:
+                return True, None
+            age = time.monotonic() - self.last_poll_monotonic
+            return age <= HEALTH_MAX_STALENESS_SECS, age
 
     def mark_feed_active(self, name):
         with self.lock:
@@ -149,9 +181,17 @@ class HeadlineStore:
                 weighted_sum = 0.0
                 weight_total = 0.0
                 count = 0
+                skipped_unclassified = 0
                 latest_title = ""
 
                 for h in self.headlines:
+                    # Headlines whose Ollama classification failed are tagged
+                    # unclassified; excluding them prevents a falsely-neutral
+                    # signal (a failed call must not read as "neutral").
+                    if not h.get("classified", True):
+                        skipped_unclassified += 1
+                        continue
+
                     age_secs = now - h["processed_at_epoch"]
                     weight = math.exp(-age_secs * math.log(2) / DECAY_HALF_LIFE_SECS)
 
@@ -174,6 +214,7 @@ class HeadlineStore:
                     "score": score,
                     "label": _score_label(score),
                     "headlines_count": count,
+                    "unclassified_skipped": skipped_unclassified,
                     "latest_headline": latest_title,
                 }
 
@@ -181,11 +222,23 @@ class HeadlineStore:
 
     def get_status(self):
         with self.lock:
+            unclassified = sum(
+                1 for h in self.headlines if not h.get("classified", True)
+            )
+            # Ollama is "degraded" if we've never had a parsed response, and
+            # "ok" otherwise. This is surfaced separately from the service
+            # status so a stale/failing Ollama is visible rather than masked by
+            # falsely-neutral sentiment.
+            ollama_ok = self.ollama_ok_count > 0
             return {
                 "service": "news-sentinel",
                 "status": "running",
                 "headline_count": len(self.headlines),
+                "unclassified_headlines": unclassified,
+                "ollama_status": "ok" if ollama_ok else "degraded",
                 "ollama_last_ok": self.ollama_last_ok,
+                "ollama_ok_count": self.ollama_ok_count,
+                "ollama_failures": self.ollama_failures,
                 "ollama_model": OLLAMA_MODEL,
                 "ollama_host": OLLAMA_HOST,
                 "feeds_active": sorted(self.feeds_active),
@@ -225,16 +278,24 @@ store = HeadlineStore()
 # Ollama Client
 # ---------------------------------------------------------------------------
 
-def query_ollama(headline):
-    """Send a headline to Ollama for sentiment classification.
-
-    Returns a dict with btc/eth sentiment and confidence, or neutral defaults
-    on any failure.
-    """
+def _neutral_sentiment():
     neutral = {}
     for c in COINS:
         neutral[c] = "neutral"
         neutral[f"{c}_confidence"] = 0.5
+    return neutral
+
+
+def query_ollama(headline):
+    """Send a headline to Ollama for sentiment classification.
+
+    Returns (result, ok). `ok` is True only when Ollama returned a genuinely
+    parsed classification; on any transport error, non-JSON body, or unparseable
+    response `ok` is False and `result` holds neutral defaults. The caller must
+    not treat an ok=False result as a real neutral signal — it tags the headline
+    unclassified so it is excluded from aggregate sentiment.
+    """
+    neutral = _neutral_sentiment()
 
     import re
     safe_headline = re.sub(r'[^a-zA-Z0-9\s.,;:!\?\'&$%#@\-\+\(\)/]', '', headline)[:200]
@@ -258,17 +319,20 @@ def query_ollama(headline):
             body = json.loads(resp.read().decode())
     except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
         log.warning("Ollama unavailable: %s", exc)
-        return neutral
+        return neutral, False
     except json.JSONDecodeError:
         log.warning("Ollama returned non-JSON response")
-        return neutral
+        return neutral, False
 
     raw = body.get("response", "")
     return _parse_ollama_response(raw, neutral)
 
 
 def _parse_ollama_response(raw, neutral):
-    """Extract JSON from Ollama's text response, tolerating markdown fences."""
+    """Extract JSON from Ollama's text response, tolerating markdown fences.
+
+    Returns (result, ok). `ok` is False (and result is the neutral default)
+    when no JSON object is present or it is malformed."""
     text = raw.strip()
 
     # Strip markdown code fences if present
@@ -282,13 +346,13 @@ def _parse_ollama_response(raw, neutral):
     end = text.rfind("}")
     if start == -1 or end == -1 or end <= start:
         log.warning("No JSON object found in Ollama response: %.120s", raw)
-        return neutral
+        return neutral, False
 
     try:
         parsed = json.loads(text[start:end + 1])
     except json.JSONDecodeError:
         log.warning("Malformed JSON in Ollama response: %.120s", raw)
-        return neutral
+        return neutral, False
 
     # Validate and clamp values
     result = {}
@@ -307,7 +371,7 @@ def _parse_ollama_response(raw, neutral):
             val = 0.5
         result[key] = round(val, 3)
 
-    return result
+    return result, True
 
 
 # ---------------------------------------------------------------------------
@@ -362,10 +426,16 @@ def background_poller():
                 if elapsed < OLLAMA_RATE_LIMIT_SECS:
                     time.sleep(OLLAMA_RATE_LIMIT_SECS - elapsed)
 
-                sentiment = query_ollama(title)
+                sentiment, ollama_ok = query_ollama(title)
                 last_ollama_call = time.time()
 
-                store.mark_ollama_ok()
+                # Only mark OK on a genuinely parsed response; otherwise record
+                # a failure and tag the headline unclassified so its neutral
+                # default is excluded from aggregate sentiment.
+                if ollama_ok:
+                    store.mark_ollama_ok()
+                else:
+                    store.mark_ollama_failure()
 
                 now = datetime.now(timezone.utc)
                 headline = {
@@ -375,6 +445,7 @@ def background_poller():
                     "title_hash": t_hash,
                     "processed_at": now.isoformat(),
                     "processed_at_epoch": now.timestamp(),
+                    "classified": ollama_ok,
                 }
                 for coin in COINS:
                     headline[f"{coin}_sentiment"] = sentiment[coin]
@@ -396,6 +467,9 @@ def background_poller():
 
             # Prune old headlines
             store.prune()
+
+            # Heartbeat: a completed cycle marks the poller alive for /readyz.
+            store.beat_poll()
 
         except Exception as exc:
             log.error("Poller cycle error: %s", exc)
@@ -424,15 +498,33 @@ class SentinelHandler(BaseHTTPRequestHandler):
         elif path == "/api/status":
             self._json_response(store.get_status())
         elif path == "/healthz":
+            # Process-liveness: the HTTP server is up. Kept as a plain 200 so
+            # the container healthcheck doesn't fail during the first (possibly
+            # slow) poll cycle. Consumer-thread liveness is on /readyz.
             self._json_response({"status": "ok", "service": "news-sentinel"})
+        elif path == "/readyz":
+            # Readiness gates on the background poller's last-progress beat so a
+            # wedged poller thread is detectable even while the server stays up.
+            ok, age = store.liveness()
+            self._json_response(
+                {
+                    "status": "ok" if ok else "degraded",
+                    "service": "news-sentinel",
+                    "poller_alive": ok,
+                    "poller_last_beat_age_secs": (
+                        round(age, 1) if age is not None else None
+                    ),
+                },
+                status=200 if ok else 503,
+            )
         else:
             self.send_error(404)
 
-    def _json_response(self, data):
+    def _json_response(self, data, status=200):
         body = json.dumps(data, indent=2).encode()
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", ACCESS_CONTROL_ALLOW_ORIGIN)
         self.end_headers()
         self.wfile.write(body)
 

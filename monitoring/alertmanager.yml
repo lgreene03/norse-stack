@@ -1,0 +1,22 @@
+# Alertmanager configuration for the Norse Stack.
+#
+# Minimal local-dev setup: every alert routes to a single null/webhook receiver
+# so Prometheus has a working alerting target without requiring external
+# notification credentials. Point `url` at a real webhook (Slack, etc.) to send
+# notifications; as written it posts to a local sink that need not exist — the
+# alert lifecycle (firing/resolved) is still visible in the Alertmanager UI.
+
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: 'null'
+  group_by: ['alertname', 'job']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  # No-op receiver: alerts are grouped and visible in the Alertmanager UI
+  # (http://localhost:9094) but no external notification is sent.
+  - name: 'null'

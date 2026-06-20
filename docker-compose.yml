@@ -26,7 +26,7 @@ services:
       - --kafka-addr internal://0.0.0.0:29092,external://0.0.0.0:19092
       - --advertise-kafka-addr internal://redpanda:29092,external://localhost:19092
     ports:
-      - "19092:19092"
+      - "127.0.0.1:19092:19092"
     healthcheck:
       test: ["CMD", "rpk", "cluster", "health"]
       interval: 5s
@@ -40,7 +40,7 @@ services:
       redpanda:
         condition: service_healthy
     ports:
-      - "8088:8080"
+      - "127.0.0.1:8088:8080"
     environment:
       KAFKA_BROKERS: redpanda:29092
     restart: unless-stopped
@@ -50,7 +50,7 @@ services:
     environment:
       POSTGRES_DB: muninn
       POSTGRES_USER: muninn
-      POSTGRES_PASSWORD: muninn
+      POSTGRES_PASSWORD: ${MUNINN_DB_PASSWORD:-muninn}
     ports:
       - "5437:5432"
     healthcheck:
@@ -66,7 +66,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${HUGINN_DB_PASSWORD:-postgres}
       POSTGRES_DB: huginn
     ports:
       - "5436:5432"
@@ -83,11 +83,11 @@ services:
     image: minio/minio:RELEASE.2025-01-20T14-49-07Z
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     ports:
-      - "9002:9000"
-      - "9003:9001"
+      - "127.0.0.1:9002:9000"
+      - "127.0.0.1:9003:9001"
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 10s
@@ -102,7 +102,7 @@ services:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      mc alias set local http://minio:9000 minioadmin minioadmin;
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin};
       mc mb --ignore-existing local/muninn-raw;
       mc mb --ignore-existing local/muninn-warehouse;
       mc mb --ignore-existing local/muninn-checkpoints;
@@ -144,14 +144,29 @@ services:
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-muninn:5432/muninn
       SPRING_DATASOURCE_USERNAME: muninn
-      SPRING_DATASOURCE_PASSWORD: muninn
+      SPRING_DATASOURCE_PASSWORD: ${MUNINN_DB_PASSWORD:-muninn}
       SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
       MUNINN_STORAGE_S3_ENDPOINT: http://minio:9000
-      MUNINN_STORAGE_S3_ACCESS_KEY: minioadmin
-      MUNINN_STORAGE_S3_SECRET_KEY: minioadmin
+      MUNINN_STORAGE_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      MUNINN_STORAGE_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       MUNINN_INGESTION_BINANCE_ENABLED: "true"
       MUNINN_INGESTION_COINBASE_ENABLED: "false"
       OTEL_EXPORTER_OTLP_ENDPOINT: tempo:4317
+    healthcheck:
+      # Temurin JRE base ships bash but no curl/wget; probe the actuator port
+      # over bash's /dev/tcp so the check needs no extra packages.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/8080 && echo -e \"GET /actuator/health HTTP/1.0\\r\\n\\r\\n\" >&3 && grep -q UP <&3'"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    mem_limit: 1g
+    cpus: 2.0
+    pids_limit: 512
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     restart: unless-stopped
 
   huginn:
@@ -178,12 +193,29 @@ services:
       KAFKA_INTENTS_TOPIC: executions.intents.v1
       KAFKA_FILLS_TOPIC: executions.fills.v1
       DATABASE_ENABLED: "true"
-      DATABASE_URL: postgres://postgres:postgres@postgres-huginn:5432/huginn?sslmode=disable
+      DATABASE_URL: postgres://postgres:${HUGINN_DB_PASSWORD:-postgres}@postgres-huginn:5432/huginn?sslmode=disable
       CAPITAL_INITIAL_CASH: "1000"
       KAFKA_PRICE_TOPIC: "prices.realtime.v1"
       SERVER_PORT: "8081"
       GRPC_PORT: "50051"
       OTEL_EXPORTER_OTLP_ENDPOINT: tempo:4317
+      # Control-plane bearer token gating mutating endpoints. Empty disables
+      # auth; the local-dev default keeps the fail-closed middleware active.
+      HUGINN_API_TOKEN: ${HUGINN_API_TOKEN:-localdev-change-me}
+    healthcheck:
+      # Alpine base ships busybox wget; /readyz is on SERVER_PORT (8081).
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8081/readyz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    mem_limit: 512m
+    cpus: 1.5
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     restart: unless-stopped
 
   sleipnir:
@@ -206,6 +238,23 @@ services:
       PORT: "8080"
       DB_PATH: /app/data/sleipnir.db
       OTEL_EXPORTER_OTLP_ENDPOINT: tempo:4317
+      # Control-plane admin token gating mutating endpoints. Empty disables
+      # auth; the local-dev default keeps the fail-closed middleware active.
+      SLEIPNIR_ADMIN_TOKEN: ${SLEIPNIR_ADMIN_TOKEN:-localdev-change-me}
+    healthcheck:
+      # Alpine base ships busybox wget; /readyz is on PORT (8080).
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8080/readyz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    mem_limit: 512m
+    cpus: 1.5
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     volumes:
       - sleipnir-data:/app/data
     restart: unless-stopped
@@ -226,6 +275,15 @@ services:
       POLL_INTERVAL: "60"
       BOOK_LEVELS: "20"
       OBI_THRESHOLD: "0.95"
+    healthcheck:
+      # obi-bridge has no HTTP server; confirm the long-running bridge.py
+      # process is still alive by scanning /proc cmdlines (python:slim has no
+      # pgrep/curl). Liveness only — fails closed if the worker has exited.
+      test: ["CMD-SHELL", "python3 -c \"import glob,sys; sys.exit(0 if any('bridge.py' in open(p,'rb').read().decode('utf-8','replace') for p in glob.glob('/proc/[0-9]*/cmdline')) else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     mem_limit: 256m
     restart: unless-stopped
 
@@ -245,6 +303,8 @@ services:
       FILLS_TOPIC: executions.fills.v1
       PORT: "8086"
       INITIAL_CASH: "1000"
+      # CORS: defaults to "*" (permissive). Lock to a single origin in prod.
+      ACCESS_CONTROL_ALLOW_ORIGIN: ${ACCESS_CONTROL_ALLOW_ORIGIN:-*}
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8086/healthz',timeout=3)"]
       interval: 30s
@@ -268,6 +328,8 @@ services:
       FILLS_TOPIC: executions.fills.v1
       OBI_THRESHOLD: "0.95"
       PORT: "8087"
+      # CORS: defaults to "*" (permissive). Lock to a single origin in prod.
+      ACCESS_CONTROL_ALLOW_ORIGIN: ${ACCESS_CONTROL_ALLOW_ORIGIN:-*}
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8087/healthz',timeout=3)"]
       interval: 30s
@@ -294,6 +356,8 @@ services:
       PORT: "8091"
       MIN_SAMPLES: "15"
       RETRAIN_INTERVAL: "30"
+      # CORS: defaults to "*" (permissive). Lock to a single origin in prod.
+      ACCESS_CONTROL_ALLOW_ORIGIN: ${ACCESS_CONTROL_ALLOW_ORIGIN:-*}
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8091/healthz',timeout=3)"]
       interval: 30s
@@ -332,10 +396,27 @@ services:
       - --web.enable-remote-write-receiver
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts:/etc/prometheus/alerts:ro
     depends_on:
       huginn:
+        condition: service_healthy
+      alertmanager:
         condition: service_started
     mem_limit: 256m
+    restart: unless-stopped
+
+  # Routes Prometheus alerts. Minimal local-dev config with a null receiver
+  # (see monitoring/alertmanager.yml); point a receiver at a real webhook to
+  # actually deliver notifications.
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    ports:
+      - "9093:9093"
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    mem_limit: 128m
     restart: unless-stopped
 
   grafana:
@@ -343,8 +424,8 @@ services:
     ports:
       - "3001:3000"
     environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: norse
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-norse}
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -367,6 +448,8 @@ services:
       OLLAMA_MODEL: "qwen2.5:14b"
       POLL_INTERVAL: "300"
       PORT: "8089"
+      # CORS: defaults to "*" (permissive). Lock to a single origin in prod.
+      ACCESS_CONTROL_ALLOW_ORIGIN: ${ACCESS_CONTROL_ALLOW_ORIGIN:-*}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

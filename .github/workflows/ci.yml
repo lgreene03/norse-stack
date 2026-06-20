@@ -49,6 +49,24 @@ jobs:
           pip install pyyaml
           python scripts/validate-monitoring.py
 
+  secret-scan:
+    # Secret scanning across the full repo. gitleaks fails the job on any
+    # hard-coded credential so a leaked token can never land on main. This
+    # mirrors the recommended pre-commit hook (see .pre-commit-config.yaml /
+    # docs/SECURITY.md) — CI is the backstop for contributors who skip hooks.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history so the scan covers every commit on the PR/branch, not
+          # just the tip.
+          fetch-depth: 0
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   services:
     runs-on: ubuntu-latest
     strategy:
@@ -89,6 +107,27 @@ jobs:
           if [ "${{ matrix.has_tests }}" = "true" ]; then
             pip install pytest pytest-cov
           fi
+
+      - name: Audit dependencies (pip-audit)
+        # sec-supplychain-1: scan each service's pinned requirements.txt for
+        # known-vulnerable releases (PyPI Advisory DB / OSV). Runs on every PR
+        # and on the nightly schedule. Non-blocking for now (continue-on-error)
+        # so a freshly-disclosed CVE in a transitive dep cannot wall off
+        # unrelated PRs; findings surface in the run summary and the weekly
+        # scheduled run is the gate for triage.
+        if: ${{ hashFiles(format('services/{0}/requirements.txt', matrix.service)) != '' }}
+        working-directory: services/${{ matrix.service }}
+        continue-on-error: true
+        run: |
+          python -m pip install pip-audit
+          pip-audit --requirement requirements.txt --progress-spinner=off \
+            | tee audit.txt
+          {
+            echo "### ${{ matrix.service }} pip-audit";
+            echo '```';
+            cat audit.txt;
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Lint (ruff)
         working-directory: services/${{ matrix.service }}
