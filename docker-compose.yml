@@ -203,8 +203,11 @@ services:
       # auth; the local-dev default keeps the fail-closed middleware active.
       HUGINN_API_TOKEN: ${HUGINN_API_TOKEN:-localdev-change-me}
     healthcheck:
-      # Alpine base ships busybox wget; /readyz is on SERVER_PORT (8081).
-      test: ["CMD-SHELL", "wget -q -O- http://localhost:8081/readyz || exit 1"]
+      # Container health = liveness (process up). Use /healthz, NOT /readyz:
+      # /readyz reflects consumer-loop progress (for alerting/k8s), and gating
+      # the container on it would flap if the feature stream briefly pauses.
+      # /healthz is on SERVER_PORT (8081); Alpine base ships busybox wget.
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8081/healthz || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 10
@@ -242,8 +245,11 @@ services:
       # auth; the local-dev default keeps the fail-closed middleware active.
       SLEIPNIR_ADMIN_TOKEN: ${SLEIPNIR_ADMIN_TOKEN:-localdev-change-me}
     healthcheck:
-      # Alpine base ships busybox wget; /readyz is on PORT (8080).
-      test: ["CMD-SHELL", "wget -q -O- http://localhost:8080/readyz || exit 1"]
+      # Container health = liveness (process up). Use /healthz, NOT /readyz:
+      # sleipnir's /readyz returns 200 only after the first intent is consumed,
+      # so an idle-but-healthy gateway would be marked unhealthy until it trades.
+      # /healthz is on PORT (8080); Alpine base ships busybox wget.
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8080/healthz || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 10
