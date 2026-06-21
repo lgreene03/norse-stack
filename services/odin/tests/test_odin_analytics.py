@@ -474,3 +474,146 @@ def test_add_fill_attributes_slippage_to_round_trip(tracker):
     # Round trips record the SELL-leg fee only (consistent with net_pnl =
     # pnl - fee in add_fill), so fee_drag here is the 0.1 sell fee.
     assert cost["fee_drag"] == pytest.approx(0.1)
+
+
+# ---------------------------------------------------------------------------
+# Signed-position model: shorts are first-class (norse signed-position)
+# ---------------------------------------------------------------------------
+
+def _eq_value(tracker):
+    """Latest equity-curve total value (signed market value + cash)."""
+    return tracker.equity_curve[-1]["value"]
+
+
+def test_long_only_unchanged_open_and_value(tracker):
+    # Regression guard: a long-only fill must produce exactly the prior
+    # accounting. BUY 1 @ 100 from 1000 cash -> qty +1, avg 100, cash 900.
+    tracker.add_fill({"instrument": "BTC", "side": "BUY", "quantity": 1,
+                      "fill_price": 100, "execution_id": "l1"})
+    pos = tracker.positions["BTC"]
+    assert pos["qty"] == pytest.approx(1.0)
+    assert pos["avg_cost"] == pytest.approx(100.0)
+    assert tracker.cash == pytest.approx(900.0)
+    # Realized-only basis (MARK_TO_MARKET default False): held at avg_cost, so
+    # total value == initial cash.
+    assert _eq_value(tracker) == pytest.approx(1000.0)
+
+
+def test_short_open_drives_qty_negative(tracker):
+    # SELL 1 @ 100 from FLAT must OPEN a short (qty -1), not silently no-op.
+    # Cash receives proceeds: 1000 -> 1100. avg_cost is the positive entry 100.
+    tracker.add_fill({"instrument": "BTC", "side": "SELL", "quantity": 1,
+                      "fill_price": 100, "execution_id": "s1"})
+    pos = tracker.positions["BTC"]
+    assert pos["qty"] == pytest.approx(-1.0)
+    assert pos["avg_cost"] == pytest.approx(100.0)
+    assert tracker.cash == pytest.approx(1100.0)
+    # Signed valuation, realized-only: total = cash + qty*avg = 1100 + (-1*100).
+    assert _eq_value(tracker) == pytest.approx(1000.0)
+
+
+def test_short_round_trip_cover_realizes_correctly(tracker):
+    # Short 1 @ 100, then BUY 1 @ 90 to cover. A short profits as price falls:
+    # realized = sign(-1)*(90-100)*1 = +10. Flat afterwards.
+    tracker.add_fill({"instrument": "BTC", "side": "SELL", "quantity": 1,
+                      "fill_price": 100, "execution_id": "s1"})
+    tracker.add_fill({"instrument": "BTC", "side": "BUY", "quantity": 1,
+                      "fill_price": 90, "execution_id": "b1"})
+    assert tracker.realized_pnl == pytest.approx(10.0)
+    pos = tracker.positions["BTC"]
+    assert pos["qty"] == pytest.approx(0.0)
+    assert pos["avg_cost"] == pytest.approx(0.0)
+    # Exactly one round trip recorded on the covering (closing) leg.
+    assert len(tracker.round_trips) == 1
+    assert tracker.round_trips[0]["pnl"] == pytest.approx(10.0)
+    # Flat: total value back to start + the +10 realized = 1010.
+    assert _eq_value(tracker) == pytest.approx(1010.0)
+
+
+def test_short_loss_when_price_rises(tracker):
+    # Short 1 @ 100, cover @ 110: a short LOSES as price rises => realized -10.
+    tracker.add_fill({"instrument": "BTC", "side": "SELL", "quantity": 1,
+                      "fill_price": 100, "execution_id": "s1"})
+    tracker.add_fill({"instrument": "BTC", "side": "BUY", "quantity": 1,
+                      "fill_price": 110, "execution_id": "b1"})
+    assert tracker.realized_pnl == pytest.approx(-10.0)
+    assert tracker.round_trips[0]["net_pnl"] == pytest.approx(-10.0)
+
+
+def test_add_to_short_weighted_average(tracker):
+    # Short 1 @ 100, then SELL 1 more @ 120 (adding in same direction). qty -2,
+    # avg_cost is the positive fee-exclusive weighted entry = (100+120)/2 = 110.
+    tracker.add_fill({"instrument": "BTC", "side": "SELL", "quantity": 1,
+                      "fill_price": 100, "execution_id": "s1"})
+    tracker.add_fill({"instrument": "BTC", "side": "SELL", "quantity": 1,
+                      "fill_price": 120, "execution_id": "s2"})
+    pos = tracker.positions["BTC"]
+    assert pos["qty"] == pytest.approx(-2.0)
+    assert pos["avg_cost"] == pytest.approx(110.0)
+    # No close happened, so no round trips yet.
+    assert len(tracker.round_trips) == 0
+
+
+def test_long_flip_through_zero_opens_short(tracker):
+    # Long 1 @ 100, then SELL 2 @ 110: closes the long (realized +10) and the
+    # remaining 1 opens a NEW short @ 110 (qty -1, avg_cost 110).
+    tracker.add_fill({"instrument": "BTC", "side": "BUY", "quantity": 1,
+                      "fill_price": 100, "execution_id": "b1"})
+    tracker.add_fill({"instrument": "BTC", "side": "SELL", "quantity": 2,
+                      "fill_price": 110, "execution_id": "s1"})
+    assert tracker.realized_pnl == pytest.approx(10.0)
+    pos = tracker.positions["BTC"]
+    assert pos["qty"] == pytest.approx(-1.0)
+    assert pos["avg_cost"] == pytest.approx(110.0)
+    # One round trip from the closed long leg (closed qty = 1).
+    assert len(tracker.round_trips) == 1
+    assert tracker.round_trips[0]["pnl"] == pytest.approx(10.0)
+
+
+def test_short_flip_through_zero_opens_long(tracker):
+    # Short 1 @ 100, then BUY 2 @ 90: covers the short (realized +10) and the
+    # remaining 1 opens a NEW long @ 90 (qty +1, avg_cost 90).
+    tracker.add_fill({"instrument": "BTC", "side": "SELL", "quantity": 1,
+                      "fill_price": 100, "execution_id": "s1"})
+    tracker.add_fill({"instrument": "BTC", "side": "BUY", "quantity": 2,
+                      "fill_price": 90, "execution_id": "b1"})
+    assert tracker.realized_pnl == pytest.approx(10.0)
+    pos = tracker.positions["BTC"]
+    assert pos["qty"] == pytest.approx(1.0)
+    assert pos["avg_cost"] == pytest.approx(90.0)
+    assert len(tracker.round_trips) == 1
+
+
+def test_signed_equity_contribution_short_mark_to_market(monkeypatch):
+    # A short's market value contributes NEGATIVELY and gains as price falls.
+    # Short 1 @ 100 from 1000, mark to 90 via a (same-direction) second add is
+    # not desired; instead enable MTM and drive the mark with a fresh tracker.
+    monkeypatch.setattr(odin, "MARK_TO_MARKET", True)
+    t = odin.PerformanceTracker(initial_cash=1000.0)
+    # Open short 1 @ 100 -> cash 1100, qty -1, last_price 100.
+    t.add_fill({"instrument": "BTC", "side": "SELL", "quantity": 1,
+                "fill_price": 100, "execution_id": "s1"})
+    # At mark 100 total = 1100 + (-1*100) = 1000.
+    assert t.equity_curve[-1]["value"] == pytest.approx(1000.0)
+    # Drive the mark DOWN by adding a tiny same-direction short at 90 so
+    # last_price=90; the existing -1 leg is now marked to 90 (a paper gain).
+    t.add_fill({"instrument": "BTC", "side": "SELL", "quantity": 1,
+                "fill_price": 90, "execution_id": "s2"})
+    # cash: 1100 + 90 = 1190; qty -2; mark 90 -> 1190 + (-2*90) = 1010.
+    # The short is in profit because price fell below the 95 avg entry.
+    assert t.last_price["BTC"] == pytest.approx(90.0)
+    assert t.positions["BTC"]["qty"] == pytest.approx(-2.0)
+    assert t.equity_curve[-1]["value"] == pytest.approx(1010.0)
+
+
+def test_short_unrealized_sign_via_mark(monkeypatch):
+    # Verify the unrealized contribution direction directly: short held, mark
+    # below avg => positive unrealized ((mark-avg)*qty, qty<0, mark<avg).
+    monkeypatch.setattr(odin, "MARK_TO_MARKET", True)
+    t = odin.PerformanceTracker(initial_cash=1000.0)
+    t.add_fill({"instrument": "BTC", "side": "SELL", "quantity": 1,
+                "fill_price": 100, "execution_id": "s1"})
+    pos = t.positions["BTC"]
+    mark = 90.0
+    unrealized = (mark - pos["avg_cost"]) * pos["qty"]
+    assert unrealized == pytest.approx(10.0)  # short profits as price falls

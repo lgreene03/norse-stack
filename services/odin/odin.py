@@ -291,57 +291,98 @@ class PerformanceTracker:
             self.last_price[instrument] = price
             pos = self.positions[instrument]
 
-            if side == "BUY":
-                total_cost = pos["avg_cost"] * pos["qty"] + price * qty
-                pos["qty"] += qty
-                pos["avg_cost"] = total_cost / pos["qty"] if pos["qty"] > 0 else 0
-                # Accumulate buy-leg slippage on the open position so it can be
-                # attributed to the round trip when the position is later closed.
+            # SIGNED-POSITION MODEL. qty>0 long, <0 short, 0 flat; avg_cost is
+            # the POSITIVE average entry price of the currently-open position.
+            # This is a strict generalization of the previous long-only path:
+            # a long-only fill sequence (never selling beyond inventory) follows
+            # exactly the same arithmetic it always did, so realized P&L, fees,
+            # slippage attribution and the equity curve are unchanged. Shorts are
+            # now first-class: a sell-beyond-inventory drives qty negative, a
+            # cover (buy against a short) realizes with the correct sign, and a
+            # fill that overshoots flat flips the position through zero.
+            signed = qty if side == "BUY" else -qty
+            cur_qty = pos["qty"]
+            # Cash: BUY pays price*qty + fee; SELL receives price*qty, minus fee.
+            # Identical to the previous explicit BUY/SELL cash lines.
+            self.cash += -signed * price - fee
+
+            self.open_trades.setdefault(instrument, []).append({
+                "side": side, "qty": qty, "price": price, "time": ts
+            })
+
+            same_dir = (cur_qty == 0) or (
+                (cur_qty > 0) == (signed > 0)
+            )
+
+            if same_dir:
+                # Opening or adding in the SAME direction: fee-inclusive
+                # weighted-average entry price. abs() makes this work for shorts
+                # exactly as for longs (avg_cost stays positive). For a flat/long
+                # BUY with the historically-typical fee folded into cost basis,
+                # this matches the prior long-add behaviour.
+                new_qty = cur_qty + signed
+                pos["avg_cost"] = (
+                    pos["avg_cost"] * abs(cur_qty) + price * qty
+                ) / abs(new_qty)
+                pos["qty"] = new_qty
+                # Accumulate this fill's slippage on the open position so it can
+                # be attributed to the round trip when the position is closed.
                 pos["slippage"] += slip_cost
-                self.cash -= (price * qty + fee)
-
-                self.open_trades.setdefault(instrument, []).append({
-                    "side": "BUY", "qty": qty, "price": price, "time": ts
+            else:
+                # Fill OPPOSES the position: closes up to abs(cur_qty), and may
+                # flip through zero into a new position on the far side.
+                pos_sign = 1.0 if cur_qty > 0 else -1.0
+                close_qty = min(abs(cur_qty), qty)
+                # Realized edge on the closed portion, fee-EXCLUSIVE (kept
+                # separate in total_fees, matching the existing convention so
+                # realized_pnl / net_trading_pnl / round_trip net_pnl are
+                # unchanged for longs). sign(pos)=+1 closing a long (profit when
+                # price>avg), -1 closing a short (profit when price<avg).
+                pnl = pos_sign * (price - pos["avg_cost"]) * close_qty
+                self.realized_pnl += pnl
+                net_pnl = pnl - fee
+                # Attribute the proportion of accumulated entry-leg slippage for
+                # the quantity being closed, plus this fill's own slippage.
+                entry_slip = (
+                    pos["slippage"] * (close_qty / abs(cur_qty))
+                    if cur_qty != 0 else 0.0
+                )
+                rt_slippage = entry_slip + slip_cost
+                pos["slippage"] -= entry_slip
+                self.round_trips.append({
+                    "instrument": instrument,
+                    "pnl": pnl,
+                    "fee": fee,
+                    "slippage": rt_slippage,
+                    "net_pnl": net_pnl,
+                    "time": ts,
                 })
+                self.instrument_returns[instrument].append(net_pnl)
 
-            elif side == "SELL":
-                if pos["qty"] > 0:
-                    closed_qty = min(qty, pos["qty"])
-                    pnl = (price - pos["avg_cost"]) * closed_qty
-                    self.realized_pnl += pnl
-                    net_pnl = pnl - fee
-                    # Attribute the proportion of accumulated buy-leg slippage
-                    # corresponding to the quantity being closed, plus this sell
-                    # fill's own slippage. gross_pnl is edge BEFORE any cost
-                    # (it already excludes fees, which are subtracted to net_pnl).
-                    buy_slip = pos["slippage"] * (closed_qty / pos["qty"])
-                    rt_slippage = buy_slip + slip_cost
-                    pos["slippage"] -= buy_slip
-                    self.round_trips.append({
-                        "instrument": instrument,
-                        "pnl": pnl,
-                        "fee": fee,
-                        "slippage": rt_slippage,
-                        "net_pnl": net_pnl,
-                        "time": ts,
-                    })
-                    self.instrument_returns[instrument].append(net_pnl)
-
-                pos["qty"] -= qty
-                if pos["qty"] <= 0.0001:
+                new_qty = cur_qty + signed
+                if abs(new_qty) < 1e-9:
+                    # Fully flat.
                     pos["qty"] = 0
                     pos["avg_cost"] = 0
                     pos["slippage"] = 0.0
-                self.cash += (price * qty - fee)
+                elif (cur_qty > 0) != (new_qty > 0):
+                    # Flipped through zero: the remainder opens a NEW position on
+                    # the opposite side at this fill's price.
+                    pos["qty"] = new_qty
+                    pos["avg_cost"] = price
+                    # Residual entry-leg slippage belonged to the now-closed
+                    # position; the new position starts with no carried slippage.
+                    pos["slippage"] = 0.0
+                else:
+                    # Partial close: position shrinks but keeps its sign and
+                    # avg_cost (the open entry basis is unchanged).
+                    pos["qty"] = new_qty
 
-                self.open_trades.setdefault(instrument, []).append({
-                    "side": "SELL", "qty": qty, "price": price, "time": ts
-                })
-
-            # Update equity curve. With MARK_TO_MARKET enabled, open positions
-            # are valued at the last seen trade price (best available proxy for
-            # market value); otherwise they are held at avg_cost and the curve
-            # is REALIZED-ONLY (open P&L not reflected).
+            # Update equity curve. Positions are valued SIGNED: a short qty<0
+            # contributes negatively (it is a liability). With MARK_TO_MARKET
+            # enabled, open positions are valued at the last seen trade price
+            # (best available proxy for market value); otherwise they are held at
+            # avg_cost and the curve is REALIZED-ONLY (open P&L not reflected).
             total_value = self.cash
             for inst, p in self.positions.items():
                 if MARK_TO_MARKET:
