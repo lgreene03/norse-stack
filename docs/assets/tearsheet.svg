@@ -1,0 +1,98 @@
+<svg viewBox="0 0 1100 760" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif,system-ui,sans-serif" role="img" aria-label="Norse Stack performance tearsheet (simulated backtest)">
+<rect width="1100" height="760" fill="#0d1117"/>
+<text x="28" y="34" fill="#e6edf3" font-size="22" font-weight="700" font-family="ui-sans-serif,system-ui,sans-serif">Norse Stack — Performance Tearsheet</text>
+<text x="28" y="55" fill="#58a6ff" font-size="12" font-family="ui-monospace,monospace">OBIThreshold(0.70) · BTC-USD · 1,440 1-min bars (~24h)</text>
+<rect x="700" y="16" width="372" height="46" rx="6" fill="rgba(210,153,34,0.12)" stroke="#d29922" stroke-width="1"/>
+<text x="712" y="35" fill="#d29922" font-size="11" font-weight="700" font-family="ui-monospace,monospace">SIMULATED · NOT A LIVE-TRADING RESULT</text>
+<text x="712" y="52" fill="#8b949e" font-size="9.5" font-family="ui-monospace,monospace">numbers verbatim from docs/RESULTS.md · short window</text>
+<rect x="28.0" y="78.0" width="720.0" height="250.0" rx="8" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+<text x="42.0" y="100.0" fill="#8b949e" font-size="12" font-weight="600" letter-spacing="0.06em" font-family="ui-monospace,Menlo,monospace">EQUITY CURVE  ·  $100K START  ·  SIMULATED 24H</text>
+<line x1="42.0" y1="116.0" x2="734.0" y2="116.0" stroke="#21262d" stroke-width="1"/>
+<text x="734.0" y="112.0" fill="#8b949e" font-size="10" text-anchor="end" font-family="ui-monospace,monospace">$100,013</text>
+<line x1="42.0" y1="206.0" x2="734.0" y2="206.0" stroke="#21262d" stroke-width="1"/>
+<text x="734.0" y="202.0" fill="#8b949e" font-size="10" text-anchor="end" font-family="ui-monospace,monospace">$99,955</text>
+<line x1="42.0" y1="296.0" x2="734.0" y2="296.0" stroke="#21262d" stroke-width="1"/>
+<text x="734.0" y="292.0" fill="#8b949e" font-size="10" text-anchor="end" font-family="ui-monospace,monospace">$99,898</text>
+<line x1="42.0" y1="136.8" x2="734.0" y2="136.8" stroke="#8b949e" stroke-width="1" stroke-dasharray="3 3"/>
+<polyline points="42.0,296.0 42.0,136.8 53.7,144.0 65.5,151.1 77.2,157.9 88.9,164.6 100.6,171.1 112.4,177.3 124.1,183.4 135.8,189.3 147.6,195.0 159.3,200.5 171.0,205.8 182.7,210.9 194.5,215.8 206.2,220.5 217.9,225.0 229.7,229.4 241.4,233.5 253.1,237.4 264.8,241.2 276.6,244.7 288.3,248.1 300.0,251.2 311.8,254.2 323.5,257.0 335.2,259.5 346.9,261.9 358.7,264.1 370.4,266.1 382.1,267.9 393.9,269.5 405.6,270.9 417.3,272.1 429.1,273.1 440.8,273.9 452.5,274.5 464.2,275.0 476.0,275.2 487.7,275.2 499.4,275.1 511.2,274.7 522.9,274.2 534.6,273.4 546.3,272.5 558.1,271.4 569.8,270.0 581.5,268.5 593.3,266.8 605.0,264.9 616.7,262.8 628.4,260.5 640.2,258.0 651.9,255.3 663.6,252.4 675.4,249.3 687.1,246.1 698.8,242.6 710.5,238.9 722.3,235.1 734.0,231.0 734.0,296.0" stroke="none" stroke-width="0" fill="rgba(88,166,255,0.14)" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="42.0,136.8 53.7,144.0 65.5,151.1 77.2,157.9 88.9,164.6 100.6,171.1 112.4,177.3 124.1,183.4 135.8,189.3 147.6,195.0 159.3,200.5 171.0,205.8 182.7,210.9 194.5,215.8 206.2,220.5 217.9,225.0 229.7,229.4 241.4,233.5 253.1,237.4 264.8,241.2 276.6,244.7 288.3,248.1 300.0,251.2 311.8,254.2 323.5,257.0 335.2,259.5 346.9,261.9 358.7,264.1 370.4,266.1 382.1,267.9 393.9,269.5 405.6,270.9 417.3,272.1 429.1,273.1 440.8,273.9 452.5,274.5 464.2,275.0 476.0,275.2 487.7,275.2 499.4,275.1 511.2,274.7 522.9,274.2 534.6,273.4 546.3,272.5 558.1,271.4 569.8,270.0 581.5,268.5 593.3,266.8 605.0,264.9 616.7,262.8 628.4,260.5 640.2,258.0 651.9,255.3 663.6,252.4 675.4,249.3 687.1,246.1 698.8,242.6 710.5,238.9 722.3,235.1 734.0,231.0" stroke="#58a6ff" stroke-width="2.0" fill="none" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="734.0" cy="231.0" r="3.5" fill="#f85149"/>
+<text x="42.0" y="314.0" fill="#8b949e" font-size="9.5" font-family="ui-monospace,monospace">interpolated between committed endpoints ($100,000 → $99,939.37); engine samples equity daily — see RESULTS.md</text>
+<rect x="768.0" y="78.0" width="304.0" height="444.0" rx="8" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+<text x="782.0" y="100.0" fill="#8b949e" font-size="12" font-weight="600" letter-spacing="0.06em" font-family="ui-monospace,Menlo,monospace">STATS  ·  OBITHRESHOLD(0.70)  ·  SIMULATED</text>
+<text x="782.0" y="122.0" fill="#e6edf3" font-size="11.5" font-family="ui-monospace,monospace">Sharpe</text>
+<text x="1058.0" y="122.0" fill="#8b949e" font-size="11.5" font-weight="700" text-anchor="end" font-family="ui-monospace,monospace">0.0000</text>
+<text x="782.0" y="134.0" fill="#6e7681" font-size="8.5" font-family="ui-monospace,monospace">24h window → degenerate</text>
+<line x1="782.0" y1="141.3" x2="1058.0" y2="141.3" stroke="#21262d" stroke-width="0.5"/>
+<text x="782.0" y="157.1" fill="#e6edf3" font-size="11.5" font-family="ui-monospace,monospace">Net Sharpe</text>
+<text x="1058.0" y="157.1" fill="#8b949e" font-size="11.5" font-weight="700" text-anchor="end" font-family="ui-monospace,monospace">0.0000</text>
+<text x="782.0" y="169.1" fill="#6e7681" font-size="8.5" font-family="ui-monospace,monospace">fee-adj, same window</text>
+<line x1="782.0" y1="176.4" x2="1058.0" y2="176.4" stroke="#21262d" stroke-width="0.5"/>
+<text x="782.0" y="192.2" fill="#e6edf3" font-size="11.5" font-family="ui-monospace,monospace">Max drawdown</text>
+<text x="1058.0" y="192.2" fill="#e6edf3" font-size="11.5" font-weight="700" text-anchor="end" font-family="ui-monospace,monospace">0.02%</text>
+<line x1="782.0" y1="211.5" x2="1058.0" y2="211.5" stroke="#21262d" stroke-width="0.5"/>
+<text x="782.0" y="227.3" fill="#e6edf3" font-size="11.5" font-family="ui-monospace,monospace">Hit rate</text>
+<text x="1058.0" y="227.3" fill="#e6edf3" font-size="11.5" font-weight="700" text-anchor="end" font-family="ui-monospace,monospace">49.5%</text>
+<line x1="782.0" y1="246.6" x2="1058.0" y2="246.6" stroke="#21262d" stroke-width="0.5"/>
+<text x="782.0" y="262.4" fill="#e6edf3" font-size="11.5" font-family="ui-monospace,monospace">Turnover</text>
+<text x="1058.0" y="262.4" fill="#d29922" font-size="11.5" font-weight="700" text-anchor="end" font-family="ui-monospace,monospace">21.31x</text>
+<text x="782.0" y="274.4" fill="#6e7681" font-size="8.5" font-family="ui-monospace,monospace">over-trades</text>
+<line x1="782.0" y1="281.7" x2="1058.0" y2="281.7" stroke="#21262d" stroke-width="0.5"/>
+<text x="782.0" y="297.5" fill="#e6edf3" font-size="11.5" font-family="ui-monospace,monospace">Gross / realized PnL</text>
+<text x="1058.0" y="297.5" fill="#f85149" font-size="11.5" font-weight="700" text-anchor="end" font-family="ui-monospace,monospace">-59.04</text>
+<line x1="782.0" y1="316.8" x2="1058.0" y2="316.8" stroke="#21262d" stroke-width="0.5"/>
+<text x="782.0" y="332.5" fill="#e6edf3" font-size="11.5" font-family="ui-monospace,monospace">Net PnL (after fees)</text>
+<text x="1058.0" y="332.5" fill="#d29922" font-size="11.5" font-weight="700" text-anchor="end" font-family="ui-monospace,monospace">≈ breakeven</text>
+<text x="782.0" y="344.5" fill="#6e7681" font-size="8.5" font-family="ui-monospace,monospace">fee-dominated</text>
+<line x1="782.0" y1="351.8" x2="1058.0" y2="351.8" stroke="#21262d" stroke-width="0.5"/>
+<text x="782.0" y="367.6" fill="#e6edf3" font-size="11.5" font-family="ui-monospace,monospace">Strategy return</text>
+<text x="1058.0" y="367.6" fill="#f85149" font-size="11.5" font-weight="700" text-anchor="end" font-family="ui-monospace,monospace">-0.06%</text>
+<line x1="782.0" y1="386.9" x2="1058.0" y2="386.9" stroke="#21262d" stroke-width="0.5"/>
+<text x="782.0" y="402.7" fill="#e6edf3" font-size="11.5" font-family="ui-monospace,monospace">Buy-hold return</text>
+<text x="1058.0" y="402.7" fill="#f85149" font-size="11.5" font-weight="700" text-anchor="end" font-family="ui-monospace,monospace">-0.57%</text>
+<line x1="782.0" y1="422.0" x2="1058.0" y2="422.0" stroke="#21262d" stroke-width="0.5"/>
+<text x="782.0" y="437.8" fill="#e6edf3" font-size="11.5" font-family="ui-monospace,monospace">Excess vs buy-hold</text>
+<text x="1058.0" y="437.8" fill="#3fb950" font-size="11.5" font-weight="700" text-anchor="end" font-family="ui-monospace,monospace">+0.51%</text>
+<text x="782.0" y="449.8" fill="#6e7681" font-size="8.5" font-family="ui-monospace,monospace">mostly not-long a fall</text>
+<line x1="782.0" y1="457.1" x2="1058.0" y2="457.1" stroke="#21262d" stroke-width="0.5"/>
+<text x="782.0" y="472.9" fill="#e6edf3" font-size="11.5" font-family="ui-monospace,monospace">Fills</text>
+<text x="1058.0" y="472.9" fill="#e6edf3" font-size="11.5" font-weight="700" text-anchor="end" font-family="ui-monospace,monospace">235</text>
+<line x1="782.0" y1="492.2" x2="1058.0" y2="492.2" stroke="#21262d" stroke-width="0.5"/>
+<rect x="28.0" y="340.0" width="720.0" height="120.0" rx="8" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+<text x="42.0" y="362.0" fill="#8b949e" font-size="12" font-weight="600" letter-spacing="0.06em" font-family="ui-monospace,Menlo,monospace">DRAWDOWN (UNDERWATER)  ·  MAXDD 0.02%</text>
+<line x1="42.0" y1="378.0" x2="734.0" y2="378.0" stroke="#21262d" stroke-width="1"/>
+<polyline points="42.0,378.0 42.0,378.0 53.7,381.4 65.5,384.6 77.2,387.8 88.9,390.9 100.6,393.9 112.4,396.8 124.1,399.6 135.8,402.3 147.6,404.9 159.3,407.5 171.0,409.9 182.7,412.3 194.5,414.5 206.2,416.7 217.9,418.8 229.7,420.8 241.4,422.7 253.1,424.5 264.8,426.3 276.6,427.9 288.3,429.4 300.0,430.9 311.8,432.3 323.5,433.6 335.2,434.7 346.9,435.8 358.7,436.9 370.4,437.8 382.1,438.6 393.9,439.3 405.6,440.0 417.3,440.5 429.1,441.0 440.8,441.4 452.5,441.7 464.2,441.9 476.0,442.0 487.7,442.0 499.4,441.9 511.2,441.8 522.9,441.5 534.6,441.2 546.3,440.7 558.1,440.2 569.8,439.6 581.5,438.9 593.3,438.1 605.0,437.2 616.7,436.2 628.4,435.2 640.2,434.0 651.9,432.8 663.6,431.5 675.4,430.0 687.1,428.5 698.8,426.9 710.5,425.2 722.3,423.4 734.0,421.6 734.0,378.0" stroke="none" stroke-width="0" fill="rgba(248,81,73,0.16)" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="42.0,378.0 53.7,381.4 65.5,384.6 77.2,387.8 88.9,390.9 100.6,393.9 112.4,396.8 124.1,399.6 135.8,402.3 147.6,404.9 159.3,407.5 171.0,409.9 182.7,412.3 194.5,414.5 206.2,416.7 217.9,418.8 229.7,420.8 241.4,422.7 253.1,424.5 264.8,426.3 276.6,427.9 288.3,429.4 300.0,430.9 311.8,432.3 323.5,433.6 335.2,434.7 346.9,435.8 358.7,436.9 370.4,437.8 382.1,438.6 393.9,439.3 405.6,440.0 417.3,440.5 429.1,441.0 440.8,441.4 452.5,441.7 464.2,441.9 476.0,442.0 487.7,442.0 499.4,441.9 511.2,441.8 522.9,441.5 534.6,441.2 546.3,440.7 558.1,440.2 569.8,439.6 581.5,438.9 593.3,438.1 605.0,437.2 616.7,436.2 628.4,435.2 640.2,434.0 651.9,432.8 663.6,431.5 675.4,430.0 687.1,428.5 698.8,426.9 710.5,425.2 722.3,423.4 734.0,421.6" stroke="#f85149" stroke-width="1.6" fill="none" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="734.0" y="440.0" fill="#8b949e" font-size="10" text-anchor="end" font-family="ui-monospace,monospace">-0.09% max</text>
+<rect x="28.0" y="478.0" width="350.0" height="230.0" rx="8" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+<text x="42.0" y="500.0" fill="#8b949e" font-size="12" font-weight="600" letter-spacing="0.06em" font-family="ui-monospace,Menlo,monospace">CALIBRATE SWEEP · REALIZED PNL BY THRESHOLD</text>
+<rect x="59.7" y="518.0" width="45.1" height="166.0" rx="2" fill="#f85149" opacity="0.55"/>
+<text x="82.2" y="697.0" fill="#8b949e" font-size="10" text-anchor="middle" font-family="ui-monospace,monospace">0.5</text>
+<text x="82.2" y="514.0" fill="#e6edf3" font-size="9.5" text-anchor="middle" font-family="ui-monospace,monospace">-235</text>
+<rect x="140.2" y="518.0" width="45.1" height="111.2" rx="2" fill="#f85149" opacity="0.66"/>
+<text x="162.8" y="642.2" fill="#8b949e" font-size="10" text-anchor="middle" font-family="ui-monospace,monospace">0.6</text>
+<text x="162.8" y="514.0" fill="#e6edf3" font-size="9.5" text-anchor="middle" font-family="ui-monospace,monospace">-158</text>
+<rect x="220.7" y="518.0" width="45.1" height="41.6" rx="2" fill="#f85149" opacity="0.77"/>
+<text x="243.2" y="572.6" fill="#8b949e" font-size="10" text-anchor="middle" font-family="ui-monospace,monospace">0.7</text>
+<text x="243.2" y="514.0" fill="#e6edf3" font-size="9.5" text-anchor="middle" font-family="ui-monospace,monospace">-59</text>
+<rect x="301.2" y="518.0" width="45.1" height="22.2" rx="2" fill="#f85149" opacity="0.88"/>
+<text x="323.8" y="553.2" fill="#8b949e" font-size="10" text-anchor="middle" font-family="ui-monospace,monospace">0.8</text>
+<text x="323.8" y="514.0" fill="#e6edf3" font-size="9.5" text-anchor="middle" font-family="ui-monospace,monospace">-31</text>
+<text x="42.0" y="710.0" fill="#d29922" font-size="9.5" font-family="ui-monospace,monospace">PnL less negative as trades fall → cost-dominated, not alpha</text>
+<rect x="398.0" y="478.0" width="350.0" height="230.0" rx="8" fill="#161b22" stroke="#21262d" stroke-width="1"/>
+<text x="412.0" y="500.0" fill="#8b949e" font-size="12" font-weight="600" letter-spacing="0.06em" font-family="ui-monospace,Menlo,monospace">WALK-FORWARD OOS PNL · 0/4 FOLDS PROFITABLE</text>
+<rect x="429.7" y="518.0" width="45.1" height="166.0" rx="2" fill="#f85149"/>
+<text x="452.2" y="697.0" fill="#8b949e" font-size="10" text-anchor="middle" font-family="ui-monospace,monospace">F1</text>
+<text x="452.2" y="514.0" fill="#e6edf3" font-size="9.5" text-anchor="middle" font-family="ui-monospace,monospace">-58</text>
+<rect x="510.2" y="518.0" width="45.1" height="0.1" rx="2" fill="#f85149"/>
+<text x="532.8" y="531.1" fill="#8b949e" font-size="10" text-anchor="middle" font-family="ui-monospace,monospace">F2</text>
+<text x="532.8" y="514.0" fill="#e6edf3" font-size="9.5" text-anchor="middle" font-family="ui-monospace,monospace">-0</text>
+<rect x="590.7" y="518.0" width="45.1" height="59.8" rx="2" fill="#f85149"/>
+<text x="613.2" y="590.8" fill="#8b949e" font-size="10" text-anchor="middle" font-family="ui-monospace,monospace">F3</text>
+<text x="613.2" y="514.0" fill="#e6edf3" font-size="9.5" text-anchor="middle" font-family="ui-monospace,monospace">-21</text>
+<rect x="671.2" y="518.0" width="45.1" height="125.2" rx="2" fill="#f85149"/>
+<text x="693.8" y="656.2" fill="#8b949e" font-size="10" text-anchor="middle" font-family="ui-monospace,monospace">F4</text>
+<text x="693.8" y="514.0" fill="#e6edf3" font-size="9.5" text-anchor="middle" font-family="ui-monospace,monospace">-44</text>
+<text x="412.0" y="710.0" fill="#d29922" font-size="9.5" font-family="ui-monospace,monospace">total OOS -122.3 · the result with methodological weight</text>
+<text x="28" y="748" fill="#8b949e" font-size="10" font-family="ui-monospace,monospace">Generated by scripts/gen-tearsheet.py from docs/RESULTS.md — no chart libraries, hand-written SVG. Walk-forward (0/4 OOS profitable) is the honest verdict.</text>
+</svg>
