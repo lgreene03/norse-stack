@@ -14,6 +14,7 @@ Norse Stack is a 15-container distributed crypto trading system that ingests liv
 
 **Real gross edge, fee-dominated: the strategy has a genuine per-trade edge that trading costs eat alive, and the net-of-cost gate is what flips it net-positive on the fixture. Signed-position shorting is now enabled, so the book is no longer long-only.** These are *simulated* results on a short ~24h window — not a live-trading claim.
 
+- **Edge verdict (read this first):** [`docs/EDGE_VERDICT.md`](docs/EDGE_VERDICT.md) — run to a conclusion with the project's own tooling: the OBI signal has **no out-of-sample edge** (0/4 walk-forward folds profitable, **PBO = 1.00**). The apparent in-sample edge is overfitting; the cost gate is damage control, not alpha. Reporting a negative result honestly is the point.
 - **Full results & caveats:** [`docs/RESULTS.md`](docs/RESULTS.md) — unedited backtester/calibrator/walk-forward output, the buy-and-hold benchmark, and an explicit honest-caveats block (walk-forward is **0/4 OOS folds profitable** — the result with methodological weight).
 - **Performance tearsheet:** [`docs/assets/tearsheet.svg`](docs/assets/tearsheet.svg) — equity curve, underwater drawdown, calibrate threshold sweep, and walk-forward OOS PnL, every figure verbatim from `docs/RESULTS.md`.
 - **Cost-sweep frontier:** the [parameter-sweep table in `docs/RESULTS.md`](docs/RESULTS.md#parameter-sweep-calibrator) (rendered as the threshold-sweep panel of the tearsheet) shows PnL getting *less* negative as the strategy trades less — the fingerprint of cost dominance.

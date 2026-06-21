@@ -24,6 +24,7 @@ import signal
 import sys
 import threading
 import time
+import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -207,9 +208,12 @@ class PerformanceTracker:
         # the closest available proxy for current market value.
         self.last_price = {}
 
-        # Dedup: the fills consumer reads from the earliest offset, so on a
-        # restart it would replay and double-count every fill. We dedup on the
-        # execution_id with a bounded seen-set so memory stays flat.
+        # Dedup: Odin is a full-topic, dedup-based projection (see
+        # _make_fills_consumer) — the fills consumer replays the ENTIRE topic
+        # from the beginning on every start, so without dedup a restart would
+        # double-count every fill. We dedup on the execution_id (composite-key
+        # fallback) with a bounded seen-set so memory stays flat and the replay
+        # is idempotent / restart-safe.
         self._seen_execution_ids = deque(maxlen=50000)
         self._seen_execution_set = set()
 
@@ -1320,6 +1324,48 @@ def _make_dlq_producer():
         return None
 
 
+def _make_fills_consumer(consumer_factory=KafkaConsumer):
+    """Build the fills consumer as a FULL-TOPIC, dedup-based projection.
+
+    Odin is a *projection* of huginn's executions.fills.v1 topic, not a
+    cursor over it. huginn (the execution gateway) is the book of record;
+    Odin's all-time analytics must equal a fold over the entire topic and be
+    restart-independent.
+
+    Previously Odin used a committed-offset consumer group
+    (group_id="odin-analytics"). After a restart it resumed from its last
+    committed offset, so any fills produced before the very first run — or any
+    offset already committed before a crash — were never (re)read, and Odin's
+    all-time totals drifted below huginn's. Replaying from earliest was unsafe
+    with a normal projection, but Odin already dedups every fill on
+    execution_id (with a composite-key fallback) in PerformanceTracker, so
+    re-reading the whole topic on every start is idempotent.
+
+    To make each start read the entire topic from the beginning,
+    independent of any previously committed offset, we:
+      * use a fresh, unique group_id per process (so Kafka has NO committed
+        offset for this group and falls back to auto_offset_reset),
+      * set auto_offset_reset="earliest" (start at the first record), and
+      * disable auto-commit (enable_auto_commit=False) so we never persist an
+        offset that a future restart could resume from.
+
+    A unique group id (rather than seek_to_beginning) avoids any
+    assignment-callback/timing subtlety: there is simply no offset to resume
+    from, every process boots at offset 0. Dedup makes the replay complete and
+    side-effect-free, so analytics match the book of record after any restart.
+    """
+    return consumer_factory(
+        FILLS_TOPIC,
+        bootstrap_servers=KAFKA_BROKERS,
+        # Unique per-process group => no committed offset to resume from.
+        group_id="odin-analytics-{}".format(uuid.uuid4().hex),
+        auto_offset_reset="earliest",
+        # Never persist an offset; full-topic replay + dedup is restart-safe.
+        enable_auto_commit=False,
+        consumer_timeout_ms=1000,
+    )
+
+
 def consume_fills():
     for attempt in range(30):
         try:
@@ -1327,13 +1373,12 @@ def consume_fills():
             # single poison record raises inside our per-message try/except
             # (incrementing a counter + DLQ) instead of bubbling out of poll()
             # and stalling/dropping the rest of the batch.
-            consumer = KafkaConsumer(
-                FILLS_TOPIC,
-                bootstrap_servers=KAFKA_BROKERS,
-                group_id="odin-analytics",
-                auto_offset_reset="earliest",
-                consumer_timeout_ms=1000,
-            )
+            #
+            # The consumer reads the FULL topic from the beginning on every
+            # start (see _make_fills_consumer): Odin is a dedup-based projection
+            # of huginn's fills, not an offset cursor, so its all-time analytics
+            # are restart-independent and match the book of record.
+            consumer = _make_fills_consumer()
             log.info("Connected to Kafka, consuming %s", FILLS_TOPIC)
             break
         except KafkaConnectionError:

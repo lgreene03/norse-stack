@@ -52,6 +52,66 @@ def test_breakeven_trades_excluded_from_buckets():
     assert len(losses) == 1  # the two break-even (==0) trades are excluded
 
 
+# ---------------------------------------------------------------------------
+# Fills consumer is a full-topic, dedup-based, restart-independent projection.
+#
+# huginn is the book of record; Odin must read the ENTIRE fills topic from the
+# beginning on every start (no committed-offset resume), relying on add_fill's
+# execution_id dedup to make the replay idempotent. These tests pin that
+# config so the drift fix can't regress.
+# ---------------------------------------------------------------------------
+
+def _capture_consumer_kwargs():
+    captured = {}
+
+    def fake_factory(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return object()  # stand-in consumer; not used by the test
+
+    odin._make_fills_consumer(consumer_factory=fake_factory)
+    return captured
+
+
+def test_fills_consumer_reads_from_earliest():
+    captured = _capture_consumer_kwargs()
+    assert captured["kwargs"]["auto_offset_reset"] == "earliest"
+    # Topic is subscribed positionally.
+    assert odin.FILLS_TOPIC in captured["args"]
+
+
+def test_fills_consumer_does_not_commit_offsets():
+    # Auto-commit OFF => no persisted offset for a future restart to resume
+    # from, so every start replays the full topic.
+    captured = _capture_consumer_kwargs()
+    assert captured["kwargs"]["enable_auto_commit"] is False
+
+
+def test_fills_consumer_group_id_is_unique_per_process():
+    # A fresh, unique group id per process means Kafka has no committed offset
+    # for the group and falls back to auto_offset_reset=earliest every boot.
+    first = _capture_consumer_kwargs()["kwargs"]["group_id"]
+    second = _capture_consumer_kwargs()["kwargs"]["group_id"]
+    assert first != second
+    assert first.startswith("odin-analytics-")
+    assert second.startswith("odin-analytics-")
+
+
+def test_replay_is_restart_safe_via_dedup(tracker):
+    # Simulate two process lifetimes both replaying the same fill from offset 0
+    # (full-topic projection). Dedup on execution_id must keep all-time totals
+    # restart-independent — i.e. the second replay must NOT double-count.
+    fill = {
+        "execution_id": "exec-1", "instrument": "BTC-USDT", "side": "BUY",
+        "quantity": 1.0, "fill_price": 100.0, "transaction_cost": 0.0,
+        "timestamp": "2026-06-20T00:00:00+00:00",
+    }
+    tracker.add_fill(dict(fill))  # first run
+    tracker.add_fill(dict(fill))  # restart replays from earliest
+    assert odin.counters._counts.get("fills_processed_total", 0) == 1
+    assert odin.counters._counts.get("fills_duplicate_total", 0) == 1
+
+
 def test_breakeven_not_counted_as_loss_in_profit_factor():
     # Old code bucketed net_pnl<=0 as losses, so break-even trades inflated
     # gross_loss and understated profit factor. With strict bucketing a
