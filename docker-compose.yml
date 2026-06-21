@@ -152,6 +152,9 @@ services:
       MUNINN_INGESTION_BINANCE_ENABLED: "true"
       MUNINN_INGESTION_COINBASE_ENABLED: "false"
       OTEL_EXPORTER_OTLP_ENDPOINT: tempo:4317
+      # Tempo's OTLP gRPC port is plaintext; without this the exporter attempts
+      # TLS and spams "first record does not look like a TLS handshake".
+      OTEL_EXPORTER_OTLP_INSECURE: "true"
     healthcheck:
       # Temurin JRE base ships bash but no curl/wget; probe the actuator port
       # over bash's /dev/tcp so the check needs no extra packages.
@@ -210,6 +213,9 @@ services:
       SERVER_PORT: "8081"
       GRPC_PORT: "50051"
       OTEL_EXPORTER_OTLP_ENDPOINT: tempo:4317
+      # Tempo's OTLP gRPC port is plaintext; without this the exporter attempts
+      # TLS and spams "first record does not look like a TLS handshake".
+      OTEL_EXPORTER_OTLP_INSECURE: "true"
       # Control-plane bearer token gating mutating endpoints. Empty disables
       # auth; the local-dev default keeps the fail-closed middleware active.
       HUGINN_API_TOKEN: ${HUGINN_API_TOKEN:-localdev-change-me}
@@ -252,6 +258,9 @@ services:
       PORT: "8080"
       DB_PATH: /app/data/sleipnir.db
       OTEL_EXPORTER_OTLP_ENDPOINT: tempo:4317
+      # Tempo's OTLP gRPC port is plaintext; without this the exporter attempts
+      # TLS and spams "first record does not look like a TLS handshake".
+      OTEL_EXPORTER_OTLP_INSECURE: "true"
       # Control-plane admin token gating mutating endpoints. Empty disables
       # auth; the local-dev default keeps the fail-closed middleware active.
       SLEIPNIR_ADMIN_TOKEN: ${SLEIPNIR_ADMIN_TOKEN:-localdev-change-me}
