@@ -187,7 +187,12 @@ services:
       KAFKA_TOPICS: features.obi.v1
       KAFKA_GROUP_ID: huginn-paper-trader
       STRATEGY_NAME: obi
-      STRATEGY_THRESHOLD: "0.95"
+      # 0.7 (not 0.95): the cost gate needs signal-strength gradient above the
+      # threshold to estimate edge. At 0.95 every signal barely clears the line,
+      # so |obi-threshold| is tiny, expected edge < round-trip cost, and the gate
+      # suppresses 100% of trades. 0.7 is the config the gate was validated on
+      # (-59 -> +1 net). The gate (COST_HURDLE_K below) provides the selectivity.
+      STRATEGY_THRESHOLD: "0.7"
       STRATEGY_ORDER_SIZE: "0.001"
       # Cost-aware trading: only take an entry whose expected edge exceeds
       # COST_HURDLE_K x round-trip cost. On the 24h fixture k=1 flipped realized
