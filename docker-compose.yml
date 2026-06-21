@@ -189,6 +189,12 @@ services:
       STRATEGY_NAME: obi
       STRATEGY_THRESHOLD: "0.95"
       STRATEGY_ORDER_SIZE: "0.001"
+      # Cost-aware trading: only take an entry whose expected edge exceeds
+      # COST_HURDLE_K x round-trip cost. On the 24h fixture k=1 flipped realized
+      # PnL from -59 (235 fills) to +1 (32 fills) by cutting fee-bleeding
+      # marginal trades. 0 disables the gate.
+      COST_HURDLE_K: "1.0"
+      OBI_EDGE_BPS_PER_UNIT: "60"
       LIVE_EXECUTION: "true"
       KAFKA_INTENTS_TOPIC: executions.intents.v1
       KAFKA_FILLS_TOPIC: executions.fills.v1
