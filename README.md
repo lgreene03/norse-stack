@@ -12,6 +12,13 @@ Norse Stack is a 15-container distributed crypto trading system that ingests liv
 
 > **Backtest numbers, with the honesty attached:** see **[docs/RESULTS.md](docs/RESULTS.md)** for actual backtester output (per-strategy Sharpe/MDD/hit-rate, buy-and-hold benchmark, walk-forward) plus an explicit caveat block. Short answer up front: a single short live run with a handful of fills *cannot* produce a meaningful Sharpe, and the page explains exactly why.
 
+### Engineering case studies
+
+Two short, specific write-ups of senior-level findings on this stack — real numbers, real file references:
+
+- **[Fee dominance: a real gross edge that fees eat alive](docs/case-studies/fee-dominance.md)** — the OBI strategy wins ~70% of round trips with a 5.85 profit factor yet loses money net, because it trades ~21x turnover and the cost bleed exceeds the edge. How it was caught (Odin `net_trading_pnl` vs realized, and the calibrate grid showing PnL get *less* negative as the threshold rises) and the fix direction (net-of-cost gate, maker execution).
+- **[The equity-accounting bug hunt](docs/case-studies/equity-accounting-bug.md)** — two contradictory figures (−10.8% final value vs +4.48% return) traced to two real bugs in `Portfolio.Snapshot` and `StrategyTotalReturn`, a unit test that had encoded the wrong value, and the regression tests added.
+
 ### Why this isn't a toy / what's novel
 
 - **Deterministic replay parity.** Muninn's feature engine produces byte-identical output from the same input events, so a backtest and a live run share one computation path — enforced by [`huginn/internal/backtest/parity_test.go`](https://github.com/lgreene03/huginn/blob/main/internal/backtest/parity_test.go) and Muninn's [ADR-0002 event-id determinism](https://github.com/lgreene03/muninn/blob/main/docs/adr/0002-event-id-determinism.md).

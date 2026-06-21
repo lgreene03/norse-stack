@@ -341,3 +341,136 @@ def test_liveness_stale_beat_is_degraded(monkeypatch):
     monkeypatch.setattr(odin, "HEALTH_MAX_STALENESS_SECS", -1.0)
     ok, age = lv.status()
     assert ok is False
+
+
+# ---------------------------------------------------------------------------
+# Break-even-edge & cost-attribution analytics (quant-alpha-3)
+# ---------------------------------------------------------------------------
+
+def _crt(pnl, fee=0.0, slippage=0.0, instrument="BTC-USDT",
+         ts="2026-06-20T00:00:00+00:00"):
+    """A round-trip carrying gross edge (pnl), fee and slippage costs.
+
+    net_pnl = pnl - fee, matching add_fill (slippage is informational drag
+    decomposed for attribution, not re-subtracted from net)."""
+    return {"instrument": instrument, "pnl": pnl, "fee": fee,
+            "slippage": slippage, "net_pnl": pnl - fee, "time": ts}
+
+
+def test_break_even_winrate_math(tracker):
+    # avg_win = 10, avg_loss = 10  ->  break-even win rate = 10/(10+10) = 0.5
+    tracker.round_trips.append(_crt(10.0))
+    tracker.round_trips.append(_crt(-10.0))
+    cost = tracker.compute_cost_attribution()
+    assert cost["break_even_winrate"] == pytest.approx(0.5)
+
+
+def test_break_even_winrate_asymmetric_payoff(tracker):
+    # avg_win = 30, avg_loss = 10 -> break-even = 10/(30+10) = 0.25: with a
+    # 3:1 payoff you only need to win a quarter of the time to break even.
+    tracker.round_trips.append(_crt(30.0))
+    tracker.round_trips.append(_crt(-10.0))
+    cost = tracker.compute_cost_attribution()
+    assert cost["break_even_winrate"] == pytest.approx(0.25)
+
+
+def test_gross_positive_net_negative_flag_live_like(tracker):
+    # The documented OBI pathology: a real gross edge (sum of pnl > 0) that
+    # goes NET NEGATIVE once fees are charged. Mirrors the live numbers
+    # (gross ~ +4.80, net ~ -14.28 over a heavy fee load).
+    # 4 winners +3 gross each (+12), 1 loser -7.2 gross => gross +4.8.
+    # Fees of ~3.82 per trip across 5 trips (~19.08 total) push net negative.
+    for _ in range(4):
+        tracker.round_trips.append(_crt(3.0, fee=3.816))
+    tracker.round_trips.append(_crt(-7.2, fee=3.816))
+    cost = tracker.compute_cost_attribution()
+    assert cost["gross_pnl"] == pytest.approx(4.8, abs=1e-6)
+    assert cost["net_pnl"] < 0
+    assert cost["gross_positive_net_negative"] is True
+
+
+def test_gross_positive_net_positive_flag_false(tracker):
+    # Same gross edge but negligible fees -> stays net positive, flag False.
+    for _ in range(4):
+        tracker.round_trips.append(_crt(3.0, fee=0.01))
+    tracker.round_trips.append(_crt(-7.2, fee=0.01))
+    cost = tracker.compute_cost_attribution()
+    assert cost["gross_pnl"] == pytest.approx(4.8, abs=1e-6)
+    assert cost["net_pnl"] > 0
+    assert cost["gross_positive_net_negative"] is False
+
+
+def test_cost_efficiency_ratio(tracker):
+    # gross_pnl = 10, total_costs = fees(4) + slippage(1) = 5 -> efficiency 2.0
+    tracker.round_trips.append(_crt(10.0, fee=4.0, slippage=1.0))
+    cost = tracker.compute_cost_attribution()
+    assert cost["total_costs"] == pytest.approx(5.0)
+    assert cost["cost_efficiency"] == pytest.approx(2.0)
+
+
+def test_cost_efficiency_below_one_when_costs_dominate(tracker):
+    # gross edge 4.8 but costs 19.08 -> efficiency < 1 (costs eat the edge).
+    for _ in range(4):
+        tracker.round_trips.append(_crt(3.0, fee=3.816))
+    tracker.round_trips.append(_crt(-7.2, fee=3.816))
+    cost = tracker.compute_cost_attribution()
+    assert cost["cost_efficiency"] < 1.0
+
+
+def test_fee_adjusted_profit_factor_collapses(tracker):
+    # Gross PF looks strong, but charging total costs onto the loss side
+    # collapses it. gross win edge = 12, gross loss edge = 7.2,
+    # fee-adj denom = 7.2 + 19.08 = 26.28 -> PF ~ 0.456 (< 1).
+    for _ in range(4):
+        tracker.round_trips.append(_crt(3.0, fee=3.816))
+    tracker.round_trips.append(_crt(-7.2, fee=3.816))
+    cost = tracker.compute_cost_attribution()
+    assert cost["fee_adjusted_profit_factor"] is not None
+    assert cost["fee_adjusted_profit_factor"] < 1.0
+
+
+def test_empty_cost_attribution_shape():
+    empty = odin.PerformanceTracker._empty_cost_attribution()
+    for key in ("gross_pnl", "net_pnl", "fee_drag", "slippage_drag",
+                "total_costs", "break_even_winrate", "break_even_edge_bps",
+                "average_edge_per_trade_bps", "round_trip_cost_bps",
+                "fee_adjusted_profit_factor", "cost_efficiency",
+                "gross_positive_net_negative"):
+        assert key in empty
+    assert empty["gross_positive_net_negative"] is False
+
+
+def test_get_analytics_exposes_cost_block(tracker):
+    tracker.round_trips.append(_crt(10.0, fee=2.0, slippage=0.5))
+    tracker.fills.append({"instrument": "BTC-USDT"})
+    out = tracker.get_analytics()
+    assert "cost" in out
+    assert out["cost"]["fee_drag"] == pytest.approx(2.0)
+    assert out["cost"]["slippage_drag"] == pytest.approx(0.5)
+
+
+def test_empty_analytics_has_cost_block(tracker):
+    out = tracker._empty_analytics()
+    assert "cost" in out
+    assert out["cost"]["gross_positive_net_negative"] is False
+
+
+def test_add_fill_attributes_slippage_to_round_trip(tracker):
+    # Drive a real round trip through add_fill with slippage_bps on both legs.
+    # BUY 1 @ 100 with 50 bps slippage -> 0.50 buy-leg slippage.
+    # SELL 1 @ 110 with 50 bps slippage -> 0.55 sell-leg slippage.
+    tracker.add_fill({"instrument": "BTC-USDT", "side": "BUY", "quantity": 1,
+                      "fill_price": 100, "transaction_cost": 0.1,
+                      "slippage_bps": 50, "execution_id": "b1"})
+    tracker.add_fill({"instrument": "BTC-USDT", "side": "SELL", "quantity": 1,
+                      "fill_price": 110, "transaction_cost": 0.1,
+                      "slippage_bps": 50, "execution_id": "s1"})
+    assert len(tracker.round_trips) == 1
+    rt = tracker.round_trips[0]
+    # buy slippage 0.5 + sell slippage 0.55 = 1.05
+    assert rt["slippage"] == pytest.approx(1.05)
+    cost = tracker.compute_cost_attribution()
+    assert cost["slippage_drag"] == pytest.approx(1.05)
+    # Round trips record the SELL-leg fee only (consistent with net_pnl =
+    # pnl - fee in add_fill), so fee_drag here is the 0.1 sell fee.
+    assert cost["fee_drag"] == pytest.approx(0.1)

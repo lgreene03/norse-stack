@@ -156,10 +156,16 @@ class PerformanceTracker:
         self.in_drawdown = False
 
         # Per-instrument tracking
-        self.positions = defaultdict(lambda: {"qty": 0.0, "avg_cost": 0.0})
+        self.positions = defaultdict(
+            lambda: {"qty": 0.0, "avg_cost": 0.0, "slippage": 0.0}
+        )
         self.cash = initial_cash
         self.realized_pnl = 0.0
         self.total_fees = 0.0
+        # Cumulative slippage drag (quote currency) across all fills, distinct
+        # from explicit transaction-cost fees. Defaults to 0 when fills carry no
+        # slippage_bps, so behavior is unchanged for slippage-free fill streams.
+        self.total_slippage = 0.0
 
         # Last seen trade price per instrument (used for mark-to-market valuation
         # when MARK_TO_MARKET is enabled). Without a realtime price feed this is
@@ -271,9 +277,17 @@ class PerformanceTracker:
             qty = float(fill.get("quantity", 0))
             price = float(fill.get("fill_price", 0))
             fee = float(fill.get("transaction_cost", 0) or 0)
+            # Slippage cost for THIS fill, in quote currency: slippage_bps is the
+            # execution shortfall vs the decision price, applied to the notional
+            # traded. Absent/blank => 0 (cost-attribution treats it as no slippage
+            # data rather than guessing). This is a separate drag from the explicit
+            # transaction_cost fee.
+            slip_bps = float(fill.get("slippage_bps", 0) or 0)
+            slip_cost = abs(slip_bps) / 10000.0 * price * qty
             ts = fill.get("timestamp", datetime.now(timezone.utc).isoformat())
 
             self.total_fees += fee
+            self.total_slippage += slip_cost
             self.last_price[instrument] = price
             pos = self.positions[instrument]
 
@@ -281,6 +295,9 @@ class PerformanceTracker:
                 total_cost = pos["avg_cost"] * pos["qty"] + price * qty
                 pos["qty"] += qty
                 pos["avg_cost"] = total_cost / pos["qty"] if pos["qty"] > 0 else 0
+                # Accumulate buy-leg slippage on the open position so it can be
+                # attributed to the round trip when the position is later closed.
+                pos["slippage"] += slip_cost
                 self.cash -= (price * qty + fee)
 
                 self.open_trades.setdefault(instrument, []).append({
@@ -289,13 +306,22 @@ class PerformanceTracker:
 
             elif side == "SELL":
                 if pos["qty"] > 0:
-                    pnl = (price - pos["avg_cost"]) * min(qty, pos["qty"])
+                    closed_qty = min(qty, pos["qty"])
+                    pnl = (price - pos["avg_cost"]) * closed_qty
                     self.realized_pnl += pnl
                     net_pnl = pnl - fee
+                    # Attribute the proportion of accumulated buy-leg slippage
+                    # corresponding to the quantity being closed, plus this sell
+                    # fill's own slippage. gross_pnl is edge BEFORE any cost
+                    # (it already excludes fees, which are subtracted to net_pnl).
+                    buy_slip = pos["slippage"] * (closed_qty / pos["qty"])
+                    rt_slippage = buy_slip + slip_cost
+                    pos["slippage"] -= buy_slip
                     self.round_trips.append({
                         "instrument": instrument,
                         "pnl": pnl,
                         "fee": fee,
+                        "slippage": rt_slippage,
                         "net_pnl": net_pnl,
                         "time": ts,
                     })
@@ -305,6 +331,7 @@ class PerformanceTracker:
                 if pos["qty"] <= 0.0001:
                     pos["qty"] = 0
                     pos["avg_cost"] = 0
+                    pos["slippage"] = 0.0
                 self.cash += (price * qty - fee)
 
                 self.open_trades.setdefault(instrument, []).append({
@@ -473,6 +500,140 @@ class PerformanceTracker:
             # any wins, otherwise there is simply nothing to report.
             return None if gross_profit > 0 else 0.0
         return gross_profit / gross_loss
+
+    def compute_cost_attribution(self):
+        """Break-even-edge and cost-attribution analytics. Lock must be held.
+
+        Decomposes realized P&L per round trip into gross edge vs the costs that
+        erode it (fee drag + slippage drag) and names the exact pathology that an
+        edge can have: GROSS-POSITIVE but NET-NEGATIVE — a real per-trade edge
+        that is fully consumed by trading costs because the strategy over-trades
+        relative to its edge. Also defines the hurdle a cost-aware trade gate must
+        clear: the break-even win rate and the break-even edge in basis points.
+
+        All quantities are pure-stdlib arithmetic over the closed round trips.
+        gross_pnl here is edge BEFORE fees (round_trips carry "pnl" = realized
+        edge excluding fees, "fee", "slippage", and "net_pnl" = pnl - fee).
+        """
+        rts = list(self.round_trips)
+        n = len(rts)
+        if n == 0:
+            return self._empty_cost_attribution()
+
+        gross_pnl = sum(r["pnl"] for r in rts)
+        total_fees = sum(r.get("fee", 0.0) for r in rts)
+        total_slippage = sum(r.get("slippage", 0.0) for r in rts)
+        total_costs = total_fees + total_slippage
+        net_pnl = sum(r["net_pnl"] for r in rts)
+
+        # Notional traded per round trip (entry leg) is unknown here without the
+        # original fills, so express per-trade edge/cost in bps of the realized
+        # position value proxy: use avg gross edge and avg cost per round trip,
+        # then convert to bps against the average notional we can reconstruct.
+        # We approximate notional via the gross edge being a return on the
+        # avg_cost basis is not available per-trip, so we report bps of the
+        # average ABSOLUTE per-trip P&L scale is misleading; instead we report
+        # per-trade dollar edge and cost, and a bps figure relative to total
+        # gross traded value tracked at fill time.
+        avg_gross_edge = gross_pnl / n
+        avg_round_trip_cost = total_costs / n
+
+        # Win/loss decomposition on NET basis (what the book actually keeps).
+        wins, losses = self._bucket_trades(rts)
+        avg_win = (sum(r["net_pnl"] for r in wins) / len(wins)) if wins else 0.0
+        avg_loss = (
+            abs(sum(r["net_pnl"] for r in losses) / len(losses)) if losses else 0.0
+        )
+
+        # Break-even win rate: the win rate at which avg_win and avg_loss net to
+        # zero. p*avg_win = (1-p)*avg_loss  =>  p = avg_loss / (avg_win+avg_loss).
+        denom = avg_win + avg_loss
+        break_even_winrate = (avg_loss / denom) if denom > 0 else None
+
+        # Break-even edge in bps: the average per-round-trip cost expressed in
+        # basis points of the average gross traded notional. Notional per trip is
+        # reconstructed from cumulative fee/slippage being a bps-of-notional cost
+        # only when a bps rate is known; lacking that, we anchor bps to the
+        # average absolute gross edge magnitude per trip, which is the scale the
+        # edge must beat. break_even_edge_bps = cost / notional * 1e4.
+        avg_abs_edge = (sum(abs(r["pnl"]) for r in rts) / n) if n else 0.0
+        # Use avg gross edge magnitude as the notional proxy denominator; this is
+        # the scale a trade's edge operates on. Guard against zero.
+        notional_proxy = avg_abs_edge if avg_abs_edge > 0 else None
+        break_even_edge_bps = (
+            (avg_round_trip_cost / notional_proxy) * 10000.0
+            if notional_proxy else None
+        )
+        average_edge_per_trade_bps = (
+            (avg_gross_edge / notional_proxy) * 10000.0
+            if notional_proxy else None
+        )
+        round_trip_cost_bps = break_even_edge_bps
+
+        # Fee-adjusted profit factor: gross profit vs (gross loss + total costs).
+        # This re-loads the cost back onto the loss side so the ratio reflects
+        # the edge net of every cost, exposing a PF that looks healthy gross but
+        # collapses once costs are charged.
+        gross_win_edge = sum(r["pnl"] for r in rts if r["pnl"] > 0)
+        gross_loss_edge = abs(sum(r["pnl"] for r in rts if r["pnl"] < 0))
+        fee_adj_denom = gross_loss_edge + total_costs
+        fee_adjusted_profit_factor = (
+            (gross_win_edge / fee_adj_denom) if fee_adj_denom > 0 else None
+        )
+
+        # Cost efficiency: how much gross edge each unit of cost buys. >1 means
+        # the edge out-earns its costs; <1 means costs dominate (the pathology).
+        cost_efficiency = (gross_pnl / total_costs) if total_costs > 0 else None
+
+        # The named pathology: a real gross edge fully eaten by costs.
+        gross_positive_net_negative = (gross_pnl > 0) and (net_pnl < 0)
+
+        return {
+            "gross_pnl": round(gross_pnl, 4),
+            "net_pnl": round(net_pnl, 4),
+            "fee_drag": round(total_fees, 4),
+            "slippage_drag": round(total_slippage, 4),
+            "total_costs": round(total_costs, 4),
+            "round_trips": n,
+            "avg_gross_edge_per_trade": round(avg_gross_edge, 4),
+            "avg_round_trip_cost": round(avg_round_trip_cost, 4),
+            "break_even_winrate": (
+                round(break_even_winrate, 4)
+                if break_even_winrate is not None else None
+            ),
+            "break_even_edge_bps": (
+                round(break_even_edge_bps, 2)
+                if break_even_edge_bps is not None else None
+            ),
+            "average_edge_per_trade_bps": (
+                round(average_edge_per_trade_bps, 2)
+                if average_edge_per_trade_bps is not None else None
+            ),
+            "round_trip_cost_bps": (
+                round(round_trip_cost_bps, 2)
+                if round_trip_cost_bps is not None else None
+            ),
+            "fee_adjusted_profit_factor": (
+                round(fee_adjusted_profit_factor, 3)
+                if fee_adjusted_profit_factor is not None else None
+            ),
+            "cost_efficiency": (
+                round(cost_efficiency, 3) if cost_efficiency is not None else None
+            ),
+            "gross_positive_net_negative": gross_positive_net_negative,
+        }
+
+    @staticmethod
+    def _empty_cost_attribution():
+        """Cost-attribution block shape when there are no closed round trips."""
+        return {
+            "gross_pnl": 0, "net_pnl": 0, "fee_drag": 0, "slippage_drag": 0,
+            "total_costs": 0, "round_trips": 0, "avg_gross_edge_per_trade": 0,
+            "avg_round_trip_cost": 0, "break_even_winrate": None,
+            "break_even_edge_bps": None, "average_edge_per_trade_bps": None,
+            "round_trip_cost_bps": None, "fee_adjusted_profit_factor": None,
+            "cost_efficiency": None, "gross_positive_net_negative": False,
+        }
 
     def compute_kelly(self):
         """Half-Kelly criterion for optimal position sizing. Lock must be held."""
@@ -810,6 +971,7 @@ class PerformanceTracker:
                     "kelly_fraction": self.compute_kelly(),
                     "portfolio_var": self.compute_portfolio_var(),
                 },
+                "cost": self.compute_cost_attribution(),
                 "correlation_matrix": self.compute_correlation_matrix(),
                 "monte_carlo": self.compute_monte_carlo(),
                 "by_instrument": by_instrument,
@@ -856,6 +1018,7 @@ class PerformanceTracker:
                                        "diversification_benefit": 0,
                                        "instruments": 0,
                                        "method": "variance-covariance"}},
+            "cost": self._empty_cost_attribution(),
             "correlation_matrix": {},
             "monte_carlo": {
                 "p_value": 1.0, "actual_sharpe": 0, "simulations": 0,
