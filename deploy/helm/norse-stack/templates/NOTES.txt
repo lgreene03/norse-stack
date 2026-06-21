@@ -1,0 +1,34 @@
+Norse Stack deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Core services rendered:
+{{- if .Values.huginn.enabled }}
+  - huginn   (strategy engine)   metrics: :{{ .Values.huginn.metricsPort }}{{ .Values.huginn.metricsPath }}
+{{- end }}
+{{- if .Values.sleipnir.enabled }}
+  - sleipnir (execution gateway) metrics: :{{ .Values.sleipnir.metricsPort }}{{ .Values.sleipnir.metricsPath }}
+{{- end }}
+{{- if .Values.muninn.enabled }}
+  - muninn   (market data)       metrics: :{{ .Values.muninn.metricsPort }}{{ .Values.muninn.metricsPath }}
+{{- end }}
+
+Trust boundary:
+{{- if .Values.networkPolicy.enabled }}
+  - NetworkPolicy default-deny is ACTIVE (ingress + egress).
+{{- else }}
+  - NetworkPolicy is DISABLED — namespace is open. Enable in prod.
+{{- end }}
+{{- if .Values.resourceQuota.enabled }}
+  - ResourceQuota is ACTIVE — pods MUST declare requests + limits.
+{{- end }}
+
+External infrastructure is NOT managed by this chart. Point these at real infra:
+  - Kafka brokers : {{ .Values.externals.kafka.brokers }}
+  - Muninn DB     : {{ .Values.externals.postgresMuninn.url }}
+  - MinIO/S3      : {{ .Values.externals.minio.endpoint }}
+  - Tempo (OTLP)  : {{ .Values.externals.tempo.endpoint }}
+
+Port-forward a service to inspect it locally, e.g.:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "norse-stack.fullname" . }}-huginn 8081:{{ .Values.huginn.metricsPort }}
+
+See deploy/helm/README.md for kind/minikube install steps and docs/SCALING.md
+before raising any replicaCount above 1.

@@ -1,0 +1,99 @@
+{{- if .Values.sleipnir.enabled -}}
+{{- $svc := .Values.sleipnir -}}
+{{- $name := printf "%s-sleipnir" (include "norse-stack.fullname" .) -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "norse-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sleipnir
+spec:
+  replicas: {{ $svc.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "norse-stack.selectorLabels" (dict "ctx" . "component" "sleipnir") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "norse-stack.selectorLabels" (dict "ctx" . "component" "sleipnir") | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ $svc.metricsPort | quote }}
+        prometheus.io/path: {{ $svc.metricsPath | quote }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: sleipnir
+          image: {{ include "norse-stack.image" (dict "ctx" . "svc" $svc) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: {{ $svc.service.httpPort }}
+            - name: metrics
+              containerPort: {{ $svc.metricsPort }}
+          env:
+            - name: KAFKA_BROKERS
+              value: {{ .Values.externals.kafka.brokers | quote }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.externals.tempo.endpoint | quote }}
+            - name: SLEIPNIR_ADMIN_TOKEN
+              {{- if $svc.adminTokenSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $svc.adminTokenSecret.name }}
+                  key: {{ $svc.adminTokenSecret.key }}
+              {{- else }}
+              value: {{ $svc.adminTokenDefault | quote }}
+              {{- end }}
+            {{- range $k, $v := $svc.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          readinessProbe:
+            # /readyz only goes green after the first intent is consumed, so use
+            # the always-on liveness endpoint for readiness in the demo chart.
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            {{- toYaml $svc.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "norse-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sleipnir
+spec:
+  type: {{ $svc.service.type }}
+  selector:
+    {{- include "norse-stack.selectorLabels" (dict "ctx" . "component" "sleipnir") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $svc.service.httpPort }}
+      targetPort: http
+    - name: metrics
+      port: {{ $svc.metricsPort }}
+      targetPort: metrics
+{{- end }}

@@ -1,0 +1,30 @@
+apiVersion: v2
+name: norse-stack
+description: >-
+  Norse Stack — a local crypto trading SIMULATION / portfolio project.
+  This umbrella chart deploys the three core Go/JVM services (huginn strategy
+  engine, sleipnir execution gateway, muninn market-data service) as
+  Deployments + Services, and codifies the localhost trust boundary with a
+  default-deny NetworkPolicy and a ResourceQuota. Shared infrastructure
+  (Redpanda/Kafka, Postgres, MinIO, Tempo, Prometheus) is treated as a
+  documented external dependency — see values.yaml `externals` and
+  deploy/helm/README.md.
+type: application
+
+# Chart version is independent of the app images; bump on chart changes.
+version: 0.1.0
+
+# appVersion tracks the default image tag for the bundled services.
+appVersion: "latest"
+
+keywords:
+  - trading
+  - simulation
+  - quant
+  - kafka
+  - observability
+home: https://github.com/lgreene03/norse-stack
+sources:
+  - https://github.com/lgreene03/norse-stack
+maintainers:
+  - name: Norse Stack

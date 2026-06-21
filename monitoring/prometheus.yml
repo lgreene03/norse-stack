@@ -3,8 +3,14 @@ global:
   evaluation_interval: 15s
 
 # Alert rules evaluated by Prometheus; alerts route to Alertmanager below.
+# The glob loads every rule file in the alerts dir; the explicit entries below
+# document the two files that must be present:
+#   norse-stack.yml — pipeline liveness / fill-quality / target-health alerts
+#   slo.yml         — multi-burn-rate SLO alerts (see docs/SLO.md)
 rule_files:
   - /etc/prometheus/alerts/*.yml
+  - /etc/prometheus/alerts/norse-stack.yml
+  - /etc/prometheus/alerts/slo.yml
 
 alerting:
   alertmanagers:

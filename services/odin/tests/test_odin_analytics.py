@@ -606,6 +606,106 @@ def test_signed_equity_contribution_short_mark_to_market(monkeypatch):
     assert t.equity_curve[-1]["value"] == pytest.approx(1010.0)
 
 
+# ---------------------------------------------------------------------------
+# Backtest-vs-live reconciliation (quant-rigor-11)
+# ---------------------------------------------------------------------------
+
+def test_reconciliation_present_in_analytics(tracker):
+    tracker.add_fill({"instrument": "BTC", "side": "BUY", "quantity": 1,
+                      "fill_price": 100, "execution_id": "r1"})
+    out = tracker.get_analytics()
+    assert "reconciliation" in out
+    rec = out["reconciliation"]
+    # Compares against the committed OBI expectation from docs/RESULTS.md.
+    assert rec["expected"]["fills"] == 235
+    assert rec["expected"]["realized_pnl"] == pytest.approx(-59.0439)
+    assert rec["backtest_strategy"] == "OBIThreshold(0.70)"
+
+
+def test_reconciliation_in_empty_analytics(tracker):
+    out = tracker._empty_analytics()
+    assert "reconciliation" in out
+    assert out["reconciliation"]["live"]["fills"] == 0
+    # No live fills => not flagged as diverged, with a clear verdict.
+    assert out["reconciliation"]["diverged"] is False
+    assert "nothing to reconcile" in out["reconciliation"]["verdict"]
+
+
+def test_reconciliation_endpoint_wrapper(tracker):
+    # The lock-acquiring public wrapper returns the same shape.
+    rec = tracker.get_reconciliation()
+    assert rec["expected"]["fills"] == 235
+    assert "verdict" in rec and "delta" in rec
+
+
+def test_reconciliation_matches_backtest_within_tolerance(monkeypatch, tracker):
+    # Set the expected baseline to small round numbers so we can drive a live
+    # book that lands inside tolerance. Expected: 2 fills, realized -10.
+    monkeypatch.setattr(odin, "BACKTEST_EXPECTED_FILLS", 2)
+    monkeypatch.setattr(odin, "BACKTEST_EXPECTED_REALIZED_PNL", -10.0)
+    # Long 1 @ 100, sell 1 @ 90 => realized -10, exactly 2 fills.
+    tracker.add_fill({"instrument": "BTC", "side": "BUY", "quantity": 1,
+                      "fill_price": 100, "execution_id": "b1"})
+    tracker.add_fill({"instrument": "BTC", "side": "SELL", "quantity": 1,
+                      "fill_price": 90, "execution_id": "s1"})
+    rec = tracker.compute_reconciliation()
+    assert rec["live"]["realized_pnl"] == pytest.approx(-10.0)
+    assert rec["live"]["fills"] == 2
+    assert rec["diverged"] is False
+    assert "within tolerance" in rec["verdict"]
+
+
+def test_reconciliation_flags_pnl_divergence(monkeypatch, tracker):
+    # Expected realized -10 but live comes in at +50 -> way outside 25% band.
+    monkeypatch.setattr(odin, "BACKTEST_EXPECTED_FILLS", 2)
+    monkeypatch.setattr(odin, "BACKTEST_EXPECTED_REALIZED_PNL", -10.0)
+    tracker.add_fill({"instrument": "BTC", "side": "BUY", "quantity": 1,
+                      "fill_price": 100, "execution_id": "b1"})
+    tracker.add_fill({"instrument": "BTC", "side": "SELL", "quantity": 1,
+                      "fill_price": 150, "execution_id": "s1"})
+    rec = tracker.compute_reconciliation()
+    assert rec["live"]["realized_pnl"] == pytest.approx(50.0)
+    assert rec["diverged"] is True
+    assert "DIVERGENCE" in rec["verdict"]
+    assert rec["delta"]["realized_pnl"] == pytest.approx(60.0)
+
+
+def test_reconciliation_flags_live_worse_fee_model_gap(monkeypatch, tracker):
+    # Live realized matches the expectation, but heavy live fees push live NET
+    # below the backtest expectation while modelled fees (5 bps on notional)
+    # stay small -> the fee/fill-model-gap reason fires.
+    monkeypatch.setattr(odin, "BACKTEST_EXPECTED_FILLS", 2)
+    monkeypatch.setattr(odin, "BACKTEST_EXPECTED_REALIZED_PNL", -10.0)
+    # BUY 1 @ 100, SELL 1 @ 90 => realized -10. Large fee on the close leg.
+    tracker.add_fill({"instrument": "BTC", "side": "BUY", "quantity": 1,
+                      "fill_price": 100, "transaction_cost": 0.0,
+                      "execution_id": "b1"})
+    tracker.add_fill({"instrument": "BTC", "side": "SELL", "quantity": 1,
+                      "fill_price": 90, "transaction_cost": 5.0,
+                      "execution_id": "s1"})
+    rec = tracker.compute_reconciliation()
+    # realized in tolerance, but net = -10 - 5 = -15 < expected -10.
+    assert rec["live"]["net_pnl"] == pytest.approx(-15.0)
+    # Live fee 5.0 exceeds modelled 5 bps on ~190 notional (~0.095).
+    assert rec["modelled_cost_on_live_notional"]["fee_model_gap"] > 0
+    assert rec["diverged"] is True
+    assert "fee/fill-model gap" in rec["verdict"]
+
+
+def test_reconciliation_modelled_cost_on_notional(monkeypatch, tracker):
+    # 1 @ 1000 buy: notional 1000. Modelled fee = 5 bps = 0.5, slippage 2 bps=0.2
+    monkeypatch.setattr(odin, "BACKTEST_EXPECTED_FILLS", 1)
+    monkeypatch.setattr(odin, "BACKTEST_EXPECTED_REALIZED_PNL", 0.0)
+    tracker.add_fill({"instrument": "BTC", "side": "BUY", "quantity": 1,
+                      "fill_price": 1000, "execution_id": "b1"})
+    rec = tracker.compute_reconciliation()
+    mc = rec["modelled_cost_on_live_notional"]
+    assert rec["live"]["notional_traded"] == pytest.approx(1000.0)
+    assert mc["fees"] == pytest.approx(0.5)
+    assert mc["slippage"] == pytest.approx(0.2)
+    assert mc["total"] == pytest.approx(0.7)
+
+
 def test_short_unrealized_sign_via_mark(monkeypatch):
     # Verify the unrealized contribution direction directly: short held, mark
     # below avg => positive unrealized ((mark-avg)*qty, qty<0, mark<avg).

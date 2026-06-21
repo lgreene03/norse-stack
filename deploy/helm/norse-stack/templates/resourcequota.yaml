@@ -1,0 +1,13 @@
+{{- if .Values.resourceQuota.enabled -}}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ include "norse-stack.fullname" . }}-quota
+  labels:
+    {{- include "norse-stack.labels" . | nindent 4 }}
+spec:
+  # Caps the blast radius of the namespace — the k8s analogue of the compose
+  # stack's mem_limit settings and localhost-only binding.
+  hard:
+    {{- toYaml .Values.resourceQuota.hard | nindent 4 }}
+{{- end }}

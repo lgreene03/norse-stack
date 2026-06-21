@@ -10,6 +10,15 @@
 
 Norse Stack is a 15-container distributed crypto trading system that ingests live Binance market data, computes 10 independent signal layers, executes quantitative strategies with regime-aware threshold adaptation, routes orders through TWAP/VWAP execution algorithms, and monitors everything through Prometheus and Grafana. Named after figures from Norse mythology.
 
+## Results (honest one-liner)
+
+**Real gross edge, fee-dominated: the strategy has a genuine per-trade edge that trading costs eat alive, and the net-of-cost gate is what flips it net-positive on the fixture. Signed-position shorting is now enabled, so the book is no longer long-only.** These are *simulated* results on a short ~24h window — not a live-trading claim.
+
+- **Full results & caveats:** [`docs/RESULTS.md`](docs/RESULTS.md) — unedited backtester/calibrator/walk-forward output, the buy-and-hold benchmark, and an explicit honest-caveats block (walk-forward is **0/4 OOS folds profitable** — the result with methodological weight).
+- **Performance tearsheet:** [`docs/assets/tearsheet.svg`](docs/assets/tearsheet.svg) — equity curve, underwater drawdown, calibrate threshold sweep, and walk-forward OOS PnL, every figure verbatim from `docs/RESULTS.md`.
+- **Cost-sweep frontier:** the [parameter-sweep table in `docs/RESULTS.md`](docs/RESULTS.md#parameter-sweep-calibrator) (rendered as the threshold-sweep panel of the tearsheet) shows PnL getting *less* negative as the strategy trades less — the fingerprint of cost dominance.
+- **Engineering case studies:** [Fee dominance: a real gross edge that fees eat alive](docs/case-studies/fee-dominance.md) and [The equity-accounting bug hunt](docs/case-studies/equity-accounting-bug.md).
+
 > **Backtest numbers, with the honesty attached:** see **[docs/RESULTS.md](docs/RESULTS.md)** for actual backtester output (per-strategy Sharpe/MDD/hit-rate, buy-and-hold benchmark, walk-forward) plus an explicit caveat block. Short answer up front: a single short live run with a handful of fills *cannot* produce a meaningful Sharpe, and the page explains exactly why.
 
 ### Performance tearsheet (simulated backtest)

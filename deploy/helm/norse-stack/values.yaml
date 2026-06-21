@@ -1,0 +1,174 @@
+# Default values for the norse-stack umbrella chart.
+#
+# This chart is a "could-run-in-prod" packaging of the local docker-compose
+# stack. It deploys the three CORE services that are safe to run as plain
+# Deployments; the shared INFRASTRUCTURE (Kafka, Postgres, MinIO, Tempo) is
+# modelled as an external dependency you point at via `externals` below, rather
+# than re-implementing stateful operators here. See deploy/helm/README.md.
+
+# ── Global knobs ──────────────────────────────────────────────────────────
+global:
+  # Image registry + pull policy applied to every service unless overridden.
+  imageRegistry: ghcr.io/lgreene03
+  imagePullPolicy: IfNotPresent
+  imagePullSecrets: []
+  # Common tag applied when a service does not set its own image.tag.
+  imageTag: latest
+
+# ── Trust boundary ─────────────────────────────────────────────────────────
+# The compose stack binds everything to 127.0.0.1 (localhost-only). In k8s the
+# equivalent is a default-deny NetworkPolicy plus a ResourceQuota that caps the
+# blast radius of the namespace. Both default ON; disable only if your cluster
+# CNI does not enforce NetworkPolicy (e.g. plain kind without Calico).
+networkPolicy:
+  # default-deny ingress+egress, then allow intra-namespace + DNS + scrape.
+  enabled: true
+  # CIDRs allowed for egress to the external infra (Kafka/Postgres/MinIO).
+  # Defaults to RFC1918 ranges so in-cluster externals resolve; tighten in prod.
+  externalEgressCIDRs:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+  # Namespace label selector that Prometheus runs in, to allow scrape ingress.
+  monitoringNamespaceLabel:
+    name: monitoring
+
+resourceQuota:
+  enabled: true
+  hard:
+    requests.cpu: "2"
+    requests.memory: 2Gi
+    limits.cpu: "4"
+    limits.memory: 4Gi
+    pods: "20"
+
+# ── External infrastructure (NOT deployed by this chart) ───────────────────
+# These mirror the compose service DNS names. Point them at real managed infra
+# (MSK/RDS/S3/Grafana Tempo) in prod, or at in-cluster Helm releases in dev.
+externals:
+  kafka:
+    brokers: redpanda:29092
+  postgresHuginn:
+    url: jdbc:postgresql://postgres-huginn:5432/huginn
+    host: postgres-huginn
+    port: 5432
+  postgresMuninn:
+    url: jdbc:postgresql://postgres-muninn:5432/muninn
+    host: postgres-muninn
+    port: 5432
+  minio:
+    endpoint: http://minio:9000
+  tempo:
+    endpoint: tempo:4317
+
+# ── Core services ──────────────────────────────────────────────────────────
+# Each entry renders one Deployment + one Service. metricsPort/metricsPath feed
+# the Prometheus scrape annotations and the NetworkPolicy scrape-allow rule.
+
+huginn:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: huginn
+    tag: ""              # falls back to global.imageTag
+  service:
+    type: ClusterIP
+    grpcPort: 50051
+    httpPort: 8084
+  # Strategy engine consumes features and persists strategy state. It is a
+  # SINGLETON by default: replicas>1 requires the shared-dedup guarantee
+  # (see docs/SCALING.md) because each replica would otherwise double-trade.
+  metricsPort: 8081
+  metricsPath: /metrics
+  env:
+    KAFKA_TOPICS: features.obi.v1
+    KAFKA_GROUP_ID: huginn-paper-trader
+    STRATEGY_NAME: obi
+    STRATEGY_THRESHOLD: "0.7"
+    STRATEGY_ORDER_SIZE: "0.001"
+    COST_HURDLE_K: "1.0"
+    OBI_EDGE_BPS_PER_UNIT: "60"
+    OTEL_EXPORTER_OTLP_INSECURE: "true"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+sleipnir:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: sleipnir
+    tag: ""
+  service:
+    type: ClusterIP
+    httpPort: 8080
+  # Execution gateway. Stateless w.r.t. the sim ledger if DB is external;
+  # the consumer group lets Kafka shard partitions across replicas, but the
+  # rate limiter is per-replica (see docs/SCALING.md).
+  metricsPort: 8080
+  metricsPath: /metrics
+  env:
+    KAFKA_INTENTS_TOPIC: executions.intents.v1
+    KAFKA_FILLS_TOPIC: executions.fills.v1
+    KAFKA_CONSUMER_GROUP: sleipnir-gateway
+    EXCHANGE_BACKEND: sim
+    SIM_TX_COST_BPS: "10"
+    RATE_LIMIT_RPS: "10.0"
+    PORT: "8080"
+    DB_PATH: /app/data/sleipnir.db
+    OTEL_EXPORTER_OTLP_INSECURE: "true"
+  # Admin token gating mutating endpoints; supply via an existing Secret in prod.
+  adminTokenSecret:
+    # name of a Secret with key `admin-token`; empty => uses inline default.
+    name: ""
+    key: admin-token
+  adminTokenDefault: localdev-change-me
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+muninn:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: muninn
+    tag: ""
+  service:
+    type: ClusterIP
+    httpPort: 8080
+  # Market-data ingestion + warehouse service (Spring Boot). Metrics on the
+  # actuator endpoint. Stateful via Postgres/MinIO; singleton ingestion.
+  metricsPort: 8080
+  metricsPath: /actuator/prometheus
+  env:
+    MUNINN_INGESTION_BINANCE_ENABLED: "true"
+    MUNINN_INGESTION_COINBASE_ENABLED: "false"
+    OTEL_EXPORTER_OTLP_INSECURE: "true"
+  # DB + object-store credentials; supply via existing Secrets in prod.
+  dbSecret:
+    name: ""
+    userKey: username
+    passwordKey: password
+  dbUserDefault: muninn
+  dbPasswordDefault: muninn
+  minioSecret:
+    name: ""
+    accessKeyKey: access-key
+    secretKeyKey: secret-key
+  minioAccessKeyDefault: minioadmin
+  minioSecretKeyDefault: minioadmin
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi

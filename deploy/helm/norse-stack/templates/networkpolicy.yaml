@@ -1,0 +1,102 @@
+{{- if .Values.networkPolicy.enabled -}}
+{{- /*
+  Trust boundary. The compose stack binds every port to 127.0.0.1; the k8s
+  analogue is a default-deny posture with explicit allow-lists. We render:
+    1. default-deny  — denies all ingress + egress in the namespace
+    2. allow-intra   — pods in this namespace may talk to each other
+    3. allow-dns     — egress to kube-dns (UDP/TCP 53)
+    4. allow-scrape  — ingress from the monitoring namespace to metrics ports
+    5. allow-egress-external — egress to the external infra CIDRs (Kafka/DB/S3)
+*/ -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "norse-stack.fullname" . }}-default-deny
+  labels:
+    {{- include "norse-stack.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "norse-stack.fullname" . }}-allow-intra
+  labels:
+    {{- include "norse-stack.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "norse-stack.fullname" . }}-allow-dns
+  labels:
+    {{- include "norse-stack.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "norse-stack.fullname" . }}-allow-scrape
+  labels:
+    {{- include "norse-stack.labels" . | nindent 4 }}
+spec:
+  # Allow Prometheus (in the monitoring namespace) to reach metrics ports.
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- with .Values.networkPolicy.monitoringNamespaceLabel }}
+              kubernetes.io/metadata.name: {{ .name }}
+              {{- end }}
+      ports:
+        - port: metrics
+          protocol: TCP
+        - port: http
+          protocol: TCP
+{{- with .Values.networkPolicy.externalEgressCIDRs }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "norse-stack.fullname" $ }}-allow-egress-external
+  labels:
+    {{- include "norse-stack.labels" $ | nindent 4 }}
+spec:
+  # Egress to the external infra (Kafka/Postgres/MinIO/Tempo). RFC1918 by
+  # default; tighten to the real CIDRs in prod.
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+{{- end }}
+{{- end }}

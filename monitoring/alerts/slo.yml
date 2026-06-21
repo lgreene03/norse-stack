@@ -1,0 +1,208 @@
+# Norse Stack — SLOs and multi-burn-rate alerting.
+#
+# Referenced from monitoring/prometheus.yml via rule_files (the glob
+# /etc/prometheus/alerts/*.yml picks this file up alongside norse-stack.yml).
+# Full SLO definitions, targets, and error budgets live in docs/SLO.md.
+#
+# Multi-burn-rate rationale (Google SRE workbook, ch. 5): a single threshold
+# either pages too eagerly on brief blips or too late on a slow bleed. Instead
+# we pair a FAST window (catches budget-destroying spikes within minutes) with a
+# SLOW window (catches sustained low-grade burn). An alert fires only when BOTH
+# the long and short windows of a pair exceed the burn-rate threshold — the
+# short window adds hysteresis so the alert resolves promptly once burn stops.
+#
+# Burn rate = (error budget consumed) / (budget that "should" be consumed in
+# that window for a 30d SLO). Thresholds 14.4 / 6 / 1 correspond to consuming
+# 2% / 5% / 10% of a 30d budget over 1h / 6h / 3d respectively.
+#
+# These rules use the real series exposed by huginn (job: huginn):
+#   huginn_signal_to_decision_ms_bucket/_count   (signal→decision latency SLO)
+#   huginn_feature_event_age_seconds_count        (feature freshness)
+#   huginn_features_consumed_total                 (feature liveness)
+#   huginn_fills_executed_total                    (fill liveness)
+#   up{job=~"huginn|sleipnir|muninn"}              (readiness error budget)
+#
+# Validate edits with:
+#   docker run --rm -v "$PWD/monitoring/alerts:/alerts" prom/prometheus:v2.53.0 \
+#     promtool check rules /alerts/slo.yml
+
+groups:
+  # ── Recording rules: signal→decision latency SLI ────────────────────────
+  # SLO: 99% of bridge-signal → huginn-decision latencies ≤ 250ms.
+  # The SLI is the ratio of "good" (≤250ms) events to total events, computed
+  # over several windows so the burn-rate alerts can compare them. We record
+  # the BAD ratio (1 - good) since burn rate is about budget consumed.
+  - name: norse-slo-latency-recording
+    rules:
+      - record: huginn:s2d_latency_bad_ratio_rate5m
+        expr: |
+          1 - (
+            sum(rate(huginn_signal_to_decision_ms_bucket{le="256"}[5m]))
+              /
+            clamp_min(sum(rate(huginn_signal_to_decision_ms_count[5m])), 1)
+          )
+      - record: huginn:s2d_latency_bad_ratio_rate30m
+        expr: |
+          1 - (
+            sum(rate(huginn_signal_to_decision_ms_bucket{le="256"}[30m]))
+              /
+            clamp_min(sum(rate(huginn_signal_to_decision_ms_count[30m])), 1)
+          )
+      - record: huginn:s2d_latency_bad_ratio_rate1h
+        expr: |
+          1 - (
+            sum(rate(huginn_signal_to_decision_ms_bucket{le="256"}[1h]))
+              /
+            clamp_min(sum(rate(huginn_signal_to_decision_ms_count[1h])), 1)
+          )
+      - record: huginn:s2d_latency_bad_ratio_rate6h
+        expr: |
+          1 - (
+            sum(rate(huginn_signal_to_decision_ms_bucket{le="256"}[6h]))
+              /
+            clamp_min(sum(rate(huginn_signal_to_decision_ms_count[6h])), 1)
+          )
+
+  # ── Multi-burn-rate alerts: signal→decision latency SLO ─────────────────
+  # SLO 99% ⇒ error budget = 1%. Burn-rate thresholds against a 0.01 budget:
+  #   fast: 14.4 × 0.01 = 0.144  (1h & 5m windows)  → 2% of budget in 1h
+  #   slow:  6   × 0.01 = 0.06   (6h & 30m windows) → 5% of budget in 6h
+  - name: norse-slo-latency-burn
+    rules:
+      - alert: HuginnLatencySLOFastBurn
+        expr: |
+          huginn:s2d_latency_bad_ratio_rate1h > (14.4 * 0.01)
+          and
+          huginn:s2d_latency_bad_ratio_rate5m > (14.4 * 0.01)
+        for: 2m
+        labels:
+          severity: critical
+          area: slo
+          slo: signal_to_decision_latency
+          burn: fast
+        annotations:
+          summary: "Signal→decision latency SLO: fast burn (>2% budget/1h)"
+          description: "huginn signal→decision p99 latency budget (target 99% ≤256ms) is burning at >14.4× over the 1h+5m windows. At this rate the 30d error budget is exhausted in ~2 days. See docs/SLO.md."
+
+      - alert: HuginnLatencySLOSlowBurn
+        expr: |
+          huginn:s2d_latency_bad_ratio_rate6h > (6 * 0.01)
+          and
+          huginn:s2d_latency_bad_ratio_rate30m > (6 * 0.01)
+        for: 15m
+        labels:
+          severity: warning
+          area: slo
+          slo: signal_to_decision_latency
+          burn: slow
+        annotations:
+          summary: "Signal→decision latency SLO: slow burn (>5% budget/6h)"
+          description: "huginn signal→decision latency budget is burning at >6× over the 6h+30m windows — a sustained low-grade degradation. Investigate before the budget is depleted. See docs/SLO.md."
+
+  # ── Freshness SLOs: features & fills must keep flowing ──────────────────
+  # SLO: feature events are processed continuously; a multi-minute gap in the
+  # feature pipeline or the fill path burns the freshness budget. We treat a
+  # zero processing rate as a hard SLI miss and use fast+slow windows so a brief
+  # gap warns while a sustained stall pages.
+  - name: norse-slo-freshness
+    rules:
+      # Features: fast (no features for 5m) + slow (10m) burn pairing.
+      - alert: FeatureFreshnessFastBurn
+        expr: |
+          sum(rate(huginn_feature_event_age_seconds_count[5m])) == 0
+          and
+          sum(rate(huginn_features_consumed_total[2m])) == 0
+        for: 3m
+        labels:
+          severity: critical
+          area: slo
+          slo: feature_freshness
+          burn: fast
+        annotations:
+          summary: "Feature freshness SLO: fast burn (no features 5m)"
+          description: "No feature events processed by huginn over the last 5m (and none consumed in 2m) — the freshness SLO is actively burning. The strategy is starved. See docs/SLO.md."
+
+      - alert: FeatureFreshnessSlowBurn
+        expr: sum(rate(huginn_feature_event_age_seconds_count[30m])) == 0
+        for: 30m
+        labels:
+          severity: warning
+          area: slo
+          slo: feature_freshness
+          burn: slow
+        annotations:
+          summary: "Feature freshness SLO: slow burn (no features 30m)"
+          description: "Feature processing has been stalled for 30m — a sustained freshness-budget burn. See docs/SLO.md."
+
+      # Fills: fast (5m) + slow (20m) burn pairing.
+      - alert: FillFreshnessFastBurn
+        expr: sum(rate(huginn_fills_executed_total[5m])) == 0
+        for: 5m
+        labels:
+          severity: warning
+          area: slo
+          slo: fill_freshness
+          burn: fast
+        annotations:
+          summary: "Fill freshness SLO: fast burn (no fills 5m)"
+          description: "No fills executed over the last 5m — the fill path may be stalled. NOTE: a fully cost-suppressed but healthy idle period can also trigger this; correlate with huginn_orders_cost_suppressed_total. See docs/SLO.md."
+
+      - alert: FillFreshnessSlowBurn
+        expr: sum(rate(huginn_fills_executed_total[20m])) == 0
+        for: 20m
+        labels:
+          severity: critical
+          area: slo
+          slo: fill_freshness
+          burn: slow
+        annotations:
+          summary: "Fill freshness SLO: slow burn (no fills 20m)"
+          description: "No fills executed for 20m straight — sustained fill-path stall burning the freshness budget. See docs/SLO.md."
+
+  # ── Readiness / availability SLO ────────────────────────────────────────
+  # SLO: core services (huginn, sleipnir, muninn) are scrape-up ≥ 99.5%.
+  # Error budget = 0.5%. We record per-window unavailability (1 - avg up) and
+  # apply the same fast+slow burn pairing.
+  - name: norse-slo-readiness-recording
+    rules:
+      - record: norse:core_unavailable_ratio_rate5m
+        expr: 1 - avg_over_time(up{job=~"huginn|sleipnir|muninn"}[5m])
+      - record: norse:core_unavailable_ratio_rate1h
+        expr: 1 - avg_over_time(up{job=~"huginn|sleipnir|muninn"}[1h])
+      - record: norse:core_unavailable_ratio_rate30m
+        expr: 1 - avg_over_time(up{job=~"huginn|sleipnir|muninn"}[30m])
+      - record: norse:core_unavailable_ratio_rate6h
+        expr: 1 - avg_over_time(up{job=~"huginn|sleipnir|muninn"}[6h])
+
+  - name: norse-slo-readiness-burn
+    rules:
+      # 99.5% SLO ⇒ budget 0.005. fast: 14.4×0.005=0.072; slow: 6×0.005=0.03.
+      - alert: CoreReadinessSLOFastBurn
+        expr: |
+          max(norse:core_unavailable_ratio_rate1h) > (14.4 * 0.005)
+          and
+          max(norse:core_unavailable_ratio_rate5m) > (14.4 * 0.005)
+        for: 2m
+        labels:
+          severity: critical
+          area: slo
+          slo: core_readiness
+          burn: fast
+        annotations:
+          summary: "Core readiness SLO: fast burn (>2% budget/1h)"
+          description: "A core service (huginn/sleipnir/muninn) availability budget (target 99.5%) is burning at >14.4× over 1h+5m. At this rate the 30d budget is gone in ~2 days. See docs/SLO.md."
+
+      - alert: CoreReadinessSLOSlowBurn
+        expr: |
+          max(norse:core_unavailable_ratio_rate6h) > (6 * 0.005)
+          and
+          max(norse:core_unavailable_ratio_rate30m) > (6 * 0.005)
+        for: 15m
+        labels:
+          severity: warning
+          area: slo
+          slo: core_readiness
+          burn: slow
+        annotations:
+          summary: "Core readiness SLO: slow burn (>5% budget/6h)"
+          description: "Sustained core-service unavailability burning the readiness budget at >6× over 6h+30m. See docs/SLO.md."

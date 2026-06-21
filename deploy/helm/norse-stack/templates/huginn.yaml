@@ -1,0 +1,94 @@
+{{- if .Values.huginn.enabled -}}
+{{- $svc := .Values.huginn -}}
+{{- $name := printf "%s-huginn" (include "norse-stack.fullname" .) -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "norse-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: huginn
+spec:
+  # Singleton by default: see docs/SCALING.md before raising replicaCount.
+  replicas: {{ $svc.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "norse-stack.selectorLabels" (dict "ctx" . "component" "huginn") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "norse-stack.selectorLabels" (dict "ctx" . "component" "huginn") | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ $svc.metricsPort | quote }}
+        prometheus.io/path: {{ $svc.metricsPath | quote }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: huginn
+          image: {{ include "norse-stack.image" (dict "ctx" . "svc" $svc) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: grpc
+              containerPort: {{ $svc.service.grpcPort }}
+            - name: http
+              containerPort: {{ $svc.service.httpPort }}
+            - name: metrics
+              containerPort: {{ $svc.metricsPort }}
+          env:
+            - name: KAFKA_BROKERS
+              value: {{ .Values.externals.kafka.brokers | quote }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.externals.tempo.endpoint | quote }}
+            {{- range $k, $v := $svc.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: {{ $svc.metricsPath }}
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: metrics
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            {{- toYaml $svc.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "norse-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: huginn
+spec:
+  type: {{ $svc.service.type }}
+  selector:
+    {{- include "norse-stack.selectorLabels" (dict "ctx" . "component" "huginn") | nindent 4 }}
+  ports:
+    - name: grpc
+      port: {{ $svc.service.grpcPort }}
+      targetPort: grpc
+    - name: http
+      port: {{ $svc.service.httpPort }}
+      targetPort: http
+    - name: metrics
+      port: {{ $svc.metricsPort }}
+      targetPort: metrics
+{{- end }}

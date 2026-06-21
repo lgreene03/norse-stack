@@ -68,6 +68,7 @@ parent/
   - Per-instrument breakdown with win rate, P&L
 - `GET /api/equity` — full equity curve time series
 - `GET /api/trades` — recent round-trip trades with P&L
+- `GET /api/reconciliation` — backtest-vs-live reconciliation: compares live realized PnL / fees / fill count against the committed `docs/RESULTS.md` expectation, models the 5 bps + 2 bps cost on live notional, and flags material divergence (e.g. live net worse than backtest predicted → a fee/fill-model gap). Also surfaced under the `reconciliation` key of `/api/analytics`.
 
 ### Bragi (Trade Explainability)
 - `GET /api/decisions` — recent decision log with human-readable explanations

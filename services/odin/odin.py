@@ -52,6 +52,41 @@ HEALTH_MAX_STALENESS_SECS = float(os.environ.get("HEALTH_MAX_STALENESS_SECS", "1
 # historical "realized-only" behaviour is preserved unless explicitly enabled.
 MARK_TO_MARKET = os.environ.get("MARK_TO_MARKET", "false").lower() in ("1", "true", "yes")
 
+# ---------------------------------------------------------------------------
+# Backtest-vs-live reconciliation baseline.
+#
+# The committed backtest expectation lives in docs/RESULTS.md: the OBIThreshold
+# (0.70) run on the 24h BTC fixture produced 235 fills and a realized PnL of
+# -59.0439 under a 5 bps transaction-cost + 2 bps slippage model. Odin uses that
+# committed expectation as the yardstick against which the LIVE realized PnL,
+# fees and fill count are compared, so an operator can see at a glance whether
+# the live book is tracking the backtest or has diverged (e.g. live net much
+# worse than backtest predicted -> a fee/fill-model gap, adverse selection, or a
+# strategy/parameter mismatch between the backtested and deployed config).
+#
+# These defaults are overridable by environment so a different committed run can
+# be reconciled against without code changes; the values below are the exact
+# figures published in docs/RESULTS.md for the headline OBI strategy.
+def _env_float(name, default):
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+BACKTEST_STRATEGY = os.environ.get("BACKTEST_STRATEGY", "OBIThreshold(0.70)")
+BACKTEST_EXPECTED_FILLS = int(_env_float("BACKTEST_EXPECTED_FILLS", 235))
+BACKTEST_EXPECTED_REALIZED_PNL = _env_float("BACKTEST_EXPECTED_REALIZED_PNL", -59.0439)
+# Modelled per-fill cost rates (bps) from the executor config in docs/RESULTS.md.
+BACKTEST_TXCOST_BPS = _env_float("BACKTEST_TXCOST_BPS", 5.0)
+BACKTEST_SLIPPAGE_BPS = _env_float("BACKTEST_SLIPPAGE_BPS", 2.0)
+# Divergence is FLAGGED when the live realized PnL differs from the backtest
+# expectation by more than this fraction of the (absolute) expected PnL, OR when
+# the live fill count differs by more than this fraction of the expected fills.
+# Defaults to 0.25 (25%) — a wide band so only material drift trips the flag.
+RECONCILE_PNL_TOLERANCE = _env_float("RECONCILE_PNL_TOLERANCE", 0.25)
+RECONCILE_FILLS_TOLERANCE = _env_float("RECONCILE_FILLS_TOLERANCE", 0.25)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -910,6 +945,146 @@ class PerformanceTracker:
         self._mc_cache_size = len(rts)
         return result
 
+    def compute_reconciliation(self):
+        """Backtest-vs-live reconciliation. Lock must be held.
+
+        Compares the LIVE realized PnL, fees and fill count accumulated by this
+        tracker against the committed backtest expectation (docs/RESULTS.md, the
+        OBI fixture by default; overridable via BACKTEST_* env). Surfaces:
+
+          - the live vs expected realized PnL and the absolute/relative delta,
+          - the live vs expected fill count and its delta,
+          - a modelled fee expectation: what the 5 bps + 2 bps cost model would
+            have charged on the live notional traded (so live fees can be checked
+            against the model, exposing a fee-model gap),
+          - a `diverged` flag and a human-readable `verdict` naming the gap,
+            tripped when |PnL delta| exceeds RECONCILE_PNL_TOLERANCE of |expected
+            PnL| OR |fills delta| exceeds RECONCILE_FILLS_TOLERANCE of expected
+            fills. A live net materially WORSE than the backtest predicted is
+            called out specifically as a likely fee/fill-model gap.
+
+        Pure-stdlib arithmetic; never raises on an empty/zero-expectation book.
+        """
+        live_fills = len(self.fills)
+        live_realized = self.realized_pnl
+        live_fees = self.total_fees
+        live_slippage = self.total_slippage
+        live_net = live_realized - live_fees
+
+        exp_fills = BACKTEST_EXPECTED_FILLS
+        exp_realized = BACKTEST_EXPECTED_REALIZED_PNL
+
+        pnl_delta = live_realized - exp_realized
+        fills_delta = live_fills - exp_fills
+
+        pnl_rel = (pnl_delta / abs(exp_realized)) if exp_realized != 0 else None
+        fills_rel = (fills_delta / exp_fills) if exp_fills != 0 else None
+
+        # Modelled fee/slippage expectation on the LIVE notional actually traded.
+        # The backtest charges (txcost_bps + slippage_bps) on every fill's
+        # notional; reconstruct that hurdle from the live fills so live fees can
+        # be checked against what the cost model says they SHOULD have been.
+        live_notional = 0.0
+        for f in self.fills:
+            try:
+                live_notional += abs(float(f.get("quantity", 0) or 0)) * abs(
+                    float(f.get("fill_price", 0) or 0))
+            except (TypeError, ValueError):
+                continue
+        modelled_fees = live_notional * BACKTEST_TXCOST_BPS / 10000.0
+        modelled_slippage = live_notional * BACKTEST_SLIPPAGE_BPS / 10000.0
+        modelled_total_cost = modelled_fees + modelled_slippage
+        # Gap between fees actually booked live and what the model predicts.
+        fee_model_gap = live_fees - modelled_fees
+
+        # With zero live fills there is nothing to compare yet: every delta is
+        # trivially "off" by 100%, so suppress divergence rather than firing a
+        # false alarm before any live trading has happened.
+        has_live = live_fills > 0
+        pnl_diverged = bool(
+            has_live and pnl_rel is not None
+            and abs(pnl_rel) > RECONCILE_PNL_TOLERANCE
+        )
+        fills_diverged = bool(
+            has_live and fills_rel is not None
+            and abs(fills_rel) > RECONCILE_FILLS_TOLERANCE
+        )
+        # Fee/fill-model gap: live net materially WORSE than the backtest
+        # predicted WHILE live fees exceed what the modelled cost rate would
+        # charge on the live notional. This is the signature divergence the
+        # reconciliation exists to catch and is flagged on its own, even when
+        # realized PnL alone is within tolerance.
+        fee_model_diverged = bool(
+            has_live and live_net < exp_realized and live_fees > modelled_fees
+        )
+        diverged = bool(pnl_diverged or fills_diverged or fee_model_diverged)
+
+        if not has_live:
+            verdict = "no live fills yet — nothing to reconcile against backtest"
+        elif not diverged:
+            verdict = "live tracking backtest within tolerance"
+        else:
+            reasons = []
+            if pnl_diverged:
+                worse = live_realized < exp_realized
+                reasons.append(
+                    "live realized PnL {} backtest by {:.2f} ({:+.1%})".format(
+                        "WORSE than" if worse else "BETTER than",
+                        abs(pnl_delta), pnl_rel)
+                )
+            if fills_diverged:
+                reasons.append(
+                    "live fill count off by {} ({:+.1%})".format(
+                        fills_delta, fills_rel)
+                )
+            if fee_model_diverged:
+                reasons.append(
+                    "live net below backtest while live fees exceed the modelled "
+                    "{:.1f} bps cost — likely a fee/fill-model gap".format(
+                        BACKTEST_TXCOST_BPS)
+                )
+            verdict = "DIVERGENCE: " + "; ".join(reasons)
+
+        return {
+            "backtest_strategy": BACKTEST_STRATEGY,
+            "tolerance": {
+                "pnl_pct": round(RECONCILE_PNL_TOLERANCE * 100, 1),
+                "fills_pct": round(RECONCILE_FILLS_TOLERANCE * 100, 1),
+            },
+            "expected": {
+                "fills": exp_fills,
+                "realized_pnl": round(exp_realized, 4),
+                "txcost_bps": BACKTEST_TXCOST_BPS,
+                "slippage_bps": BACKTEST_SLIPPAGE_BPS,
+            },
+            "live": {
+                "fills": live_fills,
+                "realized_pnl": round(live_realized, 4),
+                "fees": round(live_fees, 4),
+                "slippage": round(live_slippage, 4),
+                "net_pnl": round(live_net, 4),
+                "notional_traded": round(live_notional, 2),
+            },
+            "modelled_cost_on_live_notional": {
+                "fees": round(modelled_fees, 4),
+                "slippage": round(modelled_slippage, 4),
+                "total": round(modelled_total_cost, 4),
+                "fee_model_gap": round(fee_model_gap, 4),
+            },
+            "delta": {
+                "realized_pnl": round(pnl_delta, 4),
+                "realized_pnl_pct": (
+                    round(pnl_rel * 100, 2) if pnl_rel is not None else None
+                ),
+                "fills": fills_delta,
+                "fills_pct": (
+                    round(fills_rel * 100, 2) if fills_rel is not None else None
+                ),
+            },
+            "diverged": diverged,
+            "verdict": verdict,
+        }
+
     def get_analytics(self):
         with self.lock:
             total_trades = len(self.fills)
@@ -1013,6 +1188,7 @@ class PerformanceTracker:
                     "portfolio_var": self.compute_portfolio_var(),
                 },
                 "cost": self.compute_cost_attribution(),
+                "reconciliation": self.compute_reconciliation(),
                 "correlation_matrix": self.compute_correlation_matrix(),
                 "monte_carlo": self.compute_monte_carlo(),
                 "by_instrument": by_instrument,
@@ -1028,6 +1204,11 @@ class PerformanceTracker:
                 ),
                 "points": list(self.equity_curve),
             }
+
+    def get_reconciliation(self):
+        """Lock-acquiring wrapper for the /api/reconciliation endpoint."""
+        with self.lock:
+            return self.compute_reconciliation()
 
     def get_recent_trades(self, limit=20):
         with self.lock:
@@ -1060,6 +1241,7 @@ class PerformanceTracker:
                                        "instruments": 0,
                                        "method": "variance-covariance"}},
             "cost": self._empty_cost_attribution(),
+            "reconciliation": self.compute_reconciliation(),
             "correlation_matrix": {},
             "monte_carlo": {
                 "p_value": 1.0, "actual_sharpe": 0, "simulations": 0,
@@ -1084,6 +1266,8 @@ class OdinHandler(BaseHTTPRequestHandler):
             self._json_response(tracker.get_equity_curve())
         elif self.path == "/api/trades":
             self._json_response(tracker.get_recent_trades())
+        elif self.path == "/api/reconciliation":
+            self._json_response(tracker.get_reconciliation())
         elif self.path == "/healthz" or self.path == "/readyz":
             ok, age = liveness.status()
             payload = {
