@@ -670,6 +670,180 @@
       </section>
     </div>
 
+    <!-- ============ (6) RESEARCH GATEWAY ============ -->
+    <section data-screen-label="Research Gateway" style="background:#0a111e;border:1px solid #1b2b42;border-radius:12px;padding:16px 18px 18px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:8px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:13px;font-weight:700;letter-spacing:.06em;color:#cdd7e6">RESEARCH GATEWAY</span>
+          <span style="font-size:10px;color:#5b6a82;letter-spacing:.06em">research:8094 · walk-forward as a service</span>
+        </div>
+        <span style="font-size:10.5px;color:#6b7c95">re-runs the validation rigor on demand · off the live trading process</span>
+      </div>
+
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px">
+        <!-- run control + recent runs -->
+        <div style="flex:1 1 300px;min-width:280px;display:flex;flex-direction:column;gap:14px">
+          <div style="background:#070d17;border:1px solid #16233a;border-radius:10px;padding:14px">
+            <div style="font-size:10.5px;color:#7787a0;font-weight:600;letter-spacing:.06em;margin-bottom:10px">RUN A WALK-FORWARD</div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+              <label style="display:flex;flex-direction:column;gap:5px;flex:1 1 130px">
+                <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">STRATEGY</span>
+                <select data-nc="rg-strategy" style="background:#0c1726;border:1px solid #23344c;color:#dbe4f0;font-family:'JetBrains Mono',monospace;font-size:12.5px;padding:8px 10px;border-radius:7px;cursor:pointer">
+                  <option value="obi">obi</option>
+                  <option value="ou">ou</option>
+                  <option value="composite">composite</option>
+                </select>
+              </label>
+              <button data-nc="rg-run-btn" style="cursor:pointer;border:1px solid #23436e;background:#0e1a30;color:#7fa6f0;font-family:'Public Sans',sans-serif;font-size:12.5px;font-weight:700;letter-spacing:.06em;padding:9px 18px;border-radius:8px;transition:all .15s">RUN</button>
+            </div>
+            <div data-nc="rg-run-state" style="margin-top:10px;font-size:11px;font-family:'JetBrains Mono',monospace;color:#4f5e75">no walk-forward run yet</div>
+          </div>
+
+          <div style="background:#070d17;border:1px solid #16233a;border-radius:10px;overflow:hidden;display:flex;flex-direction:column;flex:1;max-height:280px">
+            <div style="padding:10px 14px;font-size:10.5px;color:#7787a0;font-weight:600;letter-spacing:.06em;border-bottom:1px solid #14202f">RECENT RUNS</div>
+            <div class="nc-scroll" data-nc="rg-recent" style="overflow-y:auto;flex:1">
+              <div style="padding:16px 14px;text-align:center;color:#4f5e75;font-size:11.5px;font-style:italic">connecting to research…</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- most-recent result -->
+        <div style="flex:2 1 480px;min-width:340px;background:#070d17;border:1px solid #16233a;border-radius:10px;overflow:hidden;display:flex;flex-direction:column">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #14202f">
+            <span style="font-size:10.5px;color:#7787a0;font-weight:600;letter-spacing:.06em">MOST RECENT RESULT</span>
+            <span data-nc="rg-result-status" style="font-size:10.5px;font-family:'JetBrains Mono',monospace;color:#4f5e75">—</span>
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace">
+            <thead>
+              <tr style="font-size:9.5px;color:#5b6a82;text-align:right">
+                <th style="text-align:left;padding:8px 14px;font-weight:600;letter-spacing:.04em">FOLD</th>
+                <th style="padding:8px 8px;font-weight:600">BEST THR</th>
+                <th style="padding:8px 8px;font-weight:600">TEST PnL</th>
+                <th style="padding:8px 8px;font-weight:600">TEST FILLS</th>
+                <th style="padding:8px 14px;font-weight:600">SHARPE</th>
+              </tr>
+            </thead>
+            <tbody data-nc="rg-folds-body">
+              <tr><td colspan="5" style="padding:16px 14px;text-align:center;color:#4f5e75;font-size:11.5px;font-style:italic">no walk-forward run yet</td></tr>
+            </tbody>
+          </table>
+          <div style="display:flex;flex-wrap:wrap;gap:10px;padding:12px 14px;border-top:1px solid #14202f;margin-top:auto">
+            <div style="flex:1 1 100px;display:flex;flex-direction:column;gap:3px"><span style="font-size:9.5px;color:#6b7c95;letter-spacing:.05em">OOS FOLDS +</span><span data-nc="rg-oos-profitable" style="font-family:'JetBrains Mono',monospace;font-size:15px;color:#9fb0c8">—</span></div>
+            <div style="flex:1 1 100px;display:flex;flex-direction:column;gap:3px"><span style="font-size:9.5px;color:#6b7c95;letter-spacing:.05em">TOTAL OOS PnL</span><span data-nc="rg-total-oos" style="font-family:'JetBrains Mono',monospace;font-size:15px;color:#9fb0c8">—</span></div>
+            <div style="flex:1 1 80px;display:flex;flex-direction:column;gap:3px"><span style="font-size:9.5px;color:#6b7c95;letter-spacing:.05em">PBO</span><span data-nc="rg-pbo" style="font-family:'JetBrains Mono',monospace;font-size:15px;color:#9fb0c8">—</span></div>
+            <div style="flex:1 1 110px;display:flex;flex-direction:column;gap:3px"><span style="font-size:9.5px;color:#6b7c95;letter-spacing:.05em">DEFLATED SHARPE</span><span data-nc="rg-dsharpe" style="font-family:'JetBrains Mono',monospace;font-size:15px;color:#9fb0c8">—</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ (7) FEATURE STORE · MIMIR ============ -->
+    <section data-screen-label="Feature Store" style="background:#0a111e;border:1px solid #1b2b42;border-radius:12px;padding:16px 18px 18px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:8px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:13px;font-weight:700;letter-spacing:.06em;color:#cdd7e6">FEATURE STORE · MIMIR</span>
+          <span style="font-size:10px;color:#5b6a82;letter-spacing:.06em">mimir:8095 · point-in-time, no lookahead</span>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px">
+        <!-- freshness table -->
+        <div style="flex:1 1 380px;min-width:340px;background:#070d17;border:1px solid #16233a;border-radius:10px;overflow:hidden">
+          <div style="padding:10px 14px;font-size:10.5px;color:#7787a0;font-weight:600;letter-spacing:.06em;border-bottom:1px solid #14202f">SOURCE FRESHNESS · /api/sources</div>
+          <table style="width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace">
+            <thead>
+              <tr style="font-size:9.5px;color:#5b6a82;text-align:right">
+                <th style="text-align:left;padding:8px 14px;font-weight:600;letter-spacing:.04em">INSTRUMENT</th>
+                <th style="padding:8px 8px;font-weight:600">COUNT</th>
+                <th style="padding:8px 8px;font-weight:600">LAST EVENT</th>
+                <th style="padding:8px 14px;font-weight:600">INGEST LAG</th>
+              </tr>
+            </thead>
+            <tbody data-nc="fs-sources-body">
+              <tr><td colspan="4" style="padding:16px 14px;text-align:center;color:#4f5e75;font-size:11.5px;font-style:italic">connecting to mimir…</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- as-of lookup -->
+        <div style="flex:1 1 380px;min-width:340px;background:#070d17;border:1px solid #16233a;border-radius:10px;overflow:hidden;display:flex;flex-direction:column">
+          <div style="display:flex;align-items:flex-end;gap:10px;padding:10px 14px;border-bottom:1px solid #14202f;flex-wrap:wrap">
+            <label style="display:flex;flex-direction:column;gap:5px;flex:1 1 200px">
+              <span style="font-size:9.5px;color:#7787a0;font-weight:600;letter-spacing:.06em">AS-OF LOOKUP (event_time ≤ as_of AND ingest_time ≤ as_of)</span>
+              <input data-nc="fs-asof" type="datetime-local" step="1" style="background:#0c1726;border:1px solid #23344c;color:#dbe4f0;font-family:'JetBrains Mono',monospace;font-size:12px;padding:7px 9px;border-radius:7px">
+            </label>
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace">
+            <thead>
+              <tr style="font-size:9.5px;color:#5b6a82;text-align:right">
+                <th style="text-align:left;padding:8px 14px;font-weight:600;letter-spacing:.04em">INSTRUMENT</th>
+                <th style="padding:8px 8px;font-weight:600">EVENT TIME</th>
+                <th style="padding:8px 14px;font-weight:600">INGEST TIME</th>
+              </tr>
+            </thead>
+            <tbody data-nc="fs-features-body">
+              <tr><td colspan="3" style="padding:16px 14px;text-align:center;color:#4f5e75;font-size:11.5px;font-style:italic">connecting to mimir…</td></tr>
+            </tbody>
+          </table>
+          <div data-nc="fs-basis" style="padding:9px 14px;border-top:1px solid #14202f;margin-top:auto;font-size:10px;color:#5b6a82;font-family:'JetBrains Mono',monospace">—</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ (8) EXECUTION TCA · FORSETI ============ -->
+    <section data-screen-label="Execution TCA" style="background:#0a111e;border:1px solid #1b2b42;border-radius:12px;padding:16px 18px 18px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:8px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:13px;font-weight:700;letter-spacing:.06em;color:#cdd7e6">EXECUTION TCA · FORSETI</span>
+          <span style="font-size:10px;color:#5b6a82;letter-spacing:.06em">forseti:8096 · transaction-cost analysis</span>
+        </div>
+        <span data-nc="tca-basis" style="font-size:10.5px;color:#6b7c95;font-family:'JetBrains Mono',monospace">—</span>
+      </div>
+
+      <!-- overall tiles -->
+      <div data-nc="tca-tiles" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-top:10px">
+        <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
+          <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">AVG SLIPPAGE</span>
+          <span data-nc="tca-slippage" style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#9fb0c8;line-height:1">—</span>
+          <span style="font-size:9.5px;color:#4f5e75">bps vs arrival</span>
+        </div>
+        <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
+          <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">TOTAL FEES</span>
+          <span data-nc="tca-fees" style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#9fb0c8;line-height:1">—</span>
+          <span style="font-size:9.5px;color:#4f5e75">maker + taker</span>
+        </div>
+        <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
+          <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">MAKER / TAKER</span>
+          <span data-nc="tca-makertaker" style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#9fb0c8;line-height:1">—</span>
+          <span style="font-size:9.5px;color:#4f5e75">fill liquidity ratio</span>
+        </div>
+        <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
+          <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">IMPL. SHORTFALL</span>
+          <span data-nc="tca-shortfall" style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#9fb0c8;line-height:1">—</span>
+          <span style="font-size:9.5px;color:#4f5e75">total cost vs decision</span>
+        </div>
+      </div>
+
+      <!-- by-instrument table -->
+      <div style="background:#070d17;border:1px solid #16233a;border-radius:10px;overflow:hidden;margin-top:14px">
+        <div style="padding:10px 14px;font-size:10.5px;color:#7787a0;font-weight:600;letter-spacing:.06em;border-bottom:1px solid #14202f">BY INSTRUMENT</div>
+        <table style="width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace">
+          <thead>
+            <tr style="font-size:9.5px;color:#5b6a82;text-align:right">
+              <th style="text-align:left;padding:8px 14px;font-weight:600;letter-spacing:.04em">INSTRUMENT</th>
+              <th style="padding:8px 8px;font-weight:600">FILLS</th>
+              <th style="padding:8px 8px;font-weight:600">AVG SLIP (bps)</th>
+              <th style="padding:8px 8px;font-weight:600">FEES</th>
+              <th style="padding:8px 14px;font-weight:600">NOTIONAL</th>
+            </tr>
+          </thead>
+          <tbody data-nc="tca-byinstrument-body">
+            <tr><td colspan="5" style="padding:16px 14px;text-align:center;color:#4f5e75;font-size:11.5px;font-style:italic">connecting to forseti…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
     <!-- footer -->
     <div style="display:flex;align-items:center;justify-content:space-between;padding:2px 4px;margin-top:2px">
       <span style="font-size:10px;color:#3f4d62;font-family:'JetBrains Mono',monospace">muninn · huginn · sleipnir · odin · redpanda</span>

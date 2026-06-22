@@ -116,6 +116,9 @@ The quick ASCII view:
 | **Bragi** | Python | Trade explainability engine with human-readable decision logs |
 | **Huginn-AI** | Python | XGBoost ML signal predictor with online retraining |
 | **News Sentinel** | Python | LLM-powered crypto news sentiment via Ollama |
+| **Research Gateway** | Go 1.25 | Walk-forward + PBO + Deflated-Sharpe validation as a service, out of the live trading process |
+| **Mimir** | Python | Point-in-time (no-lookahead) feature store: event_time + ingest_time, as-of queries |
+| **Forseti** | Python | Execution TCA from real fills: slippage, maker/taker, fees, implementation shortfall |
 | **[muninn-py](https://github.com/lgreene03/muninn-py)** | Python | Research SDK: Polars DataFrames, IC analysis, Streamlit dashboard |
 
 ### Signal Layers (Obi-Bridge)
@@ -234,6 +237,9 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 | 8088 | Redpanda Console | http://localhost:8088 |
 | 8089 | News Sentinel | http://localhost:8089/api/sentiment |
 | 8092 | Huginn-AI ML | http://localhost:8092/api/model/status |
+| 8094 | Research Gateway | http://localhost:8094/api/research/runs |
+| 8095 | Mimir Feature Store | http://localhost:8095/api/features |
+| 8096 | Forseti TCA | http://localhost:8096/api/tca |
 | 9091 | Prometheus | http://localhost:9091 |
 | 9093 | Alertmanager | http://localhost:9093 |
 | 3001 | Grafana | http://localhost:3001 (admin/norse) |
@@ -265,6 +271,26 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 - Monte Carlo permutation test for strategy significance
 - Cross-asset correlation matrix
 - Per-instrument P&L breakdown with win rate and profit factor
+
+### Research Gateway (validation as a service)
+- `POST /api/research/runs` — submit a walk-forward + PBO + Deflated-Sharpe validation job
+- `GET /api/research/runs` — list submitted runs
+- `GET /api/research/runs/{id}` — fetch a run's status and verdict
+- Reuses `huginn/internal/research` — the same engine `cmd/walkforward` uses — so a gateway run and a CLI run share one code path, and it reproduces the honest result (OBI 0/4 OOS folds, PBO = 1.00, total OOS PnL −146.11)
+- **What it demonstrates:** validation rigor is a first-class, self-serve capability run out-of-process, not a one-off script
+
+### Mimir (point-in-time feature store)
+- `GET /api/features?as_of=<t>` — as-of query returning only data known at instant `t` (no lookahead)
+- `GET /api/features/history` — auditable record history with event_time and ingest_time
+- `GET /api/sources` — registered data sources
+- Stamps both `event_time` (when a fact was true) and `ingest_time` (when the platform learned it); onboarding a source replays the topic and stamps a fresh `ingest_time`
+- **What it demonstrates:** prevents the #1 backtest sin — lookahead bias — structurally at the data layer
+
+### Forseti (execution TCA)
+- `GET /api/tca` — aggregate transaction-cost analysis: realized slippage, maker/taker mix, fees, implementation shortfall
+- `GET /api/tca/fills` — the underlying per-fill records
+- Never fabricates a benchmark: with no arrival price (e.g. simulated/paper fills) it reports slippage as `null` rather than inventing a number
+- **What it demonstrates:** independently measures whether the `CostHurdle` gate actually works in execution — execution-quality rigor
 
 ### Observability
 - Prometheus scraping Huginn, Sleipnir, Odin, Huginn-AI, and Muninn metrics (15s interval)

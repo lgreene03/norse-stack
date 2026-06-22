@@ -14,10 +14,17 @@ Proxied paths (browser → console origin → backend):
     /api/portfolio     → odin    :8086/api/portfolio
     /api/equity        → odin    :8086/api/equity
     /api/breaker       → huginn  :8083/api/breaker/{trigger,reset}  (POST, HALT)
+    /api/research[/*]  → research:8094/api/research[/*]  (GET + POST run submission)
+    /api/features      → mimir   :8095/api/features
+    /api/features/history → mimir:8095/api/features/history
+    /api/sources       → mimir   :8095/api/sources
+    /api/tca           → forseti :8096/api/tca
+    /api/tca/fills     → forseti :8096/api/tca/fills
     /api/health/<svc>  → <svc>/healthz  (huginn|sleipnir|odin|muninn|redpanda-console)
 
 Backend hosts are 127.0.0.1 by default and overridable via env vars
-(HUGINN_HOST, ODIN_HOST, SLEIPNIR_HOST, MUNINN_HOST, REDPANDA_CONSOLE_HOST).
+(HUGINN_HOST, ODIN_HOST, SLEIPNIR_HOST, MUNINN_HOST, REDPANDA_CONSOLE_HOST,
+RESEARCH_HOST, MIMIR_HOST, FORSETI_HOST).
 
 A backend being down NEVER crashes the console: the proxy returns 502 with a
 JSON {"error": ...} body and short timeouts so a hung backend can't wedge the
@@ -47,9 +54,16 @@ ODIN_HOST = os.environ.get("ODIN_HOST", "127.0.0.1")
 SLEIPNIR_HOST = os.environ.get("SLEIPNIR_HOST", "127.0.0.1")
 MUNINN_HOST = os.environ.get("MUNINN_HOST", "127.0.0.1")
 REDPANDA_CONSOLE_HOST = os.environ.get("REDPANDA_CONSOLE_HOST", "127.0.0.1")
+# New services (in-compose: research/mimir/forseti; loopback default for dev).
+RESEARCH_HOST = os.environ.get("RESEARCH_HOST", "127.0.0.1")
+MIMIR_HOST = os.environ.get("MIMIR_HOST", "127.0.0.1")
+FORSETI_HOST = os.environ.get("FORSETI_HOST", "127.0.0.1")
 
 HUGINN = (HUGINN_HOST, 8083)
 ODIN = (ODIN_HOST, 8086)
+RESEARCH = (RESEARCH_HOST, 8094)
+MIMIR = (MIMIR_HOST, 8095)
+FORSETI = (FORSETI_HOST, 8096)
 
 # Health-check service map: svc name → (host, port). Matches the footer dots.
 HEALTH_TARGETS = {
@@ -68,6 +82,13 @@ GET_ROUTES = {
     "/api/validation": (HUGINN[0], HUGINN[1], "/api/validation"),
     "/api/portfolio": (ODIN[0], ODIN[1], "/api/portfolio"),
     "/api/equity": (ODIN[0], ODIN[1], "/api/equity"),
+    # Feature store / Mimir (point-in-time, no lookahead).
+    "/api/features": (MIMIR[0], MIMIR[1], "/api/features"),
+    "/api/features/history": (MIMIR[0], MIMIR[1], "/api/features/history"),
+    "/api/sources": (MIMIR[0], MIMIR[1], "/api/sources"),
+    # Execution TCA / Forseti.
+    "/api/tca": (FORSETI[0], FORSETI[1], "/api/tca"),
+    "/api/tca/fills": (FORSETI[0], FORSETI[1], "/api/tca/fills"),
 }
 
 
@@ -176,11 +197,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     # ---- request dispatch ----------------------------------------------
     def _try_proxy_get(self):
-        """Return True if the path was a proxied API route (and handled)."""
-        path = self.path.split("?", 1)[0]
+        """Return True if the path was a proxied API route (and handled).
+
+        The query string is forwarded verbatim so endpoints that key on it
+        (e.g. Mimir's ?as_of=/?instrument=, ?limit=) work through the proxy.
+        """
+        parts = self.path.split("?", 1)
+        path = parts[0]
+        qs = ("?" + parts[1]) if len(parts) == 2 and parts[1] else ""
         if path in GET_ROUTES:
             host, port, backend = GET_ROUTES[path]
-            self._proxy("GET", host, port, backend)
+            self._proxy("GET", host, port, backend + qs)
+            return True
+        # Research gateway: exact /api/research plus any /api/research/<...>
+        # subpath (e.g. /runs, /runs/{id}) → research:8094, query preserved.
+        if path == "/api/research" or path.startswith("/api/research/"):
+            self._proxy("GET", RESEARCH[0], RESEARCH[1], path + qs)
             return True
         if path.startswith("/api/health/"):
             svc = path[len("/api/health/"):].strip("/")
@@ -219,6 +251,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             headers["Content-Type"] = "application/json"
             self._proxy("POST", HUGINN[0], HUGINN[1], backend, body=b"", headers=headers)
             return
+        # Research run submission: forward method + body verbatim to research.
+        # POST /api/research/runs (and any /api/research[/*]) is proxied through
+        # so a walk-forward can be kicked off from the console.
+        if path == "/api/research" or path.startswith("/api/research/"):
+            qs = self.path.split("?", 1)
+            backend = path + (("?" + qs[1]) if len(qs) == 2 and qs[1] else "")
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            raw = self.rfile.read(length) if length else b""
+            headers = {"Content-Type": self.headers.get("Content-Type", "application/json")}
+            auth = self.headers.get("Authorization")
+            if auth:
+                headers["Authorization"] = auth
+            self._proxy("POST", RESEARCH[0], RESEARCH[1], backend, body=raw, headers=headers)
+            return
         self._send_json(404, {"error": "not found", "path": path})
 
     def end_headers(self):
@@ -248,6 +294,8 @@ def main():
         print("Norse Console serving %s" % DIRECTORY)
         print("  -> %s" % url)
         print("  proxy: huginn=%s:8083  odin=%s:8086" % (HUGINN_HOST, ODIN_HOST))
+        print("  proxy: research=%s:8094  mimir=%s:8095  forseti=%s:8096"
+              % (RESEARCH_HOST, MIMIR_HOST, FORSETI_HOST))
         print("  (Ctrl-C to stop)")
         try:
             httpd.serve_forever()

@@ -46,7 +46,13 @@ flowchart LR
     subgraph RESEARCH[IC research loop]
         R1[muninn-py: IC / forward returns]
     end
+    subgraph PLANES[Self-serve platform planes]
+        M1[Mimir: point-in-time<br/>feature store :8095]
+        RG[Research gateway:<br/>walk-forward/PBO/DSR as a service :8094]
+        FT[Forseti: execution<br/>TCA from real fills :8096]
+    end
 
+    M1 --> F1
     A1 --> F1
     A2 --> F1
     F1 --> S1 & S2 & S3
@@ -57,6 +63,8 @@ flowchart LR
     F1 -.pull features.-> R1
     R1 -.IC says signal is dead → drop it.-> ALPHA
     V1 -.0/4 OOS folds → reject.-> ALPHA
+    GATE -.same engine, self-serve.-> RG
+    E2 -.measured fills.-> FT
 ```
 
 ## Stage-by-stage: where the extension points are
@@ -153,6 +161,65 @@ applied to unseen test windows.
   scored the same with a smaller loss. Both were rejected. That rejection is the
   platform delivering its core value: it tells you a signal is dead so you stop
   tuning it and move on to better data or a different signal.
+
+## The platform planes: research, data, and execution-quality as services
+
+The seven stages above are the *pipeline*. Three standalone services turn the
+rigor of that pipeline into **self-serve platform planes** — capabilities a quant
+can hit over HTTP without touching the live trading process. Each one hardens a
+different axis of honesty.
+
+### Research gateway — the validation/research plane (`huginn` cmd/research, port 8094)
+
+Walk-forward + PBO + Deflated-Sharpe validation, run **as a service, out of the
+live trading process**. It reuses `huginn/internal/research` — the *same* engine
+[`cmd/walkforward`](https://github.com/lgreene03/huginn/blob/main/cmd/walkforward/main.go)
+uses — so a validation run from the gateway and a run from the CLI share one code
+path. Submit a job with `POST /api/research/runs`, poll it with
+`GET /api/research/runs/{id}`, list with `GET /api/research/runs`.
+
+- **The point:** validation rigor is a **first-class, self-serve capability**, not
+  a one-off script someone has to remember to run. And it reproduces the honest
+  result — OBI still scores **0/4 profitable OOS folds, PBO = 1.00, total OOS PnL
+  -146.11**. The gate's verdict is the same whether you reach it from the CLI or
+  the gateway, which is exactly the property you want.
+
+### Mimir — the point-in-time data plane (port 8095)
+
+A **point-in-time (no-lookahead) feature store.** Every record is stamped with
+both an `event_time` (when the fact was true in the market) and an `ingest_time`
+(when the platform learned it). An as-of query
+(`GET /api/features?as_of=<t>`) returns **only data that was known at instant `t`**
+— never a value the platform had not yet ingested. History is auditable via
+`GET /api/features/history`, and data sources are enumerated via
+`GET /api/sources`.
+
+- **The point:** this prevents the **#1 backtest sin — lookahead bias — at the
+  data layer**, structurally, instead of trusting every researcher to avoid it by
+  hand. It also makes "onboard a new data source" concrete: register a source,
+  let Mimir replay the topic and stamp a fresh `ingest_time`, and every downstream
+  as-of query inherits the no-lookahead guarantee for free. It is the data-plane
+  complement to the deterministic-replay parity the feature event already gives.
+
+### Forseti — the execution-quality plane (port 8096)
+
+**Transaction-cost analysis (TCA) computed from real fills:** realized slippage,
+maker vs. taker classification, fees, and implementation shortfall. Query the
+aggregate with `GET /api/tca` and the underlying fills with `GET /api/tca/fills`.
+Crucially, Forseti **never fabricates a benchmark** — when there is no arrival
+price to measure against (as on simulated/paper fills), it reports the slippage
+figure as **`null`** rather than inventing a flattering number.
+
+- **The point:** Forseti **measures whether the `CostHurdle` gate actually works**.
+  Stage 6 *claims* to reject net-negative trades; Forseti is the independent
+  meter that tells you, from realized fills, whether the cost story held up in
+  execution. That is execution-quality rigor — and the honest-null behavior is the
+  same discipline as the walk-forward gate: the platform refuses to print a number
+  it cannot actually back with data.
+
+Together these are the same "prove it, honestly" ethic as the validation gate,
+projected onto three planes: **research** (is the edge real?), **data** (is the
+input free of lookahead?), and **execution** (did the costs behave as modeled?).
 
 ## The loop, in one sentence
 

@@ -83,7 +83,48 @@
       { name: 'muninn', status: 'up' }, { name: 'huginn', status: 'up' },
       { name: 'sleipnir', status: 'degraded' }, { name: 'odin', status: 'up' },
       { name: 'redpanda', status: 'up' }
-    ]
+    ],
+    research: {
+      runs: [
+        { id: 'r-1042', status: 'done', strategy: 'obi', submittedAt: '2026-06-22T14:50:11Z' },
+        { id: 'r-1041', status: 'error', strategy: 'ou', submittedAt: '2026-06-22T14:31:02Z' },
+        { id: 'r-1040', status: 'done', strategy: 'composite', submittedAt: '2026-06-22T13:58:44Z' }
+      ],
+      latest: {
+        id: 'r-1042', status: 'done', strategy: 'obi', submittedAt: '2026-06-22T14:50:11Z',
+        result: {
+          folds: [
+            { fold: 1, best_threshold: 0.6, test_pnl: -57.8, test_fills: 41, sharpe: -0.42 },
+            { fold: 2, best_threshold: 0.7, test_pnl: -0.1, test_fills: 38, sharpe: -0.01 },
+            { fold: 3, best_threshold: 0.5, test_pnl: -20.8, test_fills: 52, sharpe: -0.18 },
+            { fold: 4, best_threshold: 0.8, test_pnl: -65.4, test_fills: 33, sharpe: -0.55 }
+          ],
+          oosFoldsProfitable: 0, totalOOSPnL: -146.1, pbo: 1.0, deflatedSharpe: null
+        }
+      }
+    },
+    features: {
+      asOf: '2026-06-22T14:56:00Z',
+      basis: 'point-in-time (event_time ≤ as_of AND ingest_time ≤ as_of)',
+      sources: [
+        { instrument: 'BTC-USDT', count: 18422, last_event_time: '2026-06-22T14:55:58Z', max_ingest_lag_secs: 3.2 },
+        { instrument: 'ETH-USDT', count: 17988, last_event_time: '2026-06-22T14:55:57Z', max_ingest_lag_secs: 4.1 },
+        { instrument: 'SOL-USDT', count: 16110, last_event_time: '2026-06-22T14:55:40Z', max_ingest_lag_secs: 88.0 }
+      ],
+      features: [
+        { instrument: 'BTC-USDT', event_time: '2026-06-22T14:55:58Z', ingest_time: '2026-06-22T14:56:01Z', feature: {} },
+        { instrument: 'ETH-USDT', event_time: '2026-06-22T14:55:57Z', ingest_time: '2026-06-22T14:56:01Z', feature: {} }
+      ]
+    },
+    tca: {
+      available: true, asOf: '2026-06-22T14:56:00Z',
+      basis: 'fees + reported-slippage only',
+      overall: { totalFills: 22, avgSlippageBps: null, totalFees: 0.21, makerTakerRatio: 0.64, totalImplementationShortfall: 0.0, avgFeeBps: 1.8, totalNotional: 412.6 },
+      byInstrument: {
+        'BTC-USDT': { totalFills: 9, avgSlippageBps: null, totalFees: 0.11, totalNotional: 230.4 },
+        'ETH-USDT': { totalFills: 13, avgSlippageBps: null, totalFees: 0.10, totalNotional: 182.2 }
+      }
+    }
   };
 
   // ====================================================================
@@ -103,6 +144,43 @@
   // than fabricate a number.
   var DASH = '—';
   function isNum(v) { return typeof v === 'number' && !isNaN(v); }
+
+  // Render an ISO8601 timestamp as a compact HH:MM:SS (falling back to the
+  // date+time, or the raw string) for the dense mono tables. Absent → dash.
+  function fmtTime(iso) {
+    if (!iso) return DASH;
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso);
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  }
+  // Human "Ns ago"-style lag rendering from a seconds value.
+  function fmtLag(secs) {
+    if (!isNum(secs)) return DASH;
+    if (secs < 90) return nf(secs, secs < 10 ? 1 : 0) + 's';
+    if (secs < 5400) return nf(secs / 60, 0) + 'm';
+    return nf(secs / 3600, 1) + 'h';
+  }
+
+  // as-of for the Mimir lookup: the datetime-local input when set, else now.
+  function currentAsOf() {
+    var el = document.querySelector('[data-nc="fs-asof"]');
+    if (el && el.value) {
+      // datetime-local has no timezone; treat as local and convert to ISO.
+      var d = new Date(el.value);
+      if (!isNaN(d.getTime())) return d.toISOString();
+    }
+    return new Date().toISOString();
+  }
+  // Set the as-of input default to "now" (local) once, if empty.
+  function ensureAsOfDefault() {
+    var el = document.querySelector('[data-nc="fs-asof"]');
+    if (!el || el.value) return;
+    var d = new Date();
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    el.value = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+               'T' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  }
 
   // ====================================================================
   // Small DOM / fetch utilities
@@ -166,7 +244,8 @@
       });
     }
 
-    var data = { live: null, alpha: null, portfolio: null, validation: null, services: null };
+    var data = { live: null, alpha: null, portfolio: null, validation: null, services: null,
+                 research: null, features: null, tca: null };
     var sources = new Set();
 
     // shared metrics text (huginn /api/metrics)
@@ -346,7 +425,52 @@
       if (anyUp) sources.add('health');
     }).catch(function () {});
 
-    return Promise.all([liveP, metricsApplyP, alphaP, portfolioP, validationP, equityP, servicesP])
+    // ---- research ← /api/research/runs (list) + newest run detail (research) -
+    var researchP = getJSON('/api/research/runs').then(function (list) {
+      var runs = Array.isArray(list) ? list : [];
+      data.research = { runs: runs, latest: null };
+      sources.add('research');
+      // Fetch the detail of the newest run (list is newest-first) so the
+      // result panel can show its folds. A latest run still "running" is fine —
+      // the result area renders its status honestly.
+      if (runs.length && runs[0] && runs[0].id != null) {
+        return getJSON('/api/research/runs/' + encodeURIComponent(runs[0].id))
+          .then(function (det) { data.research.latest = det; })
+          .catch(function () { /* keep list, no detail */ });
+      }
+    }).catch(function () { /* research stays null → empty state */ });
+
+    // ---- features / sources ← mimir ----
+    var asOf = currentAsOf();
+    var featSources = getJSON('/api/sources').then(function (j) {
+      data.features = data.features || {};
+      data.features.sources = (j && Array.isArray(j.sources)) ? j.sources : [];
+      sources.add('mimir');
+    }).catch(function () {});
+    var featAsOf = getJSON('/api/features?as_of=' + encodeURIComponent(asOf)).then(function (j) {
+      data.features = data.features || {};
+      data.features.asOf = (j && j.asOf) || asOf;
+      data.features.basis = (j && j.basis) || null;
+      data.features.features = (j && Array.isArray(j.features)) ? j.features : [];
+      sources.add('mimir');
+    }).catch(function () {});
+    var featuresP = Promise.all([featSources, featAsOf]);
+
+    // ---- tca ← forseti ----
+    var tcaP = getJSON('/api/tca').then(function (j) {
+      if (j && j.available === false) { data.tca = { available: false, basis: j.basis || null }; return; }
+      data.tca = {
+        available: true,
+        asOf: (j && j.asOf) || null,
+        basis: (j && j.basis) || null,
+        overall: (j && j.overall) || {},
+        byInstrument: (j && j.byInstrument) || {}
+      };
+      sources.add('forseti');
+    }).catch(function () { /* tca stays null → empty state */ });
+
+    return Promise.all([liveP, metricsApplyP, alphaP, portfolioP, validationP, equityP, servicesP,
+                        researchP, featuresP, tcaP])
       .then(function () { return { data: data, sources: sources, demo: false }; })
       .catch(function () { return { data: data, sources: sources, demo: false }; });
   }
@@ -741,6 +865,167 @@
     });
   }
 
+  // ---- (6) Research gateway --------------------------------------------
+  function runStatusColor(status) {
+    return status === 'done' ? C.green : (status === 'error' ? C.red : (status === 'running' ? C.blue : C.dim));
+  }
+  function applyResearch(R) {
+    var recent = $('rg-recent'), foldsBody = $('rg-folds-body'), rstatus = $('rg-result-status');
+    if (!R) {
+      if (recent) recent.innerHTML = emptyBlock('connecting to research…');
+      if (foldsBody) foldsBody.innerHTML = emptyRow(5, 'no walk-forward run yet');
+      setText('rg-result-status', DASH); setColor('rg-result-status', C.dim);
+      setText('rg-oos-profitable', DASH); setText('rg-total-oos', DASH);
+      setText('rg-pbo', DASH); setText('rg-dsharpe', DASH);
+      return;
+    }
+    // recent runs list
+    var runs = R.runs || [];
+    if (recent) {
+      recent.innerHTML = runs.length ? runs.map(function (r) {
+        var col = runStatusColor(r.status);
+        var when = fmtTime(r.submittedAt);
+        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 14px;border-top:1px solid #0f1a28;font-family:\'JetBrains Mono\',monospace;font-size:11px">' +
+          '<span style="display:flex;align-items:center;gap:8px">' +
+          '<span style="width:6px;height:6px;border-radius:50%;background:' + col + '"></span>' +
+          '<span style="color:#c4d0e0">' + esc(r.strategy || '—') + '</span>' +
+          '<span style="color:#4f5e75;font-size:10px">' + esc(when) + '</span></span>' +
+          '<span style="color:' + col + ';font-weight:600;letter-spacing:.04em">' + esc(String(r.status || '—').toUpperCase()) + '</span></div>';
+      }).join('') : emptyBlock('no walk-forward run yet');
+    }
+    // most recent result
+    var det = R.latest;
+    if (!det) {
+      if (foldsBody) foldsBody.innerHTML = emptyRow(5, 'no walk-forward run yet');
+      setText('rg-result-status', DASH); setColor('rg-result-status', C.dim);
+      setText('rg-oos-profitable', DASH); setText('rg-total-oos', DASH);
+      setText('rg-pbo', DASH); setText('rg-dsharpe', DASH);
+      return;
+    }
+    var sc = runStatusColor(det.status);
+    var statusLabel = String(det.status || '—').toUpperCase();
+    if (det.strategy) statusLabel += ' · ' + det.strategy;
+    setText('rg-result-status', statusLabel); setColor('rg-result-status', sc);
+    var res = det.result;
+    if (det.status === 'running') {
+      if (foldsBody) foldsBody.innerHTML = emptyRow(5, 'running walk-forward…');
+      setText('rg-oos-profitable', DASH); setText('rg-total-oos', DASH);
+      setText('rg-pbo', DASH); setText('rg-dsharpe', DASH);
+      return;
+    }
+    if (det.status === 'error') {
+      if (foldsBody) foldsBody.innerHTML = emptyRow(5, det.error ? ('error: ' + det.error) : 'run errored');
+      setText('rg-oos-profitable', DASH); setText('rg-total-oos', DASH);
+      setText('rg-pbo', DASH); setText('rg-dsharpe', DASH);
+      return;
+    }
+    if (!res) {
+      if (foldsBody) foldsBody.innerHTML = emptyRow(5, 'no result');
+      setText('rg-oos-profitable', DASH); setText('rg-total-oos', DASH);
+      setText('rg-pbo', DASH); setText('rg-dsharpe', DASH);
+      return;
+    }
+    var folds = Array.isArray(res.folds) ? res.folds : [];
+    if (foldsBody) {
+      foldsBody.innerHTML = folds.length ? folds.map(function (f) {
+        var pnl = f.test_pnl;
+        var pnlColor = isNum(pnl) ? (pnl >= 0 ? C.green : C.red) : C.dim;
+        var sh = f.sharpe;
+        var shColor = isNum(sh) ? (sh >= 0 ? C.green : C.red) : C.dim;
+        return '<tr style="border-top:1px solid #111d2c;font-size:12px">' +
+          '<td style="text-align:left;padding:9px 14px;color:#c4d0e0">#' + esc(String(f.fold)) + '</td>' +
+          '<td style="text-align:right;padding:9px 8px;color:#9fb0c8">' + (isNum(f.best_threshold) ? nf(f.best_threshold, 2) : DASH) + '</td>' +
+          '<td style="text-align:right;padding:9px 8px;color:' + pnlColor + '">' + (isNum(pnl) ? signedUsd(pnl, 1) : DASH) + '</td>' +
+          '<td style="text-align:right;padding:9px 8px;color:#7787a0">' + (isNum(f.test_fills) ? f.test_fills : DASH) + '</td>' +
+          '<td style="text-align:right;padding:9px 14px;color:' + shColor + ';font-weight:600">' + (isNum(sh) ? nf(sh, 2) : DASH) + '</td></tr>';
+      }).join('') : emptyRow(5, 'no folds');
+    }
+    var oosProf = DASH;
+    if (isNum(res.oosFoldsProfitable)) {
+      oosProf = res.oosFoldsProfitable + (folds.length ? '/' + folds.length : '');
+    } else if (res.oosFoldsProfitable != null) {
+      oosProf = res.oosFoldsProfitable;
+    }
+    setText('rg-oos-profitable', oosProf);
+    setText('rg-total-oos', isNum(res.totalOOSPnL) ? signedUsd(res.totalOOSPnL, 1) : DASH);
+    setText('rg-pbo', isNum(res.pbo) ? nf(res.pbo, 2) : 'n/a');
+    setText('rg-dsharpe', isNum(res.deflatedSharpe) ? nf(res.deflatedSharpe, 2) : 'n/a');
+  }
+
+  // ---- (7) Feature store · Mimir ---------------------------------------
+  function applyFeatures(F) {
+    var srcBody = $('fs-sources-body'), featBody = $('fs-features-body');
+    if (!F) {
+      if (srcBody) srcBody.innerHTML = emptyRow(4, 'connecting to mimir…');
+      if (featBody) featBody.innerHTML = emptyRow(3, 'connecting to mimir…');
+      setText('fs-basis', DASH);
+      return;
+    }
+    // freshness
+    var srcs = F.sources || [];
+    if (srcBody) {
+      srcBody.innerHTML = srcs.length ? srcs.map(function (s) {
+        var lag = s.max_ingest_lag_secs;
+        var lagColor = !isNum(lag) ? C.dim : (lag > 60 ? C.amber : C.mut);
+        return '<tr style="border-top:1px solid #111d2c;font-size:12px">' +
+          '<td style="text-align:left;padding:9px 14px;color:#dbe4f0">' + esc(s.instrument || DASH) + '</td>' +
+          '<td style="text-align:right;padding:9px 8px;color:#7787a0">' + (isNum(s.count) ? nf(s.count, 0) : DASH) + '</td>' +
+          '<td style="text-align:right;padding:9px 8px;color:#9fb0c8">' + fmtTime(s.last_event_time) + '</td>' +
+          '<td style="text-align:right;padding:9px 14px;color:' + lagColor + '">' + fmtLag(lag) + '</td></tr>';
+      }).join('') : emptyRow(4, 'no sources registered');
+    }
+    // as-of features (event_time vs ingest_time → no-lookahead visible)
+    var feats = F.features || [];
+    if (featBody) {
+      featBody.innerHTML = feats.length ? feats.map(function (r) {
+        return '<tr style="border-top:1px solid #111d2c;font-size:12px">' +
+          '<td style="text-align:left;padding:9px 14px;color:#dbe4f0">' + esc(r.instrument || DASH) + '</td>' +
+          '<td style="text-align:right;padding:9px 8px;color:#9fb0c8">' + fmtTime(r.event_time) + '</td>' +
+          '<td style="text-align:right;padding:9px 14px;color:#7787a0">' + fmtTime(r.ingest_time) + '</td></tr>';
+      }).join('') : emptyRow(3, 'no features as of this instant');
+    }
+    setText('fs-basis', F.basis || 'point-in-time (event_time ≤ as_of AND ingest_time ≤ as_of)');
+  }
+
+  // ---- (8) Execution TCA · Forseti -------------------------------------
+  function applyTCA(T) {
+    var tilesEls = ['tca-slippage', 'tca-fees', 'tca-makertaker', 'tca-shortfall'];
+    var byBody = $('tca-byinstrument-body');
+    if (!T || T.available === false) {
+      tilesEls.forEach(function (k) { setText(k, DASH); setColor(k, C.dim); });
+      if (byBody) byBody.innerHTML = emptyRow(5, T && T.available === false ? 'no fills yet' : 'connecting to forseti…');
+      setText('tca-basis', (T && T.basis) || (T && T.available === false ? 'fees + reported-slippage only' : DASH));
+      return;
+    }
+    var o = T.overall || {};
+    // avg slippage bps — null is an HONEST empty state (no arrival benchmark).
+    if (isNum(o.avgSlippageBps)) {
+      setText('tca-slippage', nf(o.avgSlippageBps, 2)); setColor('tca-slippage', o.avgSlippageBps <= 0 ? C.green : C.red);
+    } else {
+      setText('tca-slippage', 'n/a'); setColor('tca-slippage', C.dim);
+    }
+    setText('tca-fees', isNum(o.totalFees) ? usd(o.totalFees) : DASH); setColor('tca-fees', C.mut);
+    setText('tca-makertaker', isNum(o.makerTakerRatio) ? nf(o.makerTakerRatio, 2) : DASH); setColor('tca-makertaker', C.mut);
+    setText('tca-shortfall', isNum(o.totalImplementationShortfall) ? usd(o.totalImplementationShortfall) : DASH); setColor('tca-shortfall', C.mut);
+    // basis: when slippage is unavailable, state the honest basis explicitly.
+    setText('tca-basis', T.basis || (isNum(o.avgSlippageBps) ? '' : 'fees + reported-slippage only'));
+
+    var entries = Object.keys(T.byInstrument || {}).map(function (k) { return [k, T.byInstrument[k]]; });
+    if (byBody) {
+      byBody.innerHTML = entries.length ? entries.map(function (e) {
+        var k = e[0], m = e[1] || {};
+        var slip = m.avgSlippageBps;
+        var slipColor = !isNum(slip) ? C.dim : (slip <= 0 ? C.green : C.red);
+        return '<tr style="border-top:1px solid #111d2c;font-size:12px">' +
+          '<td style="text-align:left;padding:9px 14px;color:#dbe4f0">' + esc(k) + '</td>' +
+          '<td style="text-align:right;padding:9px 8px;color:#7787a0">' + (isNum(m.totalFills) ? m.totalFills : DASH) + '</td>' +
+          '<td style="text-align:right;padding:9px 8px;color:' + slipColor + '">' + (isNum(slip) ? nf(slip, 2) : 'n/a') + '</td>' +
+          '<td style="text-align:right;padding:9px 8px;color:#9fb0c8">' + (isNum(m.totalFees) ? usd(m.totalFees) : DASH) + '</td>' +
+          '<td style="text-align:right;padding:9px 14px;color:#9fb0c8">' + (isNum(m.totalNotional) ? usd(m.totalNotional, 0) : DASH) + '</td></tr>';
+      }).join('') : emptyRow(5, 'no fills yet');
+    }
+  }
+
   function applyFooter(sources, demo) {
     var badge = $('status-badge'), dotF = $('status-dot'), textF = $('status-text');
     if (!badge || !dotF || !textF) return;
@@ -775,6 +1060,9 @@
     applyAlpha(d.alpha);
     applyPortfolio(d.portfolio);
     applyValidation(d.validation);
+    applyResearch(d.research);
+    applyFeatures(d.features);
+    applyTCA(d.tca);
     applyServices(d.services);
     applyHaltVisual();
     applyFooter(res.sources, res.demo);
@@ -822,6 +1110,63 @@
   }
 
   // ====================================================================
+  // Research run submission — POST then poll the run by id until terminal.
+  // ====================================================================
+  var rgPolling = false;
+  function onResearchRun() {
+    if (rgPolling) return;
+    var sel = $('rg-strategy');
+    var strategy = sel ? sel.value : 'obi';
+    var btn = $('rg-run-btn');
+    if (DEMO_MODE) { setText('rg-run-state', 'demo mode — run disabled'); setColor('rg-run-state', C.amber); return; }
+    rgPolling = true;
+    if (btn) { btn.disabled = true; btn.style.opacity = '0.55'; btn.style.cursor = 'default'; }
+    setText('rg-run-state', 'submitting ' + strategy + ' walk-forward…'); setColor('rg-run-state', C.blue);
+    var body = JSON.stringify({ strategy: strategy, thresholds: [0.5, 0.6, 0.7, 0.8], folds: 4 });
+    fetchWithTimeout('/api/research/runs', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body
+    }).then(function (r) {
+      if (!r.ok) throw new Error('submit ' + r.status);
+      return r.json();
+    }).then(function (j) {
+      var id = j && j.id;
+      if (id == null) throw new Error('no run id');
+      setText('rg-run-state', 'running ' + strategy + ' · ' + id); setColor('rg-run-state', C.blue);
+      pollResearchRun(id, 0);
+    }).catch(function (e) {
+      setText('rg-run-state', 'run submit failed: ' + (e && e.message || 'error')); setColor('rg-run-state', C.red);
+      finishResearchRun();
+    });
+  }
+  function finishResearchRun() {
+    rgPolling = false;
+    var btn = $('rg-run-btn');
+    if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.style.cursor = 'pointer'; }
+  }
+  function pollResearchRun(id, attempt) {
+    if (attempt > 150) { // ~5 min ceiling at 2s
+      setText('rg-run-state', 'still running — see recent runs'); setColor('rg-run-state', C.amber);
+      finishResearchRun(); return;
+    }
+    getJSON('/api/research/runs/' + encodeURIComponent(id)).then(function (det) {
+      if (det && det.status === 'running') {
+        setTimeout(function () { pollResearchRun(id, attempt + 1); }, 2000);
+        return;
+      }
+      // terminal: render immediately and let the next poll refresh the list.
+      if (det && det.status === 'done') { setText('rg-run-state', 'done · ' + (det.strategy || '')); setColor('rg-run-state', C.green); }
+      else if (det && det.status === 'error') { setText('rg-run-state', 'error: ' + (det.error || 'run failed')); setColor('rg-run-state', C.red); }
+      else { setText('rg-run-state', String(det && det.status || 'finished')); setColor('rg-run-state', C.mut); }
+      // Patch the latest-result panel directly so the operator sees it without
+      // waiting for the next poll cadence.
+      try { applyResearch({ runs: [{ id: id, status: det.status, strategy: det.strategy, submittedAt: det.submittedAt }], latest: det }); } catch (e) {}
+      finishResearchRun();
+    }).catch(function () {
+      setTimeout(function () { pollResearchRun(id, attempt + 1); }, 2000);
+    });
+  }
+
+  // ====================================================================
   // Bootstrap
   // ====================================================================
   function tick() {
@@ -841,6 +1186,14 @@
     setText('pbo', DASH); setText('dsharpe', DASH);
     setText('oos-profitable', DASH); setText('total-oos', DASH);
     setText('equity-start', DASH); setText('equity-end', DASH);
+    // new panels
+    setText('rg-result-status', DASH);
+    setText('rg-oos-profitable', DASH); setText('rg-total-oos', DASH);
+    setText('rg-pbo', DASH); setText('rg-dsharpe', DASH);
+    setText('fs-basis', DASH);
+    setText('tca-slippage', DASH); setText('tca-fees', DASH);
+    setText('tca-makertaker', DASH); setText('tca-shortfall', DASH);
+    setText('tca-basis', DASH);
     var badge = $('status-text'); if (badge) badge.textContent = 'connecting…';
   }
 
@@ -848,6 +1201,13 @@
     if (!DEMO_MODE) neutralFirstPaint();
     var btn = $('halt-btn');
     if (btn) btn.addEventListener('click', onHaltClick);
+    // Research gateway: Run button kicks off a walk-forward + polls to terminal.
+    var rgBtn = $('rg-run-btn');
+    if (rgBtn) rgBtn.addEventListener('click', onResearchRun);
+    // Feature store: default the as-of input to "now" and re-query on change.
+    ensureAsOfDefault();
+    var asOfEl = $('fs-asof');
+    if (asOfEl) asOfEl.addEventListener('change', tick);
     tick();
     setInterval(tick, POLL_MS);
   }

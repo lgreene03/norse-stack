@@ -45,6 +45,9 @@ parent/
 | 8088  | Redpanda Console   |
 | 8089  | News Sentinel      |
 | 8092  | Huginn AI (ML)     |
+| 8094  | Research Gateway   |
+| 8095  | Mimir Feature Store|
+| 8096  | Forseti TCA        |
 | 9002  | MinIO API          |
 | 9003  | MinIO Console      |
 | 5437  | PostgreSQL (Muninn)|
@@ -85,3 +88,20 @@ parent/
 - `GET /api/sentiment` — per-instrument aggregate sentiment (BTC, ETH, SOL, XRP, DOGE) via Ollama
 - `GET /api/headlines` — recent headlines with individual sentiment scores
 - `GET /api/status` — service status, feed health, Ollama connectivity
+
+### Research Gateway (validation as a service, `huginn` cmd/research)
+- `POST /api/research/runs` — submit a walk-forward + PBO + Deflated-Sharpe validation job
+- `GET /api/research/runs` — list runs
+- `GET /api/research/runs/{id}` — run status and verdict
+- Reuses `huginn/internal/research` (same engine as `cmd/walkforward`), runs out of the live trading process; reproduces the honest result (OBI 0/4 OOS folds, PBO = 1.00, total OOS PnL −146.11)
+
+### Mimir (Point-in-Time Feature Store)
+- `GET /api/features?as_of=<t>` — as-of query returning only data known at instant `t` (no lookahead)
+- `GET /api/features/history` — record history with event_time + ingest_time
+- `GET /api/sources` — registered data sources
+- Stamps both event_time and ingest_time; prevents lookahead bias structurally at the data layer
+
+### Forseti (Execution TCA)
+- `GET /api/tca` — aggregate transaction-cost analysis: slippage, maker/taker, fees, implementation shortfall
+- `GET /api/tca/fills` — underlying per-fill records
+- Computed from real fills; reports `null` slippage when there is no arrival price (e.g. paper fills) rather than fabricating a benchmark
