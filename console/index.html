@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Norse Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:#06090f;font-family:'Public Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  ::selection{background:#5b8def40}
+  @keyframes ncpulse{0%,100%{opacity:1}50%{opacity:.35}}
+  @keyframes ncblink{0%,100%{opacity:.9}50%{opacity:.25}}
+  .nc-scroll::-webkit-scrollbar{width:8px;height:8px}
+  .nc-scroll::-webkit-scrollbar-thumb{background:#1f2c40;border-radius:4px}
+  .nc-scroll::-webkit-scrollbar-track{background:transparent}
+</style>
+</head>
+<body>
+<div style="min-height:100vh;background:radial-gradient(1200px 600px at 70% -10%,#0c1626 0%,#06090f 60%);color:#e6ecf5;padding:14px 16px 28px;font-size:14px">
+  <div style="max-width:1520px;margin:0 auto;display:flex;flex-direction:column;gap:14px">
+
+    <!-- ============ TOP STATUS STRIP ============ -->
+    <div style="background:#0a111e;border:1px solid #1b2b42;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.4);overflow:hidden">
+      <div style="display:flex;align-items:stretch;flex-wrap:wrap">
+        <!-- brand -->
+        <div style="display:flex;align-items:center;gap:12px;padding:16px 20px;border-right:1px solid #16243a;min-width:230px;flex:0 0 auto">
+          <div style="width:38px;height:38px;border-radius:9px;background:linear-gradient(150deg,#1b3a6b,#0e1d33);border:1px solid #2c4a78;display:flex;align-items:center;justify-content:center;position:relative">
+            <svg width="23" height="23" viewBox="0 0 24 24" fill="none"><path d="M3 16l5-6 4 3 5-8" stroke="#5b8def" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 5h3v3" stroke="#5b8def" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:2px">
+            <div style="font-size:15px;font-weight:700;letter-spacing:.2px;line-height:1">NORSE <span style="color:#5b8def">CONSOLE</span></div>
+            <div style="font-size:10.5px;color:#5b6a82;letter-spacing:.07em;font-weight:600">QUANT RESEARCH · v0.9</div>
+          </div>
+        </div>
+
+        <!-- metrics -->
+        <div style="display:flex;align-items:stretch;flex-wrap:wrap;flex:1 1 auto">
+          <div style="display:flex;flex-direction:column;gap:3px;padding:14px 22px;justify-content:center;min-width:170px">
+            <div style="font-size:10px;color:#6b7c95;letter-spacing:.08em;font-weight:600">TOTAL EQUITY</div>
+            <div data-nc="equity" style="font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:600;letter-spacing:-.5px;line-height:1">$1,000.30</div>
+            <div style="font-size:10.5px;color:#5b6a82;font-family:'JetBrains Mono',monospace">cash <span data-nc="cash">$935.80</span></div>
+          </div>
+          <div style="width:1px;background:#16243a;margin:14px 0"></div>
+          <div style="display:flex;flex-direction:column;gap:3px;padding:14px 20px;justify-content:center;min-width:140px">
+            <div style="font-size:10px;color:#6b7c95;letter-spacing:.08em;font-weight:600">TODAY NET PnL</div>
+            <div data-nc="net-pnl" style="font-family:'JetBrains Mono',monospace;font-size:21px;font-weight:600;line-height:1;color:#2bd4a4">+$0.52</div>
+            <div data-nc="net-pnl-pct" style="font-size:11px;font-family:'JetBrains Mono',monospace;color:#2bd4a4">+0.052%</div>
+          </div>
+          <div style="width:1px;background:#16243a;margin:14px 0"></div>
+          <div style="display:flex;flex-direction:column;gap:3px;padding:14px 18px;justify-content:center;min-width:78px">
+            <div style="font-size:10px;color:#6b7c95;letter-spacing:.08em;font-weight:600;white-space:nowrap">OPEN POS</div>
+            <div data-nc="open-pos" style="font-family:'JetBrains Mono',monospace;font-size:21px;font-weight:600;line-height:1">2</div>
+          </div>
+          <div style="width:1px;background:#16243a;margin:14px 0"></div>
+          <div style="display:flex;flex-direction:column;gap:3px;padding:14px 18px;justify-content:center;min-width:90px">
+            <div style="font-size:10px;color:#6b7c95;letter-spacing:.08em;font-weight:600;white-space:nowrap">FILLS TODAY</div>
+            <div data-nc="fills-today" style="font-family:'JetBrains Mono',monospace;font-size:21px;font-weight:600;line-height:1">22</div>
+          </div>
+          <div style="width:1px;background:#16243a;margin:14px 0"></div>
+          <div style="display:flex;flex-direction:column;gap:5px;padding:14px 18px;justify-content:center">
+            <div style="font-size:10px;color:#6b7c95;letter-spacing:.08em;font-weight:600">REGIME</div>
+            <div data-nc="regime-pill" style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:6px;background:#0e1a30;border:1px solid #23436e;width:fit-content">
+              <span data-nc="regime-dot" style="width:6px;height:6px;border-radius:50%;background:#5b8def"></span>
+              <span data-nc="regime" style="font-size:11.5px;font-weight:700;letter-spacing:.08em;color:#5b8def">TREND</span>
+            </div>
+          </div>
+          <div style="width:1px;background:#16243a;margin:14px 0"></div>
+          <!-- services -->
+          <div style="display:flex;flex-direction:column;gap:6px;padding:14px 18px;justify-content:center;min-width:200px">
+            <div style="font-size:10px;color:#6b7c95;letter-spacing:.08em;font-weight:600">SERVICES</div>
+            <div style="display:flex;gap:14px">
+              <div style="display:flex;flex-direction:column;align-items:center;gap:4px" title="muninn — up">
+                <span data-nc="svc-muninn" style="width:8px;height:8px;border-radius:50%;background:#2bd4a4;box-shadow:0 0 6px #2bd4a455;animation:ncblink 2.4s ease-in-out infinite"></span>
+                <span style="font-size:9.5px;color:#7787a0;font-weight:600;letter-spacing:.02em">muninn</span>
+              </div>
+              <div style="display:flex;flex-direction:column;align-items:center;gap:4px" title="huginn — up">
+                <span data-nc="svc-huginn" style="width:8px;height:8px;border-radius:50%;background:#2bd4a4;box-shadow:0 0 6px #2bd4a455;animation:ncblink 2.4s ease-in-out infinite"></span>
+                <span style="font-size:9.5px;color:#7787a0;font-weight:600;letter-spacing:.02em">huginn</span>
+              </div>
+              <div style="display:flex;flex-direction:column;align-items:center;gap:4px" title="sleipnir — degraded">
+                <span data-nc="svc-sleipnir" style="width:8px;height:8px;border-radius:50%;background:#f3b13c;box-shadow:0 0 6px #f3b13c55;animation:ncblink 2.4s ease-in-out infinite"></span>
+                <span style="font-size:9.5px;color:#7787a0;font-weight:600;letter-spacing:.02em">sleipnir</span>
+              </div>
+              <div style="display:flex;flex-direction:column;align-items:center;gap:4px" title="odin — up">
+                <span data-nc="svc-odin" style="width:8px;height:8px;border-radius:50%;background:#2bd4a4;box-shadow:0 0 6px #2bd4a455;animation:ncblink 2.4s ease-in-out infinite"></span>
+                <span style="font-size:9.5px;color:#7787a0;font-weight:600;letter-spacing:.02em">odin</span>
+              </div>
+              <div style="display:flex;flex-direction:column;align-items:center;gap:4px" title="redpanda — up">
+                <span data-nc="svc-redpanda" style="width:8px;height:8px;border-radius:50%;background:#2bd4a4;box-shadow:0 0 6px #2bd4a455;animation:ncblink 2.4s ease-in-out infinite"></span>
+                <span style="font-size:9.5px;color:#7787a0;font-weight:600;letter-spacing:.02em">redpanda</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- halt switch -->
+        <div style="display:flex;align-items:center;gap:14px;padding:14px 20px;border-left:1px solid #16243a;flex:0 0 auto">
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+            <div style="font-size:10px;color:#6b7c95;letter-spacing:.08em;font-weight:600">EXECUTION</div>
+            <div data-nc="halt-status" style="font-size:13px;font-weight:700;letter-spacing:.04em;color:#2bd4a4">RUNNING</div>
+          </div>
+          <button data-nc="halt-btn" style="cursor:pointer;border:1px solid #6e2a30;background:#1f0d10;color:#ff8b8b;font-family:'Public Sans',sans-serif;font-size:12.5px;font-weight:700;letter-spacing:.06em;padding:10px 16px;border-radius:8px;display:flex;align-items:center;gap:8px;transition:all .15s">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor"/><rect data-nc="halt-icon-second" x="14" y="5" width="4" height="14" rx="1" fill="currentColor"/></svg>
+            <span data-nc="halt-btn-label">HALT</span>
+          </button>
+        </div>
+      </div>
+      <!-- halted banner -->
+      <div data-nc="halt-banner" style="display:none;align-items:center;gap:10px;padding:8px 20px;background:#2a0f12;border-top:1px solid #5a1f25;color:#ff8b8b;font-size:12px;font-weight:600;letter-spacing:.02em">
+        <span style="width:7px;height:7px;border-radius:50%;background:#ff6262;animation:ncpulse 1s infinite"></span>
+        Trading halted — kill-switch engaged. Live order routing suspended; monitoring continues read-only.
+      </div>
+    </div>
+
+    <!-- ============ (2) LIVE TRADING ============ -->
+    <section data-screen-label="Live Trading" style="background:#0a111e;border:1px solid #1b2b42;border-radius:12px;padding:16px 18px 18px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:13px;font-weight:700;letter-spacing:.06em;color:#cdd7e6">LIVE TRADING</span>
+          <span style="font-size:10px;color:#5b6a82;letter-spacing:.06em">huginn · /api/snapshot</span>
+        </div>
+        <span style="font-size:10.5px;color:#6b7c95;font-family:'JetBrains Mono',monospace">cost-suppressed signals: <span data-nc="suppressed" style="color:#f3b13c">10</span></span>
+      </div>
+
+      <div style="display:flex;gap:16px;flex-wrap:wrap">
+        <!-- equity curve -->
+        <div style="flex:3 1 420px;min-width:340px;background:#070d17;border:1px solid #16233a;border-radius:10px;padding:14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <span style="font-size:10.5px;color:#7787a0;font-weight:600;letter-spacing:.06em">EQUITY CURVE · INTRADAY ($)</span>
+            <span style="font-size:11px;font-family:'JetBrains Mono',monospace;color:#9fb0c8"><span data-nc="equity-start">$998.40</span> → <span data-nc="equity-end" style="color:#e6ecf5">$1,000.30</span></span>
+          </div>
+          <svg data-nc="equity-svg" viewBox="0 0 680 168" preserveAspectRatio="none" style="width:100%;height:170px;display:block">
+            <defs>
+              <linearGradient id="eqfill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#5b8def" stop-opacity="0.28"/>
+                <stop offset="100%" stop-color="#5b8def" stop-opacity="0"/>
+              </linearGradient>
+            </defs>
+            <line x1="0" y1="42" x2="680" y2="42" stroke="#13203200" /><line x1="0" y1="84" x2="680" y2="84" stroke="#142136"/><line x1="0" y1="126" x2="680" y2="126" stroke="#0f1a2b"/>
+            <path data-nc="equity-area" d="M 2.0 140.6 L 21.3 150.0 L 40.6 131.2 L 59.9 117.2 L 79.3 126.6 L 98.6 107.8 L 117.9 112.5 L 137.2 93.7 L 156.5 103.1 L 175.8 84.3 L 195.1 70.3 L 214.5 79.7 L 233.8 60.9 L 253.1 70.3 L 272.4 51.5 L 291.7 37.4 L 311.0 56.2 L 330.3 42.1 L 349.7 28.1 L 369.0 46.8 L 388.3 60.9 L 407.6 42.1 L 426.9 23.4 L 446.2 14.0 L 465.5 32.8 L 484.9 46.8 L 504.2 37.4 L 523.5 23.4 L 542.8 42.1 L 562.1 56.2 L 581.4 65.6 L 600.7 46.8 L 620.1 32.8 L 639.4 42.1 L 658.7 51.5 L 678.0 51.5 L 678.0 168 L 2.0 168 Z" fill="url(#eqfill)"/>
+            <path data-nc="equity-path" d="M 2.0 140.6 L 21.3 150.0 L 40.6 131.2 L 59.9 117.2 L 79.3 126.6 L 98.6 107.8 L 117.9 112.5 L 137.2 93.7 L 156.5 103.1 L 175.8 84.3 L 195.1 70.3 L 214.5 79.7 L 233.8 60.9 L 253.1 70.3 L 272.4 51.5 L 291.7 37.4 L 311.0 56.2 L 330.3 42.1 L 349.7 28.1 L 369.0 46.8 L 388.3 60.9 L 407.6 42.1 L 426.9 23.4 L 446.2 14.0 L 465.5 32.8 L 484.9 46.8 L 504.2 37.4 L 523.5 23.4 L 542.8 42.1 L 562.1 56.2 L 581.4 65.6 L 600.7 46.8 L 620.1 32.8 L 639.4 42.1 L 658.7 51.5 L 678.0 51.5" fill="none" stroke="#6e9bf7" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+            <circle data-nc="equity-dot" cx="678.0" cy="51.5" r="3.4" fill="#e6ecf5" stroke="#6e9bf7" stroke-width="1.5"/>
+          </svg>
+          <div style="display:flex;justify-content:space-between;font-size:9.5px;color:#4f5e75;font-family:'JetBrains Mono',monospace;margin-top:2px">
+            <span>09:30</span><span>11:00</span><span>12:30</span><span>14:00</span><span>now</span>
+          </div>
+        </div>
+
+        <!-- stat tiles -->
+        <div data-nc="stat-tiles" style="flex:1 1 240px;min-width:230px;display:grid;grid-template-columns:1fr 1fr;gap:10px;align-content:start">
+          <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
+            <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">REALIZED PnL</span>
+            <span style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#2bd4a4;line-height:1">+$0.58</span>
+            <span style="font-size:9.5px;color:#4f5e75">booked today</span>
+          </div>
+          <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
+            <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">UNREALIZED PnL</span>
+            <span style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#ff6262;line-height:1">-$0.06</span>
+            <span style="font-size:9.5px;color:#4f5e75">open marks</span>
+          </div>
+          <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
+            <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">FEES</span>
+            <span style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#9fb0c8;line-height:1">$0.21</span>
+            <span style="font-size:9.5px;color:#4f5e75">taker + maker</span>
+          </div>
+          <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
+            <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">NET PnL</span>
+            <span style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#2bd4a4;line-height:1">+$0.52</span>
+            <span style="font-size:9.5px;color:#4f5e75">realized + unreal</span>
+          </div>
+          <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
+            <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">SUPPRESSED</span>
+            <span style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#f3b13c;line-height:1">10</span>
+            <span style="font-size:9.5px;color:#4f5e75">cost-gated signals</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:14px">
+        <!-- positions -->
+        <div style="flex:3 1 420px;min-width:340px;background:#070d17;border:1px solid #16233a;border-radius:10px;overflow:hidden">
+          <div style="padding:10px 14px;font-size:10.5px;color:#7787a0;font-weight:600;letter-spacing:.06em;border-bottom:1px solid #14202f">OPEN POSITIONS</div>
+          <table style="width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace">
+            <thead>
+              <tr style="font-size:9.5px;color:#5b6a82;text-align:right">
+                <th style="text-align:left;padding:8px 14px;font-weight:600;letter-spacing:.04em">INSTRUMENT</th>
+                <th style="padding:8px 10px;font-weight:600">QTY (SIGNED)</th>
+                <th style="padding:8px 10px;font-weight:600">AVG COST</th>
+                <th style="padding:8px 10px;font-weight:600">MARK</th>
+                <th style="padding:8px 14px;font-weight:600">UNREAL PnL</th>
+              </tr>
+            </thead>
+            <tbody data-nc="positions-body">
+              <tr style="border-top:1px solid #111d2c;font-size:12.5px">
+                <td style="text-align:left;padding:10px 14px">
+                  <span style="display:inline-flex;align-items:center;gap:8px">
+                    <span style="font-size:9px;font-weight:700;letter-spacing:.05em;color:#2bd4a4;background:#0c1f1a;padding:2px 5px;border-radius:4px;font-family:'Public Sans',sans-serif">LONG</span>
+                    <span style="color:#dbe4f0;font-weight:500">BTC-USDT</span>
+                  </span>
+                </td>
+                <td style="text-align:right;padding:10px 10px;color:#2bd4a4">+0.0010</td>
+                <td style="text-align:right;padding:10px 10px;color:#9fb0c8">64,197.40</td>
+                <td style="text-align:right;padding:10px 10px;color:#dbe4f0">64,210.00</td>
+                <td style="text-align:right;padding:10px 14px;color:#2bd4a4;font-weight:600">+$0.013</td>
+              </tr>
+              <tr style="border-top:1px solid #111d2c;font-size:12.5px">
+                <td style="text-align:left;padding:10px 14px">
+                  <span style="display:inline-flex;align-items:center;gap:8px">
+                    <span style="font-size:9px;font-weight:700;letter-spacing:.05em;color:#ff6262;background:#1f0d10;padding:2px 5px;border-radius:4px;font-family:'Public Sans',sans-serif">SHORT</span>
+                    <span style="color:#dbe4f0;font-weight:500">ETH-USDT</span>
+                  </span>
+                </td>
+                <td style="text-align:right;padding:10px 10px;color:#ff6262">-0.0020</td>
+                <td style="text-align:right;padding:10px 10px;color:#9fb0c8">1,727.10</td>
+                <td style="text-align:right;padding:10px 10px;color:#dbe4f0">1,723.00</td>
+                <td style="text-align:right;padding:10px 14px;color:#2bd4a4;font-weight:600">+$0.008</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- fills feed -->
+        <div style="flex:1 1 240px;min-width:230px;background:#070d17;border:1px solid #16233a;border-radius:10px;display:flex;flex-direction:column;max-height:268px">
+          <div style="padding:10px 14px;font-size:10.5px;color:#7787a0;font-weight:600;letter-spacing:.06em;border-bottom:1px solid #14202f;display:flex;justify-content:space-between"><span>RECENT FILLS</span><span style="color:#4f5e75">live</span></div>
+          <div class="nc-scroll" data-nc="fills-feed" style="overflow-y:auto;flex:1">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 14px;border-top:1px solid #0f1a28;font-family:'JetBrains Mono',monospace;font-size:11.5px">
+              <span style="display:flex;align-items:center;gap:8px">
+                <span style="color:#5b6a82;font-size:10px">14:56:09</span>
+                <span style="font-size:8.5px;font-weight:700;letter-spacing:.04em;color:#ff6262;background:#1f0d10;padding:2px 5px;border-radius:4px;font-family:'Public Sans',sans-serif">SELL</span>
+                <span style="color:#c4d0e0">ETH-USDT</span>
+              </span>
+              <span style="display:flex;gap:10px"><span style="color:#7787a0">0.0010</span><span style="color:#dbe4f0">1,727.07</span></span>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 14px;border-top:1px solid #0f1a28;font-family:'JetBrains Mono',monospace;font-size:11.5px">
+              <span style="display:flex;align-items:center;gap:8px">
+                <span style="color:#5b6a82;font-size:10px">14:55:52</span>
+                <span style="font-size:8.5px;font-weight:700;letter-spacing:.04em;color:#2bd4a4;background:#0c1f1a;padding:2px 5px;border-radius:4px;font-family:'Public Sans',sans-serif">BUY</span>
+                <span style="color:#c4d0e0">BTC-USDT</span>
+              </span>
+              <span style="display:flex;gap:10px"><span style="color:#7787a0">0.0010</span><span style="color:#dbe4f0">64,197.40</span></span>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 14px;border-top:1px solid #0f1a28;font-family:'JetBrains Mono',monospace;font-size:11.5px">
+              <span style="display:flex;align-items:center;gap:8px">
+                <span style="color:#5b6a82;font-size:10px">14:55:31</span>
+                <span style="font-size:8.5px;font-weight:700;letter-spacing:.04em;color:#2bd4a4;background:#0c1f1a;padding:2px 5px;border-radius:4px;font-family:'Public Sans',sans-serif">BUY</span>
+                <span style="color:#c4d0e0">SOL-USDT</span>
+              </span>
+              <span style="display:flex;gap:10px"><span style="color:#7787a0">0.0400</span><span style="color:#dbe4f0">142.18</span></span>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 14px;border-top:1px solid #0f1a28;font-family:'JetBrains Mono',monospace;font-size:11.5px">
+              <span style="display:flex;align-items:center;gap:8px">
+                <span style="color:#5b6a82;font-size:10px">14:54:48</span>
+                <span style="font-size:8.5px;font-weight:700;letter-spacing:.04em;color:#2bd4a4;background:#0c1f1a;padding:2px 5px;border-radius:4px;font-family:'Public Sans',sans-serif">BUY</span>
+                <span style="color:#c4d0e0">ETH-USDT</span>
+              </span>
+              <span style="display:flex;gap:10px"><span style="color:#7787a0">0.0020</span><span style="color:#dbe4f0">1,726.40</span></span>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 14px;border-top:1px solid #0f1a28;font-family:'JetBrains Mono',monospace;font-size:11.5px">
+              <span style="display:flex;align-items:center;gap:8px">
+                <span style="color:#5b6a82;font-size:10px">14:54:12</span>
+                <span style="font-size:8.5px;font-weight:700;letter-spacing:.04em;color:#ff6262;background:#1f0d10;padding:2px 5px;border-radius:4px;font-family:'Public Sans',sans-serif">SELL</span>
+                <span style="color:#c4d0e0">BTC-USDT</span>
+              </span>
+              <span style="display:flex;gap:10px"><span style="color:#7787a0">0.0005</span><span style="color:#dbe4f0">64,255.10</span></span>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 14px;border-top:1px solid #0f1a28;font-family:'JetBrains Mono',monospace;font-size:11.5px">
+              <span style="display:flex;align-items:center;gap:8px">
+                <span style="color:#5b6a82;font-size:10px">14:53:40</span>
+                <span style="font-size:8.5px;font-weight:700;letter-spacing:.04em;color:#ff6262;background:#1f0d10;padding:2px 5px;border-radius:4px;font-family:'Public Sans',sans-serif">SELL</span>
+                <span style="color:#c4d0e0">XRP-USDT</span>
+              </span>
+              <span style="display:flex;gap:10px"><span style="color:#7787a0">2.00</span><span style="color:#dbe4f0">0.5123</span></span>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 14px;border-top:1px solid #0f1a28;font-family:'JetBrains Mono',monospace;font-size:11.5px">
+              <span style="display:flex;align-items:center;gap:8px">
+                <span style="color:#5b6a82;font-size:10px">14:53:02</span>
+                <span style="font-size:8.5px;font-weight:700;letter-spacing:.04em;color:#2bd4a4;background:#0c1f1a;padding:2px 5px;border-radius:4px;font-family:'Public Sans',sans-serif">BUY</span>
+                <span style="color:#c4d0e0">DOGE-USDT</span>
+              </span>
+              <span style="display:flex;gap:10px"><span style="color:#7787a0">30.00</span><span style="color:#dbe4f0">0.1287</span></span>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 14px;border-top:1px solid #0f1a28;font-family:'JetBrains Mono',monospace;font-size:11.5px">
+              <span style="display:flex;align-items:center;gap:8px">
+                <span style="color:#5b6a82;font-size:10px">14:52:19</span>
+                <span style="font-size:8.5px;font-weight:700;letter-spacing:.04em;color:#2bd4a4;background:#0c1f1a;padding:2px 5px;border-radius:4px;font-family:'Public Sans',sans-serif">BUY</span>
+                <span style="color:#c4d0e0">BTC-USDT</span>
+              </span>
+              <span style="display:flex;gap:10px"><span style="color:#7787a0">0.0010</span><span style="color:#dbe4f0">64,180.90</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ (3) ALPHA PLATFORM ============ -->
+    <section data-screen-label="Alpha Platform" style="background:#0a111e;border:1px solid #243a5e;border-radius:12px;padding:16px 18px 18px;box-shadow:0 0 0 1px #10203608,0 8px 30px -12px #0a1f4480">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:13px;font-weight:700;letter-spacing:.06em;color:#cdd7e6">ALPHA FACTORY</span>
+          <span style="font-size:10px;color:#5b6a82;letter-spacing:.06em">huginn · /metrics · blend: <span data-nc="blend">weighted-sum</span></span>
+        </div>
+        <span style="font-size:10.5px;color:#6b7c95"><span data-nc="alpha-count">5</span> registered alphas</span>
+      </div>
+
+      <div style="display:flex;gap:18px;flex-wrap:wrap">
+        <!-- composite gauge -->
+        <div style="flex:0 0 300px;min-width:280px;background:#070d17;border:1px solid #1a2c47;border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;align-items:center">
+          <div style="font-size:10.5px;color:#7787a0;font-weight:600;letter-spacing:.06em;align-self:flex-start">COMPOSITE SCORE</div>
+          <svg data-nc="gauge-svg" viewBox="0 0 280 168" style="width:100%;max-width:280px;height:auto;margin-top:4px">
+            <path data-nc="gauge-track" d="M 250.0 132.0 A 110 110 0 0 0 30.0 132.0" fill="none" stroke="#15263d" stroke-width="16" stroke-linecap="round"/>
+            <path data-nc="gauge-band-neg" d="M 90.1 34.0 A 110 110 0 0 0 30.0 132.0" fill="none" stroke="#3a1f24" stroke-width="16"/>
+            <path data-nc="gauge-band-pos" d="M 250.0 132.0 A 110 110 0 0 0 189.9 34.0" fill="none" stroke="#13322a" stroke-width="16"/>
+            <path data-nc="gauge-active" d="M 207.4 45.1 A 110 110 0 0 0 140.0 22.0" fill="none" stroke="#2bd4a4" stroke-width="16" stroke-linecap="round"/>
+            <line data-nc="gauge-tick-a" x1="185.4" y1="42.9" x2="193.6" y2="26.9" stroke="#e6ecf5" stroke-width="2"/>
+            <line data-nc="gauge-tick-b" x1="94.6" y1="42.9" x2="86.4" y2="26.9" stroke="#e6ecf5" stroke-width="2"/>
+            <line data-nc="gauge-needle" x1="140" y1="132" x2="197.6" y2="57.7" stroke="#2bd4a4" stroke-width="3" stroke-linecap="round"/>
+            <circle data-nc="gauge-hub" cx="140" cy="132" r="5" fill="#2bd4a4"/>
+            <text x="20" y="150" fill="#4f5e75" font-size="11" font-family="JetBrains Mono">-1</text>
+            <text x="248" y="150" fill="#4f5e75" font-size="11" font-family="JetBrains Mono">+1</text>
+          </svg>
+          <div data-nc="composite-score" style="font-family:'JetBrains Mono',monospace;font-size:34px;font-weight:600;color:#2bd4a4;line-height:1;margin-top:-6px">+0.42</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+            <span style="font-size:11px;color:#7787a0">threshold ±<span data-nc="threshold">0.30</span></span>
+            <span data-nc="comp-implies" style="font-size:11px;font-weight:700;letter-spacing:.05em;color:#2bd4a4;background:#0c1f1a;padding:3px 9px;border-radius:5px">IMPLIES LONG</span>
+          </div>
+        </div>
+
+        <!-- alpha list -->
+        <div style="flex:1 1 460px;min-width:340px;background:#070d17;border:1px solid #16233a;border-radius:10px;overflow:hidden">
+          <div style="display:flex;padding:9px 14px;font-size:9.5px;color:#5b6a82;font-weight:600;letter-spacing:.05em;border-bottom:1px solid #14202f">
+            <span style="flex:1.3">ALPHA</span>
+            <span style="width:54px;text-align:right">WEIGHT</span>
+            <span style="flex:1.6;text-align:center">CONTRIBUTION −1 ·· +1</span>
+            <span style="width:62px;text-align:right">CONF</span>
+            <span style="width:66px;text-align:right">IC TRAIL</span>
+          </div>
+          <div data-nc="alpha-rows">
+            <div style="display:flex;align-items:center;padding:10px 14px;border-top:1px solid #111d2c">
+              <span style="flex:1.3;display:flex;flex-direction:column;gap:1px">
+                <span style="font-size:12.5px;color:#dbe4f0;font-weight:500;font-family:'JetBrains Mono',monospace">imbalance</span>
+              </span>
+              <span style="width:54px;text-align:right;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#9fb0c8">0.30</span>
+              <span style="flex:1.6;padding:0 14px">
+                <span style="position:relative;display:block;height:14px;background:#0c1726;border-radius:3px">
+                  <span style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:#2b3c55"></span>
+                  <span style="position:absolute;top:2px;bottom:2px;left:50%;width:25.5%;background:#2bd4a4;border-radius:2px"></span>
+                </span>
+                <span style="display:block;text-align:center;font-size:10px;font-family:'JetBrains Mono',monospace;color:#2bd4a4;margin-top:3px">+0.51</span>
+              </span>
+              <span style="width:62px;text-align:right">
+                <span style="display:inline-block;width:38px;height:5px;background:#0c1726;border-radius:3px;vertical-align:middle;position:relative;overflow:hidden"><span style="position:absolute;left:0;top:0;bottom:0;width:80%;background:#5b8def"></span></span>
+                <span style="font-size:10.5px;font-family:'JetBrains Mono',monospace;color:#9fb0c8;margin-left:5px">80%</span>
+              </span>
+              <span style="width:66px;text-align:right">
+                <svg viewBox="0 0 60 18" width="60" height="18" preserveAspectRatio="none" style="vertical-align:middle"><line x1="0" y1="9" x2="60" y2="9" stroke="#1a283c" stroke-width="1"/><path d="M 0.0 4.8 L 15.0 13.2 L 30.0 2.0 L 45.0 10.4 L 60.0 16.0" fill="none" stroke="#ff6262" stroke-width="1.4" stroke-linejoin="round"/></svg>
+              </span>
+            </div>
+            <div style="display:flex;align-items:center;padding:10px 14px;border-top:1px solid #111d2c">
+              <span style="flex:1.3;display:flex;flex-direction:column;gap:1px">
+                <span style="font-size:12.5px;color:#dbe4f0;font-weight:500;font-family:'JetBrains Mono',monospace">momentum</span>
+              </span>
+              <span style="width:54px;text-align:right;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#9fb0c8">0.25</span>
+              <span style="flex:1.6;padding:0 14px">
+                <span style="position:relative;display:block;height:14px;background:#0c1726;border-radius:3px">
+                  <span style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:#2b3c55"></span>
+                  <span style="position:absolute;top:2px;bottom:2px;left:44%;width:6%;background:#ff6262;border-radius:2px"></span>
+                </span>
+                <span style="display:block;text-align:center;font-size:10px;font-family:'JetBrains Mono',monospace;color:#ff6262;margin-top:3px">-0.12</span>
+              </span>
+              <span style="width:62px;text-align:right">
+                <span style="display:inline-block;width:38px;height:5px;background:#0c1726;border-radius:3px;vertical-align:middle;position:relative;overflow:hidden"><span style="position:absolute;left:0;top:0;bottom:0;width:60%;background:#f3b13c"></span></span>
+                <span style="font-size:10.5px;font-family:'JetBrains Mono',monospace;color:#9fb0c8;margin-left:5px">60%</span>
+              </span>
+              <span style="width:66px;text-align:right">
+                <svg viewBox="0 0 60 18" width="60" height="18" preserveAspectRatio="none" style="vertical-align:middle"><line x1="0" y1="9" x2="60" y2="9" stroke="#1a283c" stroke-width="1"/><path d="M 0.0 9.0 L 15.0 5.5 L 30.0 12.5 L 45.0 2.0 L 60.0 16.0" fill="none" stroke="#ff6262" stroke-width="1.4" stroke-linejoin="round"/></svg>
+              </span>
+            </div>
+            <div style="display:flex;align-items:center;padding:10px 14px;border-top:1px solid #111d2c">
+              <span style="flex:1.3;display:flex;flex-direction:column;gap:1px">
+                <span style="font-size:12.5px;color:#dbe4f0;font-weight:500;font-family:'JetBrains Mono',monospace">mean_reversion</span>
+              </span>
+              <span style="width:54px;text-align:right;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#9fb0c8">0.20</span>
+              <span style="flex:1.6;padding:0 14px">
+                <span style="position:relative;display:block;height:14px;background:#0c1726;border-radius:3px">
+                  <span style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:#2b3c55"></span>
+                  <span style="position:absolute;top:2px;bottom:2px;left:50%;width:16.5%;background:#2bd4a4;border-radius:2px"></span>
+                </span>
+                <span style="display:block;text-align:center;font-size:10px;font-family:'JetBrains Mono',monospace;color:#2bd4a4;margin-top:3px">+0.33</span>
+              </span>
+              <span style="width:62px;text-align:right">
+                <span style="display:inline-block;width:38px;height:5px;background:#0c1726;border-radius:3px;vertical-align:middle;position:relative;overflow:hidden"><span style="position:absolute;left:0;top:0;bottom:0;width:70%;background:#5b8def"></span></span>
+                <span style="font-size:10.5px;font-family:'JetBrains Mono',monospace;color:#9fb0c8;margin-left:5px">70%</span>
+              </span>
+              <span style="width:66px;text-align:right">
+                <svg viewBox="0 0 60 18" width="60" height="18" preserveAspectRatio="none" style="vertical-align:middle"><line x1="0" y1="9" x2="60" y2="9" stroke="#1a283c" stroke-width="1"/><path d="M 0.0 10.0 L 15.0 6.0 L 30.0 14.0 L 45.0 2.0 L 60.0 6.0" fill="none" stroke="#2bd4a4" stroke-width="1.4" stroke-linejoin="round"/></svg>
+              </span>
+            </div>
+            <div style="display:flex;align-items:center;padding:10px 14px;border-top:1px solid #111d2c">
+              <span style="flex:1.3;display:flex;flex-direction:column;gap:1px">
+                <span style="font-size:12.5px;color:#dbe4f0;font-weight:500;font-family:'JetBrains Mono',monospace">funding_rate</span>
+              </span>
+              <span style="width:54px;text-align:right;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#9fb0c8">0.15</span>
+              <span style="flex:1.6;padding:0 14px">
+                <span style="position:relative;display:block;height:14px;background:#0c1726;border-radius:3px">
+                  <span style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:#2b3c55"></span>
+                  <span style="position:absolute;top:2px;bottom:2px;left:50%;width:5%;background:#2bd4a4;border-radius:2px"></span>
+                </span>
+                <span style="display:block;text-align:center;font-size:10px;font-family:'JetBrains Mono',monospace;color:#2bd4a4;margin-top:3px">+0.10</span>
+              </span>
+              <span style="width:62px;text-align:right">
+                <span style="display:inline-block;width:38px;height:5px;background:#0c1726;border-radius:3px;vertical-align:middle;position:relative;overflow:hidden"><span style="position:absolute;left:0;top:0;bottom:0;width:40%;background:#46566e"></span></span>
+                <span style="font-size:10.5px;font-family:'JetBrains Mono',monospace;color:#9fb0c8;margin-left:5px">40%</span>
+              </span>
+              <span style="width:66px;text-align:right">
+                <svg viewBox="0 0 60 18" width="60" height="18" preserveAspectRatio="none" style="vertical-align:middle"><line x1="0" y1="9" x2="60" y2="9" stroke="#1a283c" stroke-width="1"/><path d="M 0.0 9.0 L 15.0 2.0 L 30.0 16.0 L 45.0 9.0 L 60.0 2.0" fill="none" stroke="#2bd4a4" stroke-width="1.4" stroke-linejoin="round"/></svg>
+              </span>
+            </div>
+            <div style="display:flex;align-items:center;padding:10px 14px;border-top:1px solid #111d2c">
+              <span style="flex:1.3;display:flex;flex-direction:column;gap:1px">
+                <span style="font-size:12.5px;color:#dbe4f0;font-weight:500;font-family:'JetBrains Mono',monospace">vol_regime</span>
+              </span>
+              <span style="width:54px;text-align:right;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#9fb0c8">0.10</span>
+              <span style="flex:1.6;padding:0 14px">
+                <span style="position:relative;display:block;height:14px;background:#0c1726;border-radius:3px">
+                  <span style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:#2b3c55"></span>
+                  <span style="position:absolute;top:2px;bottom:2px;left:50%;width:0%;background:#6b7c95;border-radius:2px"></span>
+                </span>
+                <span style="display:block;text-align:center;font-size:10px;font-family:'JetBrains Mono',monospace;color:#6b7c95;margin-top:3px">+0.00</span>
+              </span>
+              <span style="width:62px;text-align:right">
+                <span style="display:inline-block;width:38px;height:5px;background:#0c1726;border-radius:3px;vertical-align:middle;position:relative;overflow:hidden"><span style="position:absolute;left:0;top:0;bottom:0;width:0%;background:#46566e"></span></span>
+                <span style="font-size:10.5px;font-family:'JetBrains Mono',monospace;color:#9fb0c8;margin-left:5px">0%</span>
+              </span>
+              <span style="width:66px;text-align:right">
+                <svg viewBox="0 0 60 18" width="60" height="18" preserveAspectRatio="none" style="vertical-align:middle"><line x1="0" y1="9" x2="60" y2="9" stroke="#1a283c" stroke-width="1"/><path d="M 0.0 6.7 L 15.0 6.7 L 30.0 16.0 L 45.0 6.7 L 60.0 6.7" fill="none" stroke="#2bd4a4" stroke-width="1.4" stroke-linejoin="round"/></svg>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ bottom row: PORTFOLIO + VALIDATION ============ -->
+    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:stretch">
+
+      <!-- (4) PORTFOLIO CONSTRUCTION -->
+      <section data-screen-label="Portfolio Construction" style="flex:1 1 440px;min-width:380px;background:#0a111e;border:1px solid #1b2b42;border-radius:12px;padding:16px 18px 18px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+          <span style="font-size:13px;font-weight:700;letter-spacing:.06em;color:#cdd7e6">PORTFOLIO CONSTRUCTION</span>
+          <span style="font-size:10px;color:#5b6a82;letter-spacing:.06em">muninn-py · factor / portfolio</span>
+        </div>
+
+        <div style="font-size:10px;color:#6b7c95;font-weight:600;letter-spacing:.06em;margin-bottom:8px;display:flex;justify-content:space-between">
+          <span>TARGET WEIGHTS · DOLLAR-NEUTRAL</span><span style="color:#4f5e75">◄ short&nbsp;&nbsp;&nbsp;long ►</span>
+        </div>
+        <div style="background:#070d17;border:1px solid #16233a;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:9px">
+          <div data-nc="weights" style="display:flex;flex-direction:column;gap:9px">
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="width:44px;font-size:11px;font-weight:600;color:#c4d0e0;font-family:'JetBrains Mono',monospace">BTC</span>
+              <span style="position:relative;flex:1;height:18px;background:#0c1726;border-radius:3px">
+                <span style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:#2b3c55"></span>
+                <span style="position:absolute;top:3px;bottom:3px;left:50%;width:46.2962962962963%;background:#2bd4a4;border-radius:2px"></span>
+              </span>
+              <span style="width:54px;text-align:right;font-size:11.5px;font-family:'JetBrains Mono',monospace;color:#2bd4a4">+0.32</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="width:44px;font-size:11px;font-weight:600;color:#c4d0e0;font-family:'JetBrains Mono',monospace">ETH</span>
+              <span style="position:relative;flex:1;height:18px;background:#0c1726;border-radius:3px">
+                <span style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:#2b3c55"></span>
+                <span style="position:absolute;top:3px;bottom:3px;left:23.958333333333336%;width:26.041666666666664%;background:#ff6262;border-radius:2px"></span>
+              </span>
+              <span style="width:54px;text-align:right;font-size:11.5px;font-family:'JetBrains Mono',monospace;color:#ff6262">-0.18</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="width:44px;font-size:11px;font-weight:600;color:#c4d0e0;font-family:'JetBrains Mono',monospace">SOL</span>
+              <span style="position:relative;flex:1;height:18px;background:#0c1726;border-radius:3px">
+                <span style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:#2b3c55"></span>
+                <span style="position:absolute;top:3px;bottom:3px;left:50%;width:14.467592592592593%;background:#2bd4a4;border-radius:2px"></span>
+              </span>
+              <span style="width:54px;text-align:right;font-size:11.5px;font-family:'JetBrains Mono',monospace;color:#2bd4a4">+0.10</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="width:44px;font-size:11px;font-weight:600;color:#c4d0e0;font-family:'JetBrains Mono',monospace">XRP</span>
+              <span style="position:relative;flex:1;height:18px;background:#0c1726;border-radius:3px">
+                <span style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:#2b3c55"></span>
+                <span style="position:absolute;top:3px;bottom:3px;left:29.74537037037037%;width:20.25462962962963%;background:#ff6262;border-radius:2px"></span>
+              </span>
+              <span style="width:54px;text-align:right;font-size:11.5px;font-family:'JetBrains Mono',monospace;color:#ff6262">-0.14</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="width:44px;font-size:11px;font-weight:600;color:#c4d0e0;font-family:'JetBrains Mono',monospace">DOGE</span>
+              <span style="position:relative;flex:1;height:18px;background:#0c1726;border-radius:3px">
+                <span style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:#2b3c55"></span>
+                <span style="position:absolute;top:3px;bottom:3px;left:35.532407407407405%;width:14.467592592592593%;background:#ff6262;border-radius:2px"></span>
+              </span>
+              <span style="width:54px;text-align:right;font-size:11.5px;font-family:'JetBrains Mono',monospace;color:#ff6262">-0.10</span>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:space-between;border-top:1px solid #14202f;padding-top:8px;margin-top:2px;font-size:10.5px;font-family:'JetBrains Mono',monospace;color:#6b7c95"><span>net exposure</span><span data-nc="net-exposure" style="color:#9fb0c8">+0.00 (neutral)</span></div>
+        </div>
+
+        <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:14px">
+          <!-- factor table -->
+          <div style="flex:1 1 180px;min-width:170px">
+            <div style="font-size:10px;color:#6b7c95;font-weight:600;letter-spacing:.06em;margin-bottom:8px">FACTOR EXPOSURE</div>
+            <div style="background:#070d17;border:1px solid #16233a;border-radius:10px;padding:4px 0">
+              <div data-nc="factors">
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 14px;border-bottom:1px solid #0f1a28">
+                  <span style="font-size:11.5px;color:#c4d0e0">market</span>
+                  <span style="display:flex;align-items:center;gap:8px">
+                    <span style="position:relative;width:50px;height:5px;background:#0c1726;border-radius:3px"><span style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:#2b3c55"></span><span style="position:absolute;top:0;bottom:0;left:50%;width:10.351966873706006%;background:#5b8def;border-radius:2px"></span></span>
+                    <span style="width:42px;text-align:right;font-size:11px;font-family:'JetBrains Mono',monospace;color:#5b8def">+0.05</span>
+                  </span>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 14px;border-bottom:1px solid #0f1a28">
+                  <span style="font-size:11.5px;color:#c4d0e0">momentum</span>
+                  <span style="display:flex;align-items:center;gap:8px">
+                    <span style="position:relative;width:50px;height:5px;background:#0c1726;border-radius:3px"><span style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:#2b3c55"></span><span style="position:absolute;top:0;bottom:0;left:50%;width:43.47826086956522%;background:#5b8def;border-radius:2px"></span></span>
+                    <span style="width:42px;text-align:right;font-size:11px;font-family:'JetBrains Mono',monospace;color:#5b8def">+0.21</span>
+                  </span>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 14px;border-bottom:1px solid #0f1a28">
+                  <span style="font-size:11.5px;color:#c4d0e0">volatility</span>
+                  <span style="display:flex;align-items:center;gap:8px">
+                    <span style="position:relative;width:50px;height:5px;background:#0c1726;border-radius:3px"><span style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:#2b3c55"></span><span style="position:absolute;top:0;bottom:0;left:25.15527950310559%;width:24.84472049689441%;background:#f3b13c;border-radius:2px"></span></span>
+                    <span style="width:42px;text-align:right;font-size:11px;font-family:'JetBrains Mono',monospace;color:#f3b13c">-0.12</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- risk donut -->
+          <div style="flex:1 1 180px;min-width:190px">
+            <div style="font-size:10px;color:#6b7c95;font-weight:600;letter-spacing:.06em;margin-bottom:8px">RISK CONTRIBUTION · PARITY</div>
+            <div style="background:#070d17;border:1px solid #16233a;border-radius:10px;padding:12px;display:flex;align-items:center;gap:12px">
+              <svg viewBox="0 0 140 140" width="104" height="104" style="flex:0 0 auto">
+                <circle cx="70" cy="70" r="54" fill="none" stroke="#0c1726" stroke-width="18"/>
+                <g data-nc="donut-segs" transform="rotate(-90 70 70)">
+                  <circle cx="70" cy="70" r="54" fill="none" stroke="#5b8def" stroke-width="18" stroke-dasharray="74.6 264.6" stroke-dashoffset="0.0"/>
+                  <circle cx="70" cy="70" r="54" fill="none" stroke="#2bd4a4" stroke-width="18" stroke-dasharray="64.5 274.8" stroke-dashoffset="-74.6"/>
+                  <circle cx="70" cy="70" r="54" fill="none" stroke="#f3b13c" stroke-width="18" stroke-dasharray="67.9 271.4" stroke-dashoffset="-139.1"/>
+                  <circle cx="70" cy="70" r="54" fill="none" stroke="#a779f0" stroke-width="18" stroke-dasharray="71.3 268.0" stroke-dashoffset="-207.0"/>
+                  <circle cx="70" cy="70" r="54" fill="none" stroke="#5f6f88" stroke-width="18" stroke-dasharray="61.1 278.2" stroke-dashoffset="-278.2"/>
+                </g>
+                <text x="70" y="68" text-anchor="middle" fill="#6b7c95" font-size="9" font-family="Public Sans">RISK</text>
+                <text x="70" y="80" text-anchor="middle" fill="#dbe4f0" font-size="11" font-family="JetBrains Mono">100%</text>
+              </svg>
+              <div data-nc="donut-legend" style="display:flex;flex-direction:column;gap:5px;flex:1">
+                <div style="display:flex;align-items:center;gap:7px;font-size:11px">
+                  <span style="width:8px;height:8px;border-radius:2px;background:#5b8def"></span>
+                  <span style="color:#c4d0e0;flex:1;font-family:'JetBrains Mono',monospace">BTC</span>
+                  <span style="color:#7787a0;font-family:'JetBrains Mono',monospace">22%</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:7px;font-size:11px">
+                  <span style="width:8px;height:8px;border-radius:2px;background:#2bd4a4"></span>
+                  <span style="color:#c4d0e0;flex:1;font-family:'JetBrains Mono',monospace">ETH</span>
+                  <span style="color:#7787a0;font-family:'JetBrains Mono',monospace">19%</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:7px;font-size:11px">
+                  <span style="width:8px;height:8px;border-radius:2px;background:#f3b13c"></span>
+                  <span style="color:#c4d0e0;flex:1;font-family:'JetBrains Mono',monospace">SOL</span>
+                  <span style="color:#7787a0;font-family:'JetBrains Mono',monospace">20%</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:7px;font-size:11px">
+                  <span style="width:8px;height:8px;border-radius:2px;background:#a779f0"></span>
+                  <span style="color:#c4d0e0;flex:1;font-family:'JetBrains Mono',monospace">XRP</span>
+                  <span style="color:#7787a0;font-family:'JetBrains Mono',monospace">21%</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:7px;font-size:11px">
+                  <span style="width:8px;height:8px;border-radius:2px;background:#5f6f88"></span>
+                  <span style="color:#c4d0e0;flex:1;font-family:'JetBrains Mono',monospace">DOGE</span>
+                  <span style="color:#7787a0;font-family:'JetBrains Mono',monospace">18%</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- (5) VALIDATION / EDGE VERDICT -->
+      <section data-screen-label="Validation" style="flex:1 1 440px;min-width:380px;background:#0a111e;border:1px solid #1b2b42;border-radius:12px;padding:16px 18px 18px;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+          <span style="font-size:13px;font-weight:700;letter-spacing:.06em;color:#cdd7e6">VALIDATION · EDGE VERDICT</span>
+          <span style="font-size:10px;color:#5b6a82;letter-spacing:.06em">walk-forward · combinatorial purged CV</span>
+        </div>
+
+        <!-- fold table -->
+        <div style="background:#070d17;border:1px solid #16233a;border-radius:10px;overflow:hidden">
+          <table style="width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace">
+            <thead>
+              <tr style="font-size:9.5px;color:#5b6a82;text-align:right">
+                <th style="text-align:left;padding:8px 14px;font-weight:600;letter-spacing:.04em">FOLD</th>
+                <th style="padding:8px 8px;font-weight:600">TRAIN</th>
+                <th style="padding:8px 8px;font-weight:600">TEST</th>
+                <th style="padding:8px 8px;font-weight:600">IS PnL</th>
+                <th style="padding:8px 14px;font-weight:600">OOS PnL</th>
+              </tr>
+            </thead>
+            <tbody data-nc="folds-body">
+              <tr style="border-top:1px solid #111d2c;font-size:12px">
+                <td style="text-align:left;padding:9px 14px;color:#c4d0e0">#1</td>
+                <td style="text-align:right;padding:9px 8px;color:#7787a0">288</td>
+                <td style="text-align:right;padding:9px 8px;color:#7787a0">288</td>
+                <td style="text-align:right;padding:9px 8px;color:#ff6262">-$45.3</td>
+                <td style="text-align:right;padding:9px 14px;color:#ff6262;font-weight:600">-$57.8</td>
+              </tr>
+              <tr style="border-top:1px solid #111d2c;font-size:12px">
+                <td style="text-align:left;padding:9px 14px;color:#c4d0e0">#2</td>
+                <td style="text-align:right;padding:9px 8px;color:#7787a0">576</td>
+                <td style="text-align:right;padding:9px 8px;color:#7787a0">288</td>
+                <td style="text-align:right;padding:9px 8px;color:#ff6262">-$99.6</td>
+                <td style="text-align:right;padding:9px 14px;color:#ff6262;font-weight:600">-$0.1</td>
+              </tr>
+              <tr style="border-top:1px solid #111d2c;font-size:12px">
+                <td style="text-align:left;padding:9px 14px;color:#c4d0e0">#3</td>
+                <td style="text-align:right;padding:9px 8px;color:#7787a0">864</td>
+                <td style="text-align:right;padding:9px 8px;color:#7787a0">288</td>
+                <td style="text-align:right;padding:9px 8px;color:#ff6262">-$99.0</td>
+                <td style="text-align:right;padding:9px 14px;color:#ff6262;font-weight:600">-$20.8</td>
+              </tr>
+              <tr style="border-top:1px solid #111d2c;font-size:12px">
+                <td style="text-align:left;padding:9px 14px;color:#c4d0e0">#4</td>
+                <td style="text-align:right;padding:9px 8px;color:#7787a0">1152</td>
+                <td style="text-align:right;padding:9px 8px;color:#7787a0">288</td>
+                <td style="text-align:right;padding:9px 8px;color:#ff6262">-$219.9</td>
+                <td style="text-align:right;padding:9px 14px;color:#ff6262;font-weight:600">-$65.4</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:12px">
+          <!-- PBO gauge -->
+          <div style="flex:2 1 220px;min-width:210px;background:#070d17;border:1px solid #16233a;border-radius:10px;padding:13px 14px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between">
+              <span style="font-size:10px;color:#7787a0;font-weight:600;letter-spacing:.06em">PROB. OF BACKTEST OVERFIT</span>
+              <span data-nc="pbo" style="font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:700;color:#ff6262">1.00</span>
+            </div>
+            <div style="position:relative;height:9px;border-radius:5px;margin-top:12px;background:linear-gradient(90deg,#1f8a5b 0%,#b88a1e 50%,#c33636 100%)">
+              <span data-nc="pbo-marker" style="position:absolute;top:-4px;left:100%;transform:translateX(-50%);width:3px;height:17px;background:#ffffff;border-radius:2px;box-shadow:0 0 6px #ff6262"></span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:9px;color:#4f5e75;font-family:'JetBrains Mono',monospace;margin-top:4px"><span>0.00 robust</span><span>0.50</span><span>1.00 overfit</span></div>
+            <div style="display:flex;justify-content:space-between;margin-top:12px;padding-top:10px;border-top:1px solid #14202f">
+              <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:9.5px;color:#6b7c95;letter-spacing:.05em">DEFLATED SHARPE</span><span data-nc="dsharpe" style="font-family:'JetBrains Mono',monospace;font-size:15px;color:#9fb0c8">undefined</span></div>
+              <div style="display:flex;flex-direction:column;gap:2px;text-align:right"><span style="font-size:9.5px;color:#6b7c95;letter-spacing:.05em">OOS FOLDS +</span><span data-nc="oos-profitable" style="font-family:'JetBrains Mono',monospace;font-size:15px;color:#ff6262">0/4</span></div>
+            </div>
+          </div>
+
+          <!-- total oos -->
+          <div style="flex:1 1 130px;min-width:130px;background:#070d17;border:1px solid #16233a;border-radius:10px;padding:13px 14px;display:flex;flex-direction:column;justify-content:center;gap:5px">
+            <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">TOTAL OOS PnL</span>
+            <span data-nc="total-oos" style="font-family:'JetBrains Mono',monospace;font-size:21px;font-weight:600;color:#ff6262;line-height:1">-$146.1</span>
+            <span style="font-size:9.5px;color:#4f5e75">across 4 test folds</span>
+          </div>
+        </div>
+
+        <!-- verdict banner -->
+        <div style="margin-top:12px;background:#1a0d10;border:1px solid #5a1f25;border-radius:10px;padding:13px 15px;display:flex;gap:12px;align-items:flex-start">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" style="flex:0 0 auto;margin-top:1px"><circle cx="12" cy="12" r="9" stroke="#ff6262" stroke-width="2"/><path d="M9 9l6 6M15 9l-6 6" stroke="#ff6262" stroke-width="2" stroke-linecap="round"/></svg>
+          <div style="display:flex;flex-direction:column;gap:3px">
+            <span style="font-size:12.5px;font-weight:700;color:#ff8b8b;letter-spacing:.02em">SIGNAL REJECTED — no out-of-sample edge</span>
+            <span style="font-size:11.5px;color:#c99;line-height:1.45">0/4 OOS folds profitable · PBO 1.00 · deflated Sharpe undefined. The validation gate is working as intended — this candidate does not survive purged walk-forward and will not be promoted to live.</span>
+          </div>
+        </div>
+        <div style="flex:1"></div>
+      </section>
+    </div>
+
+    <!-- footer -->
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:2px 4px;margin-top:2px">
+      <span style="font-size:10px;color:#3f4d62;font-family:'JetBrains Mono',monospace">muninn · huginn · sleipnir · odin · redpanda</span>
+      <span data-nc="status-badge" style="display:inline-flex;align-items:center;gap:6px;font-size:10px;color:#7e6a3a;background:#211a0c;border:1px solid #3d3214;padding:4px 10px;border-radius:6px;letter-spacing:.04em;font-weight:600">
+        <span data-nc="status-dot" style="width:6px;height:6px;border-radius:50%;background:#f3b13c"></span><span data-nc="status-text">DEMO DATA · not connected to live endpoints</span>
+      </span>
+    </div>
+
+  </div>
+</div>
+<script src="live.js"></script>
+</body>
+</html>

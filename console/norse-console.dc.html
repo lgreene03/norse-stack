@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style data-omelette-injected>html,body{background:transparent}</style><script data-omelette-injected>(()=>{var j=[];var x=false;var S=30000;var f=3000;document.addEventListener("DOMContentLoaded",()=>{const H=window.Babel;const G="om-src-id";if(H&&H.registerPlugin&&!(H.availablePlugins&&H.availablePlugins[G])){H.registerPlugin(G,({types:Y})=>({visitor:{JSXOpeningElement(U,Q){const J=U.node;if(J.name&&J.name.type==="JSXMemberExpression")return;for(let V=0;V<J.attributes.length;V++){const L=J.attributes[V];if(L.type==="JSXAttribute"&&L.name&&L.name.name==="data-om-id")return}const W=Q.file&&Q.file.opts&&Q.file.opts.filename||"?";const Z=J.loc&&J.loc.start;const z=`jsx:${W}:${J.start??0}:${Z?Z.line:0}:${Z?Z.column+1:0}`;J.attributes.push(Y.jsxAttribute(Y.jsxIdentifier("data-om-id"),Y.stringLiteral(z)))}}}))}const k="om-text-extract";let A=false;if(x&&H&&H.registerPlugin&&!(H.availablePlugins&&H.availablePlugins[k])){const Y=window.React;if(Y&&Y.useSyncExternalStore&&Y.createElement){A=true;const U={};const Q=new Set;let J=0;window.__omTextO=U;window.__omTextSet=(z)=>{for(const V in z){const L=z[V];if(L==null)delete U[V];else U[V]=L}J++;Q.forEach((V)=>V())};const W=(z)=>{Q.add(z);return()=>Q.delete(z)};const Z=()=>J;window.__OmT=function z(V){Y.useSyncExternalStore(W,Z,Z);return Y.createElement("span",{"data-om-text":V.i,className:"__om-t"},V.i in U?U[V.i]:V.children)};H.registerPlugin(k,({types:z})=>{const V={style:1,script:1,noscript:1,textarea:1,title:1,option:1,text:1,tspan:1,textPath:1};const L={placeholder:1,alt:1,title:1,label:1,"aria-label":1,"aria-description":1,"aria-placeholder":1};const _=($,C)=>z.logicalExpression("??",z.memberExpression(z.logicalExpression("||",z.memberExpression(z.identifier("window"),z.identifier("__omTextO")),z.objectExpression([])),z.stringLiteral($),true),C);const E=($)=>$.file&&$.file.opts&&$.file.opts.filename||"?";const B=($)=>$.file&&$.file.code||"";const b=($,C)=>{const X=(F)=>F&&F.start!=null&&F.end!=null&&(F.type==="StringLiteral"||F.type==="TemplateLiteral"&&F.expressions.length===0)?[F.start,F.end]:null;const N=X(C);if(N)return N;if(C&&C.type==="Identifier"){const F=$.scope.getBinding(C.name);if(F&&F.constant&&F.path.node.type==="VariableDeclarator"){return X(F.path.node.init)}}return null};const M=($,C,X)=>{const N=$.node;let F=false;const w=(K,q)=>{F=true;return z.jsxElement(z.jsxOpeningElement(z.jsxIdentifier("__OmT"),[z.jsxAttribute(z.jsxIdentifier("i"),z.stringLiteral(K))],false),z.jsxClosingElement(z.jsxIdentifier("__OmT")),[q],false)};const D=N.children.map((K)=>{if(K.type==="JSXText"){if(K.start==null||K.end==null)return K;const q=X.slice(K.start,K.end);const R=q.length-q.trimStart().length;const m=q.length-q.trimEnd().length;if(R+m>=q.length)return K;return w(`txt:${C}:${K.start+R}:${K.end-m}`,K)}if(K.type==="JSXExpressionContainer"){const q=b($,K.expression);if(q)return w(`str:${C}:${q[0]}:${q[1]}`,K)}return K});if(F)N.children=D};return{visitor:{JSXOpeningElement($,C){const X=$.node;const N=E(C);const F={};for(let w=0;w<X.attributes.length;w++){const D=X.attributes[w];if(D.type!=="JSXAttribute"||!D.name)continue;const K=D.name.name;if(!L[K])continue;if(!D.value||D.value.type!=="StringLiteral")continue;if(D.value.start==null||D.value.end==null)continue;const q=`txt:${N}:${D.value.start}:${D.value.end}`;F[K]=q;D.value=z.jsxExpressionContainer(_(q,z.stringLiteral(D.value.value)))}if(Object.keys(F).length){X.attributes.push(z.jsxAttribute(z.jsxIdentifier("data-om-text-attrs"),z.stringLiteral(JSON.stringify(F))))}},JSXElement($,C){const X=$.node.openingElement;const N=X&&X.name&&X.name.name;if(N==="__OmT")return;if(typeof N==="string"&&V[N])return;M($,E(C),B(C))},JSXFragment($,C){M($,E(C),B(C))}}}})}}const u=A?["transform-react-jsx-source",G,k]:["transform-react-jsx-source",G];document.querySelectorAll('script[type="text/babel"],script[type="text/jsx"]').forEach((Y,U)=>{const Q=Y.getAttribute("data-plugins")||"";const J=u.filter((W)=>Q.indexOf(W)<0);if(J.length){Y.setAttribute("data-plugins",Q?`${Q},${J.join(",")}`:J.join(","))}if(!Y.hasAttribute("data-filename")){Y.setAttribute("data-filename",Y.getAttribute("src")||`inline-${U}`)}})});var y=window.parent;if(y&&y!==window){const H=(Q,J)=>{try{y.postMessage({__omelette_log:true,type:Q,data:J},"*")}catch{}};["log","warn","error"].forEach((Q)=>{const J=console[Q];console[Q]=(...W)=>{const Z=W.map((z)=>{try{return typeof z==="object"?JSON.stringify(z):String(z)}catch{try{return String(z)}catch{return"[unstringifiable]"}}}).join(" ");H(Q,Z);J.apply(console,W)}});window.addEventListener("error",(Q)=>{const J=Q.target;if(J&&J!==window&&J.tagName){const W=J.src||J.href||"";H("resource_error",`${J.tagName} failed to load: ${W}`)}else{H("error",`${Q.message||"Unknown error"} at ${Q.filename||"?"}:${Q.lineno||0}:${Q.colno||0}`)}},true);window.addEventListener("unhandledrejection",(Q)=>{const J=Q.reason;const W=J instanceof Error?`${J.message} ${J.stack}`:String(J);H("error",`Unhandled rejection: ${W}`)});const G=()=>{try{y.postMessage({type:"omelette:height",height:document.documentElement.scrollHeight},"*")}catch{}};if(document.readyState==="complete")G();else window.addEventListener("load",G);if(window.ResizeObserver)new ResizeObserver(G).observe(document.documentElement);const k={};let A=0;window.claude={complete(Q){return new Promise((J,W)=>{if(!j.length){W(new Error("claude.complete: no parent origin"));return}const Z=`c${++A}`;const z=()=>setTimeout(()=>{delete k[Z];W(new Error(`claude.complete: no data for ${S/1000}s`))},S);const V=z();k[Z]={resolve:J,reject:W,text:"",t:V,arm:z};try{for(const L of j){y.postMessage({__om_api:true,id:Z,body:Q},L)}}catch(L){clearTimeout(V);delete k[Z];W(L)}})}};const u={};let Y=0;window.omelette={writeFile:(Q,J)=>new Promise((W,Z)=>{if(!j.length){W();return}const z=`f${++Y}`;const V=setTimeout(()=>{delete u[z];W()},f);u[z]={resolve:W,reject:Z,t:V};try{for(const L of j){y.postMessage({__om_file:true,id:z,op:"write",path:Q,content:J},L)}}catch{clearTimeout(V);delete u[z];W()}})};const U=(Q)=>{try{return JSON.stringify(Q)}catch{return JSON.stringify(String(Q))}};window.addEventListener("message",(Q)=>{if(j.indexOf(Q.origin)<0)return;if(Q.source!==y)return;const J=Q.data;if(!J)return;if(J.type==="omelette-preview-refresh"){if(typeof J.token!=="string"||!/^[0-9a-f.-]+(\.(rc|pr-[0-9]+))?(\.[0-9]+\.[0-9a-f]{16})?$/.test(J.token))return;const z=Math.max(1,Math.floor((J.expiresAt||0)-Date.now()/1000));document.cookie="__Host-omelette-preview="+J.token+"; Path=/; Secure; SameSite=None; Partitioned; Max-Age="+z;return}if(J.__om_file_r){const z=u[J.id];if(!z)return;clearTimeout(z.t);delete u[J.id];if(J.ok)z.resolve();else z.reject(new Error(J.error||"write failed"));return}if(J.__om_api_r){const z=k[J.id];if(!z)return;if(J.error!=null){clearTimeout(z.t);delete k[J.id];z.reject(new Error(J.error));return}if(J.chunk!=null){clearTimeout(z.t);z.t=z.arm();z.text+=J.chunk;return}if(J.done){clearTimeout(z.t);delete k[J.id];z.resolve(J.text!=null?J.text:z.text);return}return}if(!J.__om_eval)return;const W=J;const Z=(z)=>{Q.source.postMessage({...z,__om_eval_r:1,id:W.id},Q.origin)};try{const z=(0,eval)(W.code);if(z&&typeof z.then==="function"){z.then((V)=>Z({ok:1,v:U(V)}),(V)=>Z({ok:0,e:String(V)}))}else{Z({ok:1,v:U(z)})}}catch(z){Z({ok:0,e:String(z)})}})}})();
+</script>
+
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:#06090f;font-family:'Public Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  ::selection{background:#5b8def40}
+  @keyframes ncpulse{0%,100%{opacity:1}50%{opacity:.35}}
+  @keyframes ncblink{0%,100%{opacity:.9}50%{opacity:.25}}
+  .nc-scroll::-webkit-scrollbar{width:8px;height:8px}
+  .nc-scroll::-webkit-scrollbar-thumb{background:#1f2c40;border-radius:4px}
+  .nc-scroll::-webkit-scrollbar-track{background:transparent}
+</style>
+</helmet>
+<div style="min-height:100vh;background:radial-gradient(1200px 600px at 70% -10%,#0c1626 0%,#06090f 60%);color:#e6ecf5;padding:14px 16px 28px;font-size:14px">
+  <div style="max-width:1520px;margin:0 auto;display:flex;flex-direction:column;gap:14px">
+
+    <!-- ============ TOP STATUS STRIP ============ -->
+    <div style="background:#0a111e;border:1px solid #1b2b42;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.4);overflow:hidden">
+      <div style="display:flex;align-items:stretch;flex-wrap:wrap">
+        <!-- brand -->
+        <div style="display:flex;align-items:center;gap:12px;padding:16px 20px;border-right:1px solid #16243a;min-width:230px;flex:0 0 auto">
+          <div style="width:38px;height:38px;border-radius:9px;background:linear-gradient(150deg,#1b3a6b,#0e1d33);border:1px solid #2c4a78;display:flex;align-items:center;justify-content:center;position:relative">
+            <svg width="23" height="23" viewBox="0 0 24 24" fill="none"><path d="M3 16l5-6 4 3 5-8" stroke="#5b8def" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 5h3v3" stroke="#5b8def" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:2px">
+            <div style="font-size:15px;font-weight:700;letter-spacing:.2px;line-height:1">NORSE <span style="color:#5b8def">CONSOLE</span></div>
+            <div style="font-size:10.5px;color:#5b6a82;letter-spacing:.07em;font-weight:600">QUANT RESEARCH · v0.9</div>
+          </div>
+        </div>
+
+        <!-- metrics -->
+        <div style="display:flex;align-items:stretch;flex-wrap:wrap;flex:1 1 auto">
+          <div style="display:flex;flex-direction:column;gap:3px;padding:14px 22px;justify-content:center;min-width:170px">
+            <div style="font-size:10px;color:#6b7c95;letter-spacing:.08em;font-weight:600">TOTAL EQUITY</div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:600;letter-spacing:-.5px;line-height:1">{{ equityStr }}</div>
+            <div style="font-size:10.5px;color:#5b6a82;font-family:'JetBrains Mono',monospace">cash {{ cashStr }}</div>
+          </div>
+          <div style="width:1px;background:#16243a;margin:14px 0"></div>
+          <div style="display:flex;flex-direction:column;gap:3px;padding:14px 20px;justify-content:center;min-width:140px">
+            <div style="font-size:10px;color:#6b7c95;letter-spacing:.08em;font-weight:600">TODAY NET PnL</div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:21px;font-weight:600;line-height:1;color:{{ netPnlColor }}">{{ netPnlStr }}</div>
+            <div style="font-size:11px;font-family:'JetBrains Mono',monospace;color:{{ netPnlColor }}">{{ netPnlPctStr }}</div>
+          </div>
+          <div style="width:1px;background:#16243a;margin:14px 0"></div>
+          <div style="display:flex;flex-direction:column;gap:3px;padding:14px 18px;justify-content:center;min-width:78px">
+            <div style="font-size:10px;color:#6b7c95;letter-spacing:.08em;font-weight:600;white-space:nowrap">OPEN POS</div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:21px;font-weight:600;line-height:1">{{ openPos }}</div>
+          </div>
+          <div style="width:1px;background:#16243a;margin:14px 0"></div>
+          <div style="display:flex;flex-direction:column;gap:3px;padding:14px 18px;justify-content:center;min-width:90px">
+            <div style="font-size:10px;color:#6b7c95;letter-spacing:.08em;font-weight:600;white-space:nowrap">FILLS TODAY</div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:21px;font-weight:600;line-height:1">{{ fillsToday }}</div>
+          </div>
+          <div style="width:1px;background:#16243a;margin:14px 0"></div>
+          <div style="display:flex;flex-direction:column;gap:5px;padding:14px 18px;justify-content:center">
+            <div style="font-size:10px;color:#6b7c95;letter-spacing:.08em;font-weight:600">REGIME</div>
+            <div style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:6px;background:{{ regimeBg }};border:1px solid {{ regimeBorder }};width:fit-content">
+              <span style="width:6px;height:6px;border-radius:50%;background:{{ regimeColor }}"></span>
+              <span style="font-size:11.5px;font-weight:700;letter-spacing:.08em;color:{{ regimeColor }}">{{ regime }}</span>
+            </div>
+          </div>
+          <div style="width:1px;background:#16243a;margin:14px 0"></div>
+          <!-- services -->
+          <div style="display:flex;flex-direction:column;gap:6px;padding:14px 18px;justify-content:center;min-width:200px">
+            <div style="font-size:10px;color:#6b7c95;letter-spacing:.08em;font-weight:600">SERVICES</div>
+            <div style="display:flex;gap:14px">
+              <sc-for list="{{ services }}" as="svc" hint-placeholder-count="5">
+                <div style="display:flex;flex-direction:column;align-items:center;gap:4px" title="{{ svc.title }}">
+                  <span style="width:8px;height:8px;border-radius:50%;background:{{ svc.color }};box-shadow:0 0 6px {{ svc.glow }};animation:ncblink 2.4s ease-in-out infinite"></span>
+                  <span style="font-size:9.5px;color:#7787a0;font-weight:600;letter-spacing:.02em">{{ svc.name }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+
+        <!-- halt switch -->
+        <div style="display:flex;align-items:center;gap:14px;padding:14px 20px;border-left:1px solid #16243a;flex:0 0 auto">
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+            <div style="font-size:10px;color:#6b7c95;letter-spacing:.08em;font-weight:600">EXECUTION</div>
+            <div style="font-size:13px;font-weight:700;letter-spacing:.04em;color:{{ haltStatusColor }}">{{ haltStatusLabel }}</div>
+          </div>
+          <button onClick="{{ toggleHalt }}" style="cursor:pointer;border:1px solid {{ haltBtnBorder }};background:{{ haltBtnBg }};color:{{ haltBtnText }};font-family:'Public Sans',sans-serif;font-size:12.5px;font-weight:700;letter-spacing:.06em;padding:10px 16px;border-radius:8px;display:flex;align-items:center;gap:8px;transition:all .15s" style-hover="filter:brightness(1.12)" style-active="transform:scale(.97)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor"/><rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor" style="{{ haltIconSecond }}"/></svg>
+            {{ haltBtnLabel }}
+          </button>
+        </div>
+      </div>
+      <!-- halted banner -->
+      <sc-if value="{{ halted }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 20px;background:#2a0f12;border-top:1px solid #5a1f25;color:#ff8b8b;font-size:12px;font-weight:600;letter-spacing:.02em">
+          <span style="width:7px;height:7px;border-radius:50%;background:#ff6262;animation:ncpulse 1s infinite"></span>
+          Trading halted — kill-switch engaged. Live order routing suspended; monitoring continues read-only.
+        </div>
+      </sc-if>
+    </div>
+
+    <!-- ============ (2) LIVE TRADING ============ -->
+    <section data-screen-label="Live Trading" style="background:#0a111e;border:1px solid #1b2b42;border-radius:12px;padding:16px 18px 18px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:13px;font-weight:700;letter-spacing:.06em;color:#cdd7e6">LIVE TRADING</span>
+          <span style="font-size:10px;color:#5b6a82;letter-spacing:.06em">huginn · /api/snapshot</span>
+        </div>
+        <span style="font-size:10.5px;color:#6b7c95;font-family:'JetBrains Mono',monospace">cost-suppressed signals: <span style="color:#f3b13c">{{ suppressed }}</span></span>
+      </div>
+
+      <div style="display:flex;gap:16px;flex-wrap:wrap">
+        <!-- equity curve -->
+        <div style="flex:3 1 420px;min-width:340px;background:#070d17;border:1px solid #16233a;border-radius:10px;padding:14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <span style="font-size:10.5px;color:#7787a0;font-weight:600;letter-spacing:.06em">EQUITY CURVE · INTRADAY ($)</span>
+            <span style="font-size:11px;font-family:'JetBrains Mono',monospace;color:#9fb0c8">{{ equityStartStr }} → <span style="color:#e6ecf5">{{ equityEndStr }}</span></span>
+          </div>
+          <svg viewBox="0 0 680 168" preserveAspectRatio="none" style="width:100%;height:170px;display:block">
+            <defs>
+              <linearGradient id="eqfill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#5b8def" stop-opacity="0.28"/>
+                <stop offset="100%" stop-color="#5b8def" stop-opacity="0"/>
+              </linearGradient>
+            </defs>
+            <line x1="0" y1="42" x2="680" y2="42" stroke="#13203200" /><line x1="0" y1="84" x2="680" y2="84" stroke="#142136"/><line x1="0" y1="126" x2="680" y2="126" stroke="#0f1a2b"/>
+            <path d="{{ equityArea }}" fill="url(#eqfill)"/>
+            <path d="{{ equityPath }}" fill="none" stroke="#6e9bf7" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+            <circle cx="{{ equityDotX }}" cy="{{ equityDotY }}" r="3.4" fill="#e6ecf5" stroke="#6e9bf7" stroke-width="1.5"/>
+          </svg>
+          <div style="display:flex;justify-content:space-between;font-size:9.5px;color:#4f5e75;font-family:'JetBrains Mono',monospace;margin-top:2px">
+            <span>09:30</span><span>11:00</span><span>12:30</span><span>14:00</span><span>now</span>
+          </div>
+        </div>
+
+        <!-- stat tiles -->
+        <div style="flex:1 1 240px;min-width:230px;display:grid;grid-template-columns:1fr 1fr;gap:10px;align-content:start">
+          <sc-for list="{{ statTiles }}" as="tile" hint-placeholder-count="5">
+            <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
+              <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">{{ tile.label }}</span>
+              <span style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:{{ tile.color }};line-height:1">{{ tile.value }}</span>
+              <span style="font-size:9.5px;color:#4f5e75">{{ tile.sub }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:14px">
+        <!-- positions -->
+        <div style="flex:3 1 420px;min-width:340px;background:#070d17;border:1px solid #16233a;border-radius:10px;overflow:hidden">
+          <div style="padding:10px 14px;font-size:10.5px;color:#7787a0;font-weight:600;letter-spacing:.06em;border-bottom:1px solid #14202f">OPEN POSITIONS</div>
+          <table style="width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace">
+            <thead>
+              <tr style="font-size:9.5px;color:#5b6a82;text-align:right">
+                <th style="text-align:left;padding:8px 14px;font-weight:600;letter-spacing:.04em">INSTRUMENT</th>
+                <th style="padding:8px 10px;font-weight:600">QTY (SIGNED)</th>
+                <th style="padding:8px 10px;font-weight:600">AVG COST</th>
+                <th style="padding:8px 10px;font-weight:600">MARK</th>
+                <th style="padding:8px 14px;font-weight:600">UNREAL PnL</th>
+              </tr>
+            </thead>
+            <tbody>
+              <sc-for list="{{ positions }}" as="p" hint-placeholder-count="2">
+                <tr style="border-top:1px solid #111d2c;font-size:12.5px">
+                  <td style="text-align:left;padding:10px 14px">
+                    <span style="display:inline-flex;align-items:center;gap:8px">
+                      <span style="font-size:9px;font-weight:700;letter-spacing:.05em;color:{{ p.sideColor }};background:{{ p.sideBg }};padding:2px 5px;border-radius:4px;font-family:'Public Sans',sans-serif">{{ p.side }}</span>
+                      <span style="color:#dbe4f0;font-weight:500">{{ p.instrument }}</span>
+                    </span>
+                  </td>
+                  <td style="text-align:right;padding:10px 10px;color:{{ p.sideColor }}">{{ p.qtyStr }}</td>
+                  <td style="text-align:right;padding:10px 10px;color:#9fb0c8">{{ p.avgStr }}</td>
+                  <td style="text-align:right;padding:10px 10px;color:#dbe4f0">{{ p.markStr }}</td>
+                  <td style="text-align:right;padding:10px 14px;color:{{ p.pnlColor }};font-weight:600">{{ p.pnlStr }}</td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- fills feed -->
+        <div style="flex:1 1 240px;min-width:230px;background:#070d17;border:1px solid #16233a;border-radius:10px;display:flex;flex-direction:column;max-height:268px">
+          <div style="padding:10px 14px;font-size:10.5px;color:#7787a0;font-weight:600;letter-spacing:.06em;border-bottom:1px solid #14202f;display:flex;justify-content:space-between"><span>RECENT FILLS</span><span style="color:#4f5e75">live</span></div>
+          <div class="nc-scroll" style="overflow-y:auto;flex:1">
+            <sc-for list="{{ fills }}" as="f" hint-placeholder-count="8">
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 14px;border-top:1px solid #0f1a28;font-family:'JetBrains Mono',monospace;font-size:11.5px">
+                <span style="display:flex;align-items:center;gap:8px">
+                  <span style="color:#5b6a82;font-size:10px">{{ f.t }}</span>
+                  <span style="font-size:8.5px;font-weight:700;letter-spacing:.04em;color:{{ f.sideColor }};background:{{ f.sideBg }};padding:2px 5px;border-radius:4px;font-family:'Public Sans',sans-serif">{{ f.side }}</span>
+                  <span style="color:#c4d0e0">{{ f.inst }}</span>
+                </span>
+                <span style="display:flex;gap:10px"><span style="color:#7787a0">{{ f.qtyStr }}</span><span style="color:#dbe4f0">{{ f.pxStr }}</span></span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ (3) ALPHA PLATFORM ============ -->
+    <section data-screen-label="Alpha Platform" style="background:#0a111e;border:1px solid #243a5e;border-radius:12px;padding:16px 18px 18px;box-shadow:0 0 0 1px #10203608,0 8px 30px -12px #0a1f4480">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:13px;font-weight:700;letter-spacing:.06em;color:#cdd7e6">ALPHA FACTORY</span>
+          <span style="font-size:10px;color:#5b6a82;letter-spacing:.06em">huginn · /metrics · blend: {{ blend }}</span>
+        </div>
+        <span style="font-size:10.5px;color:#6b7c95">{{ alphaCount }} registered alphas</span>
+      </div>
+
+      <div style="display:flex;gap:18px;flex-wrap:wrap">
+        <!-- composite gauge -->
+        <div style="flex:0 0 300px;min-width:280px;background:#070d17;border:1px solid #1a2c47;border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;align-items:center">
+          <div style="font-size:10.5px;color:#7787a0;font-weight:600;letter-spacing:.06em;align-self:flex-start">COMPOSITE SCORE</div>
+          <svg viewBox="0 0 280 168" style="width:100%;max-width:280px;height:auto;margin-top:4px">
+            <path d="{{ gaugeTrack }}" fill="none" stroke="#15263d" stroke-width="16" stroke-linecap="round"/>
+            <path d="{{ gaugeBandNeg }}" fill="none" stroke="#3a1f24" stroke-width="16"/>
+            <path d="{{ gaugeBandPos }}" fill="none" stroke="#13322a" stroke-width="16"/>
+            <path d="{{ gaugeActive }}" fill="none" stroke="{{ compositeColor }}" stroke-width="16" stroke-linecap="round"/>
+            <line x1="{{ tickAx1 }}" y1="{{ tickAy1 }}" x2="{{ tickAx2 }}" y2="{{ tickAy2 }}" stroke="#e6ecf5" stroke-width="2"/>
+            <line x1="{{ tickBx1 }}" y1="{{ tickBy1 }}" x2="{{ tickBx2 }}" y2="{{ tickBy2 }}" stroke="#e6ecf5" stroke-width="2"/>
+            <line x1="140" y1="132" x2="{{ needleX }}" y2="{{ needleY }}" stroke="{{ compositeColor }}" stroke-width="3" stroke-linecap="round"/>
+            <circle cx="140" cy="132" r="5" fill="{{ compositeColor }}"/>
+            <text x="20" y="150" fill="#4f5e75" font-size="11" font-family="JetBrains Mono">-1</text>
+            <text x="248" y="150" fill="#4f5e75" font-size="11" font-family="JetBrains Mono">+1</text>
+          </svg>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:34px;font-weight:600;color:{{ compositeColor }};line-height:1;margin-top:-6px">{{ compositeStr }}</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+            <span style="font-size:11px;color:#7787a0">threshold ±{{ thresholdStr }}</span>
+            <span style="font-size:11px;font-weight:700;letter-spacing:.05em;color:{{ compImpliesColor }};background:{{ compImpliesBg }};padding:3px 9px;border-radius:5px">{{ compImplies }}</span>
+          </div>
+        </div>
+
+        <!-- alpha list -->
+        <div style="flex:1 1 460px;min-width:340px;background:#070d17;border:1px solid #16233a;border-radius:10px;overflow:hidden">
+          <div style="display:flex;padding:9px 14px;font-size:9.5px;color:#5b6a82;font-weight:600;letter-spacing:.05em;border-bottom:1px solid #14202f">
+            <span style="flex:1.3">ALPHA</span>
+            <span style="width:54px;text-align:right">WEIGHT</span>
+            <span style="flex:1.6;text-align:center">CONTRIBUTION −1 ·· +1</span>
+            <span style="width:62px;text-align:right">CONF</span>
+            <span style="width:66px;text-align:right">IC TRAIL</span>
+          </div>
+          <sc-for list="{{ alphas }}" as="a" hint-placeholder-count="5">
+            <div style="display:flex;align-items:center;padding:10px 14px;border-top:1px solid #111d2c">
+              <span style="flex:1.3;display:flex;flex-direction:column;gap:1px">
+                <span style="font-size:12.5px;color:#dbe4f0;font-weight:500;font-family:'JetBrains Mono',monospace">{{ a.name }}</span>
+              </span>
+              <span style="width:54px;text-align:right;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#9fb0c8">{{ a.weightStr }}</span>
+              <span style="flex:1.6;padding:0 14px">
+                <span style="position:relative;display:block;height:14px;background:#0c1726;border-radius:3px">
+                  <span style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:#2b3c55"></span>
+                  <span style="position:absolute;top:2px;bottom:2px;left:{{ a.contribLeft }}%;width:{{ a.contribWidth }}%;background:{{ a.contribColor }};border-radius:2px"></span>
+                </span>
+                <span style="display:block;text-align:center;font-size:10px;font-family:'JetBrains Mono',monospace;color:{{ a.contribColor }};margin-top:3px">{{ a.contribStr }}</span>
+              </span>
+              <span style="width:62px;text-align:right">
+                <span style="display:inline-block;width:38px;height:5px;background:#0c1726;border-radius:3px;vertical-align:middle;position:relative;overflow:hidden"><span style="position:absolute;left:0;top:0;bottom:0;width:{{ a.confPct }}%;background:{{ a.confColor }}"></span></span>
+                <span style="font-size:10.5px;font-family:'JetBrains Mono',monospace;color:#9fb0c8;margin-left:5px">{{ a.confStr }}</span>
+              </span>
+              <span style="width:66px;text-align:right">
+                <svg viewBox="0 0 60 18" width="60" height="18" preserveAspectRatio="none" style="vertical-align:middle"><line x1="0" y1="9" x2="60" y2="9" stroke="#1a283c" stroke-width="1"/><path d="{{ a.icPath }}" fill="none" stroke="{{ a.icColor }}" stroke-width="1.4" stroke-linejoin="round"/></svg>
+              </span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ bottom row: PORTFOLIO + VALIDATION ============ -->
+    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:stretch">
+
+      <!-- (4) PORTFOLIO CONSTRUCTION -->
+      <section data-screen-label="Portfolio Construction" style="flex:1 1 440px;min-width:380px;background:#0a111e;border:1px solid #1b2b42;border-radius:12px;padding:16px 18px 18px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+          <span style="font-size:13px;font-weight:700;letter-spacing:.06em;color:#cdd7e6">PORTFOLIO CONSTRUCTION</span>
+          <span style="font-size:10px;color:#5b6a82;letter-spacing:.06em">muninn-py · factor / portfolio</span>
+        </div>
+
+        <div style="font-size:10px;color:#6b7c95;font-weight:600;letter-spacing:.06em;margin-bottom:8px;display:flex;justify-content:space-between">
+          <span>TARGET WEIGHTS · DOLLAR-NEUTRAL</span><span style="color:#4f5e75">◄ short&nbsp;&nbsp;&nbsp;long ►</span>
+        </div>
+        <div style="background:#070d17;border:1px solid #16233a;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:9px">
+          <sc-for list="{{ weights }}" as="w" hint-placeholder-count="5">
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="width:44px;font-size:11px;font-weight:600;color:#c4d0e0;font-family:'JetBrains Mono',monospace">{{ w.label }}</span>
+              <span style="position:relative;flex:1;height:18px;background:#0c1726;border-radius:3px">
+                <span style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:#2b3c55"></span>
+                <span style="position:absolute;top:3px;bottom:3px;left:{{ w.left }}%;width:{{ w.width }}%;background:{{ w.color }};border-radius:2px"></span>
+              </span>
+              <span style="width:54px;text-align:right;font-size:11.5px;font-family:'JetBrains Mono',monospace;color:{{ w.color }}">{{ w.valStr }}</span>
+            </div>
+          </sc-for>
+          <div style="display:flex;justify-content:space-between;border-top:1px solid #14202f;padding-top:8px;margin-top:2px;font-size:10.5px;font-family:'JetBrains Mono',monospace;color:#6b7c95"><span>net exposure</span><span style="color:#9fb0c8">{{ netExposureStr }}</span></div>
+        </div>
+
+        <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:14px">
+          <!-- factor table -->
+          <div style="flex:1 1 180px;min-width:170px">
+            <div style="font-size:10px;color:#6b7c95;font-weight:600;letter-spacing:.06em;margin-bottom:8px">FACTOR EXPOSURE</div>
+            <div style="background:#070d17;border:1px solid #16233a;border-radius:10px;padding:4px 0">
+              <sc-for list="{{ factors }}" as="fx" hint-placeholder-count="3">
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 14px;border-bottom:1px solid #0f1a28">
+                  <span style="font-size:11.5px;color:#c4d0e0">{{ fx.label }}</span>
+                  <span style="display:flex;align-items:center;gap:8px">
+                    <span style="position:relative;width:50px;height:5px;background:#0c1726;border-radius:3px"><span style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:#2b3c55"></span><span style="position:absolute;top:0;bottom:0;left:{{ fx.left }}%;width:{{ fx.width }}%;background:{{ fx.color }};border-radius:2px"></span></span>
+                    <span style="width:42px;text-align:right;font-size:11px;font-family:'JetBrains Mono',monospace;color:{{ fx.color }}">{{ fx.valStr }}</span>
+                  </span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <!-- risk donut -->
+          <div style="flex:1 1 180px;min-width:190px">
+            <div style="font-size:10px;color:#6b7c95;font-weight:600;letter-spacing:.06em;margin-bottom:8px">RISK CONTRIBUTION · PARITY</div>
+            <div style="background:#070d17;border:1px solid #16233a;border-radius:10px;padding:12px;display:flex;align-items:center;gap:12px">
+              <svg viewBox="0 0 140 140" width="104" height="104" style="flex:0 0 auto">
+                <circle cx="70" cy="70" r="54" fill="none" stroke="#0c1726" stroke-width="18"/>
+                <g transform="rotate(-90 70 70)">
+                  <sc-for list="{{ donutSegs }}" as="seg" hint-placeholder-count="5">
+                    <circle cx="70" cy="70" r="54" fill="none" stroke="{{ seg.color }}" stroke-width="18" stroke-dasharray="{{ seg.dash }}" stroke-dashoffset="{{ seg.offset }}"/>
+                  </sc-for>
+                </g>
+                <text x="70" y="68" text-anchor="middle" fill="#6b7c95" font-size="9" font-family="Public Sans">RISK</text>
+                <text x="70" y="80" text-anchor="middle" fill="#dbe4f0" font-size="11" font-family="JetBrains Mono">100%</text>
+              </svg>
+              <div style="display:flex;flex-direction:column;gap:5px;flex:1">
+                <sc-for list="{{ donutLegend }}" as="lg" hint-placeholder-count="5">
+                  <div style="display:flex;align-items:center;gap:7px;font-size:11px">
+                    <span style="width:8px;height:8px;border-radius:2px;background:{{ lg.color }}"></span>
+                    <span style="color:#c4d0e0;flex:1;font-family:'JetBrains Mono',monospace">{{ lg.label }}</span>
+                    <span style="color:#7787a0;font-family:'JetBrains Mono',monospace">{{ lg.pctStr }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- (5) VALIDATION / EDGE VERDICT -->
+      <section data-screen-label="Validation" style="flex:1 1 440px;min-width:380px;background:#0a111e;border:1px solid #1b2b42;border-radius:12px;padding:16px 18px 18px;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+          <span style="font-size:13px;font-weight:700;letter-spacing:.06em;color:#cdd7e6">VALIDATION · EDGE VERDICT</span>
+          <span style="font-size:10px;color:#5b6a82;letter-spacing:.06em">walk-forward · combinatorial purged CV</span>
+        </div>
+
+        <!-- fold table -->
+        <div style="background:#070d17;border:1px solid #16233a;border-radius:10px;overflow:hidden">
+          <table style="width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace">
+            <thead>
+              <tr style="font-size:9.5px;color:#5b6a82;text-align:right">
+                <th style="text-align:left;padding:8px 14px;font-weight:600;letter-spacing:.04em">FOLD</th>
+                <th style="padding:8px 8px;font-weight:600">TRAIN</th>
+                <th style="padding:8px 8px;font-weight:600">TEST</th>
+                <th style="padding:8px 8px;font-weight:600">IS PnL</th>
+                <th style="padding:8px 14px;font-weight:600">OOS PnL</th>
+              </tr>
+            </thead>
+            <tbody>
+              <sc-for list="{{ folds }}" as="fd" hint-placeholder-count="4">
+                <tr style="border-top:1px solid #111d2c;font-size:12px">
+                  <td style="text-align:left;padding:9px 14px;color:#c4d0e0">#{{ fd.fold }}</td>
+                  <td style="text-align:right;padding:9px 8px;color:#7787a0">{{ fd.train }}</td>
+                  <td style="text-align:right;padding:9px 8px;color:#7787a0">{{ fd.test }}</td>
+                  <td style="text-align:right;padding:9px 8px;color:{{ fd.isColor }}">{{ fd.isStr }}</td>
+                  <td style="text-align:right;padding:9px 14px;color:{{ fd.oosColor }};font-weight:600">{{ fd.oosStr }}</td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:12px">
+          <!-- PBO gauge -->
+          <div style="flex:2 1 220px;min-width:210px;background:#070d17;border:1px solid #16233a;border-radius:10px;padding:13px 14px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between">
+              <span style="font-size:10px;color:#7787a0;font-weight:600;letter-spacing:.06em">PROB. OF BACKTEST OVERFIT</span>
+              <span style="font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:700;color:#ff6262">{{ pboStr }}</span>
+            </div>
+            <div style="position:relative;height:9px;border-radius:5px;margin-top:12px;background:linear-gradient(90deg,#1f8a5b 0%,#b88a1e 50%,#c33636 100%)">
+              <span style="position:absolute;top:-4px;left:{{ pboLeft }}%;transform:translateX(-50%);width:3px;height:17px;background:#ffffff;border-radius:2px;box-shadow:0 0 6px #ff6262"></span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:9px;color:#4f5e75;font-family:'JetBrains Mono',monospace;margin-top:4px"><span>0.00 robust</span><span>0.50</span><span>1.00 overfit</span></div>
+            <div style="display:flex;justify-content:space-between;margin-top:12px;padding-top:10px;border-top:1px solid #14202f">
+              <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:9.5px;color:#6b7c95;letter-spacing:.05em">DEFLATED SHARPE</span><span style="font-family:'JetBrains Mono',monospace;font-size:15px;color:#9fb0c8">{{ dsharpeStr }}</span></div>
+              <div style="display:flex;flex-direction:column;gap:2px;text-align:right"><span style="font-size:9.5px;color:#6b7c95;letter-spacing:.05em">OOS FOLDS +</span><span style="font-family:'JetBrains Mono',monospace;font-size:15px;color:#ff6262">{{ oosProfitable }}</span></div>
+            </div>
+          </div>
+
+          <!-- total oos -->
+          <div style="flex:1 1 130px;min-width:130px;background:#070d17;border:1px solid #16233a;border-radius:10px;padding:13px 14px;display:flex;flex-direction:column;justify-content:center;gap:5px">
+            <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">TOTAL OOS PnL</span>
+            <span style="font-family:'JetBrains Mono',monospace;font-size:21px;font-weight:600;color:#ff6262;line-height:1">{{ totalOosStr }}</span>
+            <span style="font-size:9.5px;color:#4f5e75">across 4 test folds</span>
+          </div>
+        </div>
+
+        <!-- verdict banner -->
+        <div style="margin-top:12px;background:#1a0d10;border:1px solid #5a1f25;border-radius:10px;padding:13px 15px;display:flex;gap:12px;align-items:flex-start">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" style="flex:0 0 auto;margin-top:1px"><circle cx="12" cy="12" r="9" stroke="#ff6262" stroke-width="2"/><path d="M9 9l6 6M15 9l-6 6" stroke="#ff6262" stroke-width="2" stroke-linecap="round"/></svg>
+          <div style="display:flex;flex-direction:column;gap:3px">
+            <span style="font-size:12.5px;font-weight:700;color:#ff8b8b;letter-spacing:.02em">SIGNAL REJECTED — no out-of-sample edge</span>
+            <span style="font-size:11.5px;color:#c99;line-height:1.45">0/4 OOS folds profitable · PBO 1.00 · deflated Sharpe undefined. The validation gate is working as intended — this candidate does not survive purged walk-forward and will not be promoted to live.</span>
+          </div>
+        </div>
+        <div style="flex:1"></div>
+      </section>
+    </div>
+
+    <!-- footer -->
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:2px 4px;margin-top:2px">
+      <span style="font-size:10px;color:#3f4d62;font-family:'JetBrains Mono',monospace">muninn · huginn · sleipnir · odin · redpanda</span>
+      <span style="display:inline-flex;align-items:center;gap:6px;font-size:10px;color:#7e6a3a;background:#211a0c;border:1px solid #3d3214;padding:4px 10px;border-radius:6px;letter-spacing:.04em;font-weight:600">
+        <span style="width:6px;height:6px;border-radius:50%;background:#f3b13c"></span>DEMO DATA · not connected to live endpoints
+      </span>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1520,&quot;height&quot;:1180}}">
+class Component extends DCLogic {
+  state = { halted: false };
+
+  // ---- default dashboard state (swap this.props.data for a live fetch later) ----
+  defaultData() {
+    return {
+      // huginn /api/snapshot + /metrics
+      live: {
+        totalValue: 1000.3, cash: 935.8, realizedPnL: 0.58, unrealizedPnL: -0.06,
+        fees: 0.21, totalFills: 22, ordersCostSuppressed: 10,
+        regime: "TREND",
+        positions: [
+          { instrument: "BTC-USDT", quantity: 0.001, averageCost: 64197.4, lastMarkPrice: 64210.0, unrealizedPnL: 0.013 },
+          { instrument: "ETH-USDT", quantity: -0.002, averageCost: 1727.1, lastMarkPrice: 1723.0, unrealizedPnL: 0.008 }
+        ],
+        fills: [
+          { instrument: "ETH-USDT", side: "SELL", quantity: 0.001, fillPrice: 1727.07, timestamp: "14:56:09" },
+          { instrument: "BTC-USDT", side: "BUY",  quantity: 0.001, fillPrice: 64197.4, timestamp: "14:55:52" },
+          { instrument: "SOL-USDT", side: "BUY",  quantity: 0.04,  fillPrice: 142.18,  timestamp: "14:55:31" },
+          { instrument: "ETH-USDT", side: "BUY",  quantity: 0.002, fillPrice: 1726.40, timestamp: "14:54:48" },
+          { instrument: "BTC-USDT", side: "SELL", quantity: 0.0005,fillPrice: 64255.1, timestamp: "14:54:12" },
+          { instrument: "XRP-USDT", side: "SELL", quantity: 2.0,   fillPrice: 0.5123,  timestamp: "14:53:40" },
+          { instrument: "DOGE-USDT",side: "BUY",  quantity: 30,    fillPrice: 0.1287,  timestamp: "14:53:02" },
+          { instrument: "BTC-USDT", side: "BUY",  quantity: 0.001, fillPrice: 64180.9, timestamp: "14:52:19" }
+        ],
+        equitySeries: [998.4,998.2,998.6,998.9,998.7,999.1,999.0,999.4,999.2,999.6,999.9,999.7,1000.1,999.9,1000.3,1000.6,1000.2,1000.5,1000.8,1000.4,1000.1,1000.5,1000.9,1001.1,1000.7,1000.4,1000.6,1000.9,1000.5,1000.2,1000.0,1000.4,1000.7,1000.5,1000.3,1000.3]
+      },
+      // huginn alpha factory
+      alpha: {
+        compositeScore: 0.42, entryThreshold: 0.30, blend: "weighted-sum",
+        alphas: [
+          { name: "imbalance",      weight: 0.30, contribution: 0.51,  confidence: 0.80, ic: [0.02,-0.01,0.03,0.0,-0.02] },
+          { name: "momentum",       weight: 0.25, contribution: -0.12, confidence: 0.60, ic: [-0.01,0.0,-0.02,0.01,-0.03] },
+          { name: "mean_reversion", weight: 0.20, contribution: 0.33,  confidence: 0.70, ic: [0.01,0.02,0.0,0.03,0.02] },
+          { name: "funding_rate",   weight: 0.15, contribution: 0.10,  confidence: 0.40, ic: [0.0,0.01,-0.01,0.0,0.01] },
+          { name: "vol_regime",     weight: 0.10, contribution: 0.0,   confidence: 0.0,  ic: [0.0,0.0,-0.01,0.0,0.0] }
+        ]
+      },
+      // muninn-py factor / portfolio
+      portfolio: {
+        weights: { BTC: 0.32, ETH: -0.18, SOL: 0.10, XRP: -0.14, DOGE: -0.10 },
+        factorExposures: { market: 0.05, momentum: 0.21, volatility: -0.12 },
+        riskContributions: { BTC: 0.22, ETH: 0.19, SOL: 0.20, XRP: 0.21, DOGE: 0.18 }
+      },
+      // validation
+      validation: {
+        folds: [
+          { fold: 1, train: 288,  test: 288, isPnL: -45.3,  oosPnL: -57.8 },
+          { fold: 2, train: 576,  test: 288, isPnL: -99.6,  oosPnL: -0.1 },
+          { fold: 3, train: 864,  test: 288, isPnL: -99.0,  oosPnL: -20.8 },
+          { fold: 4, train: 1152, test: 288, isPnL: -219.9, oosPnL: -65.4 }
+        ],
+        oosFoldsProfitable: "0/4", totalOOSPnL: -146.1, pbo: 1.0, deflatedSharpe: null
+      },
+      services: [
+        { name: "muninn",   status: "up" },
+        { name: "huginn",   status: "up" },
+        { name: "sleipnir", status: "degraded" },
+        { name: "odin",     status: "up" },
+        { name: "redpanda", status: "up" }
+      ]
+    };
+  }
+
+  // ---- formatting helpers ----
+  nf(v, d) { return Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); }
+  usd(v, d) { d = d == null ? 2 : d; return (v < 0 ? '-$' : '$') + this.nf(Math.abs(v), d); }
+  signedUsd(v, d) { d = d == null ? 2 : d; return (v >= 0 ? '+$' : '-$') + this.nf(Math.abs(v), d); }
+  pct(v, d) { d = d == null ? 2 : d; return (v >= 0 ? '+' : '') + this.nf(v, d) + '%'; }
+
+  // ---- geometry ----
+  polar(cx, cy, r, deg) { const a = (deg - 90) * Math.PI / 180; return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) }; }
+  arc(cx, cy, r, d0, d1) {
+    const s = this.polar(cx, cy, r, d1), e = this.polar(cx, cy, r, d0);
+    const large = Math.abs(d1 - d0) > 180 ? 1 : 0;
+    return `M ${s.x.toFixed(1)} ${s.y.toFixed(1)} A ${r} ${r} 0 ${large} 0 ${e.x.toFixed(1)} ${e.y.toFixed(1)}`;
+  }
+
+  toggleHalt = () => this.setState(s => ({ halted: !s.halted }));
+
+  renderVals() {
+    const C = { green:'#2bd4a4', red:'#ff6262', blue:'#5b8def', amber:'#f3b13c', mut:'#9fb0c8', dim:'#6b7c95' };
+    const d = this.props.data || this.defaultData();
+    const L = d.live, A = d.alpha, P = d.portfolio, V = d.validation;
+    const halted = this.state.halted;
+
+    // ---------- TOP STRIP ----------
+    const netPnl = L.realizedPnL + L.unrealizedPnL;
+    const netPct = (netPnl / (L.totalValue - netPnl)) * 100;
+    const regimeMap = {
+      QUIET:      { color:'#7787a0', bg:'#11192a', border:'#22324a' },
+      TREND:      { color:C.blue,    bg:'#0e1a30', border:'#23436e' },
+      'MEAN-REVERT':{ color:C.amber, bg:'#1c1606', border:'#43381a' },
+      VOLATILE:   { color:C.red,     bg:'#1f0c0e', border:'#4a2026' }
+    };
+    const rm = regimeMap[L.regime] || regimeMap.QUIET;
+
+    const svcColor = { up: C.green, degraded: C.amber, down: C.red };
+    const svcGlow  = { up: '#2bd4a455', degraded: '#f3b13c55', down: '#ff626255' };
+    const services = d.services.map(s => ({
+      name: s.name, color: svcColor[s.status] || C.dim, glow: svcGlow[s.status] || 'transparent',
+      title: s.name + ' — ' + s.status
+    }));
+
+    // ---------- EQUITY CURVE ----------
+    const es = L.equitySeries, W = 680, H = 168, pT = 14, pB = 18;
+    const mn = Math.min(...es), mx = Math.max(...es), span = (mx - mn) || 1;
+    const xs = i => (i / (es.length - 1)) * (W - 4) + 2;
+    const ys = v => pT + (1 - (v - mn) / span) * (H - pT - pB);
+    let line = '';
+    es.forEach((v, i) => { line += (i === 0 ? 'M ' : 'L ') + xs(i).toFixed(1) + ' ' + ys(v).toFixed(1) + ' '; });
+    const equityArea = line + `L ${xs(es.length-1).toFixed(1)} ${H} L ${xs(0).toFixed(1)} ${H} Z`;
+    const equityDotX = xs(es.length - 1), equityDotY = ys(es[es.length - 1]);
+
+    // ---------- STAT TILES ----------
+    const statTiles = [
+      { label:'REALIZED PnL',   value:this.signedUsd(L.realizedPnL),   color: L.realizedPnL>=0?C.green:C.red, sub:'booked today' },
+      { label:'UNREALIZED PnL', value:this.signedUsd(L.unrealizedPnL), color: L.unrealizedPnL>=0?C.green:C.red, sub:'open marks' },
+      { label:'FEES',           value:this.usd(L.fees),                color:C.mut, sub:'taker + maker' },
+      { label:'NET PnL',        value:this.signedUsd(netPnl),          color: netPnl>=0?C.green:C.red, sub:'realized + unreal' },
+      { label:'SUPPRESSED',     value:String(L.ordersCostSuppressed),  color:C.amber, sub:'cost-gated signals' }
+    ];
+
+    // ---------- POSITIONS ----------
+    const positions = L.positions.map(p => {
+      const long = p.quantity >= 0;
+      const priceDec = p.lastMarkPrice < 10 ? 4 : 2;
+      return {
+        instrument: p.instrument,
+        side: long ? 'LONG' : 'SHORT',
+        sideColor: long ? C.green : C.red,
+        sideBg: long ? '#0c1f1a' : '#1f0d10',
+        qtyStr: (long ? '+' : '') + this.nf(p.quantity, 4),
+        avgStr: this.nf(p.averageCost, priceDec),
+        markStr: this.nf(p.lastMarkPrice, priceDec),
+        pnlStr: this.signedUsd(p.unrealizedPnL, 3),
+        pnlColor: p.unrealizedPnL >= 0 ? C.green : C.red
+      };
+    });
+
+    // ---------- FILLS ----------
+    const fills = L.fills.map(f => {
+      const buy = f.side === 'BUY';
+      const pxDec = f.fillPrice < 10 ? 4 : 2;
+      const qd = f.quantity < 1 ? 4 : (f.quantity < 100 ? 2 : 0);
+      return {
+        t: f.timestamp, inst: f.instrument, side: f.side,
+        sideColor: buy ? C.green : C.red, sideBg: buy ? '#0c1f1a' : '#1f0d10',
+        qtyStr: this.nf(f.quantity, qd), pxStr: this.nf(f.fillPrice, pxDec)
+      };
+    });
+
+    // ---------- ALPHA GAUGE ----------
+    const cx = 140, cy = 132, R = 110, score = A.compositeScore, thr = A.entryThreshold;
+    const gaugeTrack = this.arc(cx, cy, R, -90, 90);
+    const gaugeBandPos = this.arc(cx, cy, R, thr * 90, 90);
+    const gaugeBandNeg = this.arc(cx, cy, R, -90, -thr * 90);
+    const gaugeActive = score >= 0 ? this.arc(cx, cy, R, 0, score * 90) : this.arc(cx, cy, R, score * 90, 0);
+    const compositeColor = Math.abs(score) < thr ? C.amber : (score > 0 ? C.green : C.red);
+    const needle = this.polar(cx, cy, R - 16, score * 90);
+    const tA_o = this.polar(cx, cy, R + 8, thr * 90), tA_i = this.polar(cx, cy, R - 10, thr * 90);
+    const tB_o = this.polar(cx, cy, R + 8, -thr * 90), tB_i = this.polar(cx, cy, R - 10, -thr * 90);
+    const implies = Math.abs(score) < thr ? 'NO TRADE' : (score > 0 ? 'IMPLIES LONG' : 'IMPLIES SHORT');
+    const impliesColor = Math.abs(score) < thr ? C.amber : (score > 0 ? C.green : C.red);
+    const impliesBg = Math.abs(score) < thr ? '#1c1606' : (score > 0 ? '#0c1f1a' : '#1f0d10');
+
+    // ---------- ALPHA LIST ----------
+    const maxAbsContrib = 1;
+    const alphas = A.alphas.map(a => {
+      const cv = a.contribution, frac = Math.min(Math.abs(cv) / maxAbsContrib, 1) * 50;
+      // ic sparkline
+      const icMn = Math.min(...a.ic, -0.005), icMx = Math.max(...a.ic, 0.005), icSpan = (icMx - icMn) || 1;
+      let icPath = '';
+      a.ic.forEach((v, i) => { const x = (i / (a.ic.length - 1)) * 60; const y = 16 - ((v - icMn) / icSpan) * 14; icPath += (i===0?'M ':'L ') + x.toFixed(1) + ' ' + y.toFixed(1) + ' '; });
+      const icLast = a.ic[a.ic.length - 1];
+      return {
+        name: a.name,
+        weightStr: this.nf(a.weight, 2),
+        contribStr: (cv >= 0 ? '+' : '') + this.nf(cv, 2),
+        contribColor: cv > 0 ? C.green : (cv < 0 ? C.red : C.dim),
+        contribLeft: cv >= 0 ? 50 : 50 - frac,
+        contribWidth: Math.max(frac, cv === 0 ? 0 : 1.2),
+        confStr: Math.round(a.confidence * 100) + '%',
+        confPct: a.confidence * 100,
+        confColor: a.confidence >= 0.65 ? C.blue : (a.confidence >= 0.45 ? C.amber : '#46566e'),
+        icPath, icColor: icLast >= 0 ? C.green : C.red
+      };
+    });
+
+    // ---------- PORTFOLIO WEIGHTS ----------
+    const wEntries = Object.entries(P.weights);
+    const wMax = Math.max(...wEntries.map(([k, v]) => Math.abs(v))) * 1.08 || 1;
+    const weights = wEntries.map(([k, v]) => {
+      const frac = (Math.abs(v) / wMax) * 50;
+      return {
+        label: k, valStr: (v >= 0 ? '+' : '') + this.nf(v, 2),
+        color: v >= 0 ? C.green : C.red,
+        left: v >= 0 ? 50 : 50 - frac, width: Math.max(frac, 0.8)
+      };
+    });
+    const netExp = wEntries.reduce((s, [k, v]) => s + v, 0);
+    const netExposureStr = (netExp >= 0 ? '+' : '') + this.nf(netExp, 2) + ' (neutral)';
+
+    // ---------- FACTORS ----------
+    const fEntries = Object.entries(P.factorExposures);
+    const fMax = Math.max(...fEntries.map(([k, v]) => Math.abs(v))) * 1.15 || 1;
+    const factors = fEntries.map(([k, v]) => {
+      const frac = (Math.abs(v) / fMax) * 50;
+      return {
+        label: k, valStr: (v >= 0 ? '+' : '') + this.nf(v, 2),
+        color: v >= 0 ? C.blue : C.amber,
+        left: v >= 0 ? 50 : 50 - frac, width: Math.max(frac, 0.8)
+      };
+    });
+
+    // ---------- RISK DONUT ----------
+    const rEntries = Object.entries(P.riskContributions);
+    const rTotal = rEntries.reduce((s, [k, v]) => s + v, 0);
+    const palette = ['#5b8def', '#2bd4a4', '#f3b13c', '#a779f0', '#5f6f88'];
+    const circ = 2 * Math.PI * 54;
+    let cum = 0;
+    const donutSegs = [], donutLegend = [];
+    rEntries.forEach(([k, v], i) => {
+      const frac = v / rTotal, len = frac * circ;
+      donutSegs.push({ color: palette[i % palette.length], dash: len.toFixed(1) + ' ' + (circ - len).toFixed(1), offset: (-cum * circ).toFixed(1) });
+      donutLegend.push({ label: k, color: palette[i % palette.length], pctStr: Math.round(frac * 100) + '%' });
+      cum += frac;
+    });
+
+    // ---------- VALIDATION ----------
+    const folds = V.folds.map(f => ({
+      fold: f.fold, train: f.train, test: f.test,
+      isStr: this.signedUsd(f.isPnL, 1), isColor: f.isPnL >= 0 ? C.green : C.red,
+      oosStr: this.signedUsd(f.oosPnL, 1), oosColor: f.oosPnL >= 0 ? C.green : C.red
+    }));
+
+    return {
+      halted, toggleHalt: this.toggleHalt,
+      // top strip
+      equityStr: this.usd(L.totalValue), cashStr: this.usd(L.cash),
+      netPnlStr: this.signedUsd(netPnl), netPnlPctStr: this.pct(netPct, 3),
+      netPnlColor: netPnl >= 0 ? C.green : C.red,
+      openPos: L.positions.length, fillsToday: L.totalFills,
+      regime: L.regime, regimeColor: rm.color, regimeBg: rm.bg, regimeBorder: rm.border,
+      services,
+      // halt button
+      haltStatusLabel: halted ? 'HALTED' : 'RUNNING',
+      haltStatusColor: halted ? C.red : C.green,
+      haltBtnLabel: halted ? 'RESUME' : 'HALT',
+      haltBtnBg: halted ? '#0c1f1a' : '#1f0d10',
+      haltBtnBorder: halted ? '#1f6e54' : '#6e2a30',
+      haltBtnText: halted ? C.green : '#ff8b8b',
+      haltIconSecond: halted ? 'display:none' : '',
+      // live
+      suppressed: L.ordersCostSuppressed,
+      equityPath: line.trim(), equityArea, equityDotX, equityDotY,
+      equityStartStr: this.usd(es[0]), equityEndStr: this.usd(es[es.length - 1]),
+      statTiles, positions, fills,
+      // alpha
+      blend: A.blend, alphaCount: A.alphas.length,
+      compositeStr: (score >= 0 ? '+' : '') + this.nf(score, 2), compositeColor,
+      thresholdStr: this.nf(thr, 2),
+      gaugeTrack, gaugeActive, gaugeBandPos, gaugeBandNeg,
+      needleX: needle.x.toFixed(1), needleY: needle.y.toFixed(1),
+      tickAx1: tA_i.x.toFixed(1), tickAy1: tA_i.y.toFixed(1), tickAx2: tA_o.x.toFixed(1), tickAy2: tA_o.y.toFixed(1),
+      tickBx1: tB_i.x.toFixed(1), tickBy1: tB_i.y.toFixed(1), tickBx2: tB_o.x.toFixed(1), tickBy2: tB_o.y.toFixed(1),
+      compImplies: implies, compImpliesColor: impliesColor, compImpliesBg: impliesBg,
+      alphas,
+      // portfolio
+      weights, netExposureStr, factors, donutSegs, donutLegend,
+      // validation
+      folds,
+      oosProfitable: V.oosFoldsProfitable, totalOosStr: this.signedUsd(V.totalOOSPnL, 1),
+      pboStr: this.nf(V.pbo, 2), pboLeft: V.pbo * 100,
+      dsharpeStr: V.deflatedSharpe == null ? 'undefined' : this.nf(V.deflatedSharpe, 2)
+    };
+  }
+}
+</script>
+</body>
+</html>

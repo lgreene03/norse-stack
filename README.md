@@ -18,6 +18,7 @@ This repo is built to demonstrate the **rails a quant research team works on**, 
 
 - **[`docs/PLATFORM.md`](docs/PLATFORM.md)** — the platform architecture as a pipeline a quant team extends, with a mermaid diagram and the exact code/extension point for each stage (alpha framework in [`huginn/internal/strategy`](https://github.com/lgreene03/huginn/blob/main/internal/strategy/strategy.go), factor/IC research in [muninn-py](https://github.com/lgreene03/muninn-py), validation in [`huginn/cmd/walkforward`](https://github.com/lgreene03/huginn/blob/main/cmd/walkforward/main.go)).
 - **[`docs/ADDING_AN_ALPHA.md`](docs/ADDING_AN_ALPHA.md)** — the concrete recipe for shipping a new signal end-to-end: measure IC first, implement one self-contained `Strategy`, size into the signed-position portfolio, reuse the net-of-cost gate, then prove or kill it with walk-forward + PBO.
+- **[`console/`](console/)** — the **Norse Console**: a dark, read-only operator + research dashboard (live trading, the alpha factory, factor-aware portfolio weights, and the walk-forward/PBO verdict). Self-contained static front-end (`python3 console/serve.py`) that reads the live service endpoints and falls back to demo data when offline. See [`console/README.md`](console/README.md).
 - **[`docs/EDGE_VERDICT.md`](docs/EDGE_VERDICT.md)** — the honest no-edge verdict (0/4 OOS folds, PBO = 1.00). That rejection *is* the platform working: it tells you a signal is dead so you move on, instead of shipping an overfit backtest.
 
 ## Results (honest one-liner)
