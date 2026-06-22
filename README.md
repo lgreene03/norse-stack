@@ -1,6 +1,6 @@
 # Norse Stack
 
-**A distributed quantitative trading infrastructure built from first principles.**
+**An extensible quant-alpha platform — the rails a research team uses to take a signal from data to a validated (or honestly rejected) verdict.**
 
 [![Muninn CI](https://github.com/lgreene03/muninn/actions/workflows/ci.yml/badge.svg)](https://github.com/lgreene03/muninn/actions/workflows/ci.yml)
 [![Huginn CI](https://github.com/lgreene03/huginn/actions/workflows/ci.yml/badge.svg)](https://github.com/lgreene03/huginn/actions/workflows/ci.yml)
@@ -9,6 +9,16 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 Norse Stack is a 15-container distributed crypto trading system that ingests live Binance market data, computes 10 independent signal layers, executes quantitative strategies with regime-aware threshold adaptation, routes orders through TWAP/VWAP execution algorithms, and monitors everything through Prometheus and Grafana. Named after figures from Norse mythology.
+
+## Quant platform, not a bot
+
+This repo is built to demonstrate the **rails a quant research team works on**, not to make money (the validation gate proved there is no edge on this data — see below — and reporting that honestly is the point). It is an extensible pipeline with a clear extension point at every stage:
+
+**data adapter → feature event → alpha registry (pluggable signals) → signal combination → factor-aware portfolio construction (signed long/short positions) → cost-aware execution → validation gate (walk-forward + PBO)**, with an IC research loop on the side in the Python SDK.
+
+- **[`docs/PLATFORM.md`](docs/PLATFORM.md)** — the platform architecture as a pipeline a quant team extends, with a mermaid diagram and the exact code/extension point for each stage (alpha framework in [`huginn/internal/strategy`](https://github.com/lgreene03/huginn/blob/main/internal/strategy/strategy.go), factor/IC research in [muninn-py](https://github.com/lgreene03/muninn-py), validation in [`huginn/cmd/walkforward`](https://github.com/lgreene03/huginn/blob/main/cmd/walkforward/main.go)).
+- **[`docs/ADDING_AN_ALPHA.md`](docs/ADDING_AN_ALPHA.md)** — the concrete recipe for shipping a new signal end-to-end: measure IC first, implement one self-contained `Strategy`, size into the signed-position portfolio, reuse the net-of-cost gate, then prove or kill it with walk-forward + PBO.
+- **[`docs/EDGE_VERDICT.md`](docs/EDGE_VERDICT.md)** — the honest no-edge verdict (0/4 OOS folds, PBO = 1.00). That rejection *is* the platform working: it tells you a signal is dead so you move on, instead of shipping an overfit backtest.
 
 ## Results (honest one-liner)
 
