@@ -71,12 +71,46 @@ This re-frames the rest of the system honestly:
   OBI-threshold signal. A trained ML filter could change the picture; that is a
   data problem, recorded in `PRODUCTION_READINESS.md`.
 
+## OU mean-reversion — same gate, same verdict (but more disciplined)
+
+The OU mean-reversion strategy was put through the identical walk-forward + PBO
+gate (sweeping the |z| entry band {1.5, 2.0, 2.5, 3.0}, 60-bar OLS window):
+
+```
+OOS folds profitable: 0/4 (0%)
+Total OOS PnL:        -12.83
+PBO:                  1.0000
+```
+
+**Also no out-of-sample edge** — 0/4 folds, PBO = 1.00. But note the contrast
+with OBI: OU loses **−12.83 total vs OBI's −146.11**, because it trades ~10× less
+(7–9 OOS fills per window vs OBI's 68–119). Its z-score band + half-life exits +
+trend-guard make it far more disciplined, so it *bleeds less* — but discipline is
+not edge. It still does not make money out-of-sample on this data.
+
+Honest caveat specific to OU: the test window is ~24h of BTC, which is not
+obviously a **mean-reverting** regime (OU's whole premise). The OU trend-guard
+correctly refuses to trade when it can't fit a mean-reverting process, which is
+why fill counts are low. A fair test of OU needs a dataset/instrument with a
+demonstrated mean-reverting (or cointegrated-pair) structure — captured over a
+longer window. Until then, OU is "promising machinery, unproven on this data,"
+not a validated alpha.
+
+**Bottom line across both strategies:** neither OBI nor OU has demonstrable
+out-of-sample edge here. The honest path to alpha is better *signals/data*
+(a mean-reverting pair for OU, a trained ML filter, a longer multi-regime window),
+validated through this same gate — not more parameter tuning of what we have.
+
 ## How to reproduce
 
 ```bash
 cd huginn
+# OBI
 go run ./cmd/walkforward --data data/btc_test.jsonl --config <obi.yaml> \
   --folds 4 --thresholds 0.5,0.6,0.7,0.8
+# OU (sweep the |z| entry band)
+go run ./cmd/walkforward --data data/btc_test.jsonl --config <ou.yaml> \
+  --folds 4 --thresholds 1.5,2.0,2.5,3.0
 ```
 
 See also [RESULTS.md](RESULTS.md) for the full-sample numbers and the
