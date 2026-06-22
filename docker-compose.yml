@@ -384,6 +384,90 @@ services:
     mem_limit: 256m
     restart: unless-stopped
 
+  # ── Research & Platform Services ──────────────────────────────────────
+
+  # Research / validation gateway: runs walk-forward + PBO + Deflated-Sharpe
+  # jobs OUT of the live trading process (reuses huginn's internal/research).
+  # No Kafka/DB deps; reads the bundled dataset, serves results over HTTP.
+  research:
+    build:
+      context: ../huginn
+      dockerfile: Dockerfile.research
+    ports:
+      - "8094:8094"
+    environment:
+      RESEARCH_PORT: "8094"
+      RESEARCH_RESULTS_DIR: data/research
+      RESEARCH_DATA_PATH: data/btc_test.jsonl
+      ACCESS_CONTROL_ALLOW_ORIGIN: ${ACCESS_CONTROL_ALLOW_ORIGIN:-*}
+    volumes:
+      # The historical dataset is .dockerignored from the image; mount it in.
+      # Read-only: completed runs are served from memory (research jobs are
+      # ephemeral by design — re-run to reproduce).
+      - ../huginn/data:/app/data:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8094/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    mem_limit: 256m
+    restart: unless-stopped
+
+  # Mimir — point-in-time (no-lookahead) feature store. Consumes features.obi.v1
+  # and stamps BOTH event_time and ingest_time so as-of queries never leak
+  # data that hadn't physically arrived yet. SQLite on a named volume.
+  mimir:
+    build:
+      context: ./services/mimir
+      dockerfile: Dockerfile
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    ports:
+      - "8095:8095"
+    environment:
+      KAFKA_BROKERS: redpanda:29092
+      FEATURES_TOPIC: features.obi.v1
+      MIMIR_PORT: "8095"
+      MIMIR_DB: /app/data/mimir.db
+      ACCESS_CONTROL_ALLOW_ORIGIN: ${ACCESS_CONTROL_ALLOW_ORIGIN:-*}
+    volumes:
+      - mimir-data:/app/data
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8095/healthz',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    mem_limit: 256m
+    restart: unless-stopped
+
+  # Forseti — execution transaction-cost analysis. Consumes executions.fills.v1
+  # (+ prices.realtime.v1 for an arrival benchmark) → slippage, maker/taker,
+  # implementation shortfall, cost attribution. Never fabricates a benchmark.
+  forseti:
+    build:
+      context: ./services/forseti
+      dockerfile: Dockerfile
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    ports:
+      - "8096:8096"
+    environment:
+      KAFKA_BROKERS: redpanda:29092
+      FILLS_TOPIC: executions.fills.v1
+      PRICES_TOPIC: prices.realtime.v1
+      PRICES_ENABLED: "true"
+      FORSETI_PORT: "8096"
+      ACCESS_CONTROL_ALLOW_ORIGIN: ${ACCESS_CONTROL_ALLOW_ORIGIN:-*}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8096/healthz',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    mem_limit: 256m
+    restart: unless-stopped
+
   # ── ML & Intelligence ─────────────────────────────────────────────────
 
   huginn-ai:
@@ -510,3 +594,4 @@ volumes:
   sleipnir-data:
   pgdata-muninn:
   pgdata-huginn:
+  mimir-data:
