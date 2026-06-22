@@ -109,7 +109,7 @@ The quick ASCII view:
 | Service | Language | Role |
 |---------|----------|------|
 | **[Muninn](https://github.com/lgreene03/muninn)** | Java 21 / Spring Boot | Market data ingestion, deterministic feature computation, S3/Postgres storage |
-| **[Huginn](https://github.com/lgreene03/huginn)** | Go 1.25 | Strategy execution with 4 pluggable strategies, risk controls, portfolio management, gRPC API |
+| **[Huginn](https://github.com/lgreene03/huginn)** | Go 1.25 | Strategy execution with 6 strategies + a pluggable alpha framework, risk controls, portfolio management, gRPC API |
 | **[Sleipnir](https://github.com/lgreene03/sleipnir)** | Go 1.25 | Order execution gateway with TWAP/VWAP algorithms, rate limiting, pre-trade risk |
 | **Obi-Bridge** | Python | Real-time 10-layer signal computation from live Binance order books |
 | **Odin** | Python | Performance analytics: Sharpe, Sortino, CVaR, VaR, Monte Carlo, correlation matrix |
@@ -250,7 +250,7 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 ## Key Features
 
 ### Strategy Engine (Huginn)
-- 4 pluggable strategies: OBI Threshold, VPIN Breakout, EMA Crossover, VWAP Deviation
+- 6 strategies + a pluggable alpha framework: OBI Threshold, VPIN Breakout, VWAP Deviation, EMA Crossover, OU Mean-Reversion, Composite
 - Regime-aware threshold adaptation using Hurst exponent and autocorrelation
 - Sub-second exit monitoring via real-time price tick consumer
 - Signal-to-decision latency: p50 ~3ms (Prometheus histogram)

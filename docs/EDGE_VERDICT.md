@@ -35,11 +35,15 @@ Two numbers settle it:
 - **PBO = 1.00.** The Probability of Backtest Overfitting (Bailey & López de
   Prado, combinatorially-symmetric cross-validation) is the maximum possible:
   the configuration that looked best in-sample landed in the *bottom half*
-  out-of-sample in **every** fold. The parameter selection is pure noise-fitting.
+  out-of-sample in **every** fold. Read honestly: on this short fixture the
+  cross-config OOS Sharpes are near-tied, so PBO pins at the extreme as a
+  conservative/degenerate tie-break rather than as an independently strong
+  measurement. The **0/4 OOS-folds-profitable** count is the load-bearing
+  evidence; PBO corroborates rather than carries the verdict.
 
 The Deflated Sharpe Ratio reads `n/a` here only because the 24h window is too
 short to form a meaningful per-period return series (equity is sampled daily) —
-a separate, documented limitation. PBO does not need that and is conclusive.
+a separate, documented limitation. PBO does not depend on that series.
 
 ## Interpretation
 
@@ -64,8 +68,10 @@ This re-frames the rest of the system honestly:
 ## Caveats on the verdict itself
 
 - One instrument (BTC-USD), ~24h, 1,440 one-minute bars. A negative result on a
-  short window is suggestive, not the final word — but PBO = 1.0 is a strong
-  signal regardless of sample size, and the burden of proof is on the strategy.
+  short window is suggestive, not the final word. On this fixture PBO = 1.0 is a
+  conservative tie-break (near-tied OOS Sharpes), not a strong stand-alone
+  measurement — the 0/4 profitable OOS folds are what carry the verdict, and the
+  burden of proof is on the strategy.
 - The ML-confidence layer that would normally gate signals is currently
   untrained (emits a near-constant ~0.08), so this verdict is for the bare
   OBI-threshold signal. A trained ML filter could change the picture; that is a

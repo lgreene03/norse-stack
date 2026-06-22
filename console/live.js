@@ -1150,11 +1150,19 @@
         }
       } else {
         showHaltNotice('Breaker control returned ' + r.status + '.');
-        console.warn('[norse-console] breaker POST returned ' + r.status);
+        // Warn once per failure streak — a repeatedly-clicked dead button keeps
+        // the on-screen notice up but stays quiet in console.
+        if (!breakerAuthWarned) {
+          console.warn('[norse-console] breaker POST returned ' + r.status);
+          breakerAuthWarned = true;
+        }
       }
     }).catch(function (e) {
       showHaltNotice('Breaker control unreachable.');
-      console.warn('[norse-console] breaker POST failed:', e && e.message);
+      if (!breakerAuthWarned) {
+        console.warn('[norse-console] breaker POST failed:', e && e.message);
+        breakerAuthWarned = true;
+      }
     });
   }
 

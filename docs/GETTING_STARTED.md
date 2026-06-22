@@ -172,14 +172,16 @@ bash scripts/smoke-stack.sh --teardown
 
 ## 8. Switch strategies
 
-Huginn ships with 4 strategies. Change by restarting with a different env var:
+Huginn ships with 6 strategies plus a pluggable alpha framework. Change by restarting with a different env var:
 
 | Strategy | `STRATEGY_NAME` | What it does |
 |----------|-----------------|--------------|
 | **OBI Threshold** | `obi` | Mean-reversion on order book imbalance |
 | **VPIN Breakout** | `vpin` | Volume-synchronized probability of informed trading |
-| **EMA Crossover** | `ema_crossover` | Classic dual moving average crossover |
 | **VWAP Deviation** | `vwap_deviation` | Trade when price deviates from volume-weighted average |
+| **EMA Crossover** | `ema_crossover` | Classic dual moving average crossover |
+| **OU Mean-Reversion** | `ou` | Ornstein-Uhlenbeck price-process mean-reversion |
+| **Composite** | `composite` | Combines multiple sub-strategy signals |
 
 ```bash
 # Stop Huginn, restart with VPIN strategy

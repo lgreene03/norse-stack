@@ -18,7 +18,7 @@ Exchange Data → Muninn (ingest + features) → Huginn (strategy + risk) → Sl
 | Service | Language | LOC | Purpose |
 |---------|----------|-----|---------|
 | Muninn | Java 21 / Spring Boot 4.1 | ~8K | Event ingestion, feature computation (VWAP), Parquet storage, deterministic replay, SSE streaming |
-| Huginn | Go 1.25 | ~5.5K | Strategy execution (4 strategies), portfolio tracking, risk management, backtesting, calibration |
+| Huginn | Go 1.25 | ~5.5K | Strategy execution (6 strategies + pluggable alpha framework), portfolio tracking, risk management, backtesting, calibration |
 | Sleipnir | Go 1.26 | ~5.5K | Order routing, rate limiting, sim/live exchange backends, boot reconciliation |
 | muninn-py | Python 3.10+ | ~3K | Research SDK, CLI, Streamlit dashboard, Polars/pandas DataFrames |
 
