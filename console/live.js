@@ -72,10 +72,10 @@
     validation: {
       available: true,
       folds: [
-        { fold: 1, train: 288, test: 288, isPnL: -45.3, oosPnL: -57.8 },
-        { fold: 2, train: 576, test: 288, isPnL: -99.6, oosPnL: -0.1 },
-        { fold: 3, train: 864, test: 288, isPnL: -99.0, oosPnL: -20.8 },
-        { fold: 4, train: 1152, test: 288, isPnL: -219.9, oosPnL: -65.4 }
+        { fold: 1, train: '2026-05-18T01:01 → 2026-05-18T05:48', test: '2026-05-18T05:48 → 2026-05-18T10:36', isPnL: -45.3, oosPnL: -57.8 },
+        { fold: 2, train: '2026-05-18T01:01 → 2026-05-18T10:36', test: '2026-05-18T10:36 → 2026-05-18T15:24', isPnL: -99.6, oosPnL: -0.1 },
+        { fold: 3, train: '2026-05-18T01:01 → 2026-05-18T15:24', test: '2026-05-18T15:24 → 2026-05-18T20:12', isPnL: -99.0, oosPnL: -20.8 },
+        { fold: 4, train: '2026-05-18T01:01 → 2026-05-18T20:12', test: '2026-05-18T20:12 → 2026-05-19T01:00', isPnL: -219.9, oosPnL: -65.4 }
       ],
       oosFoldsProfitable: '0/4', totalOOSPnL: -146.1, pbo: 1.0, deflatedSharpe: null
     },
@@ -486,6 +486,11 @@
   // ====================================================================
   var halted = false;
   var liveHaltReason = ''; // halt_reason from the live snapshot, surfaced when halted
+  // Guard so a repeatedly-clicked breaker control (e.g. a no-token HALT that the
+  // user keeps retrying) logs to the console only once per auth-failure streak.
+  // The on-screen halt-notice is the primary feedback; the console.warn is a
+  // one-shot diagnostic that re-arms on any successful POST or token change.
+  var breakerAuthWarned = false;
 
   function regimeStyle(regime) {
     var map = {
@@ -829,10 +834,13 @@
       foldsBody.innerHTML = (V.folds && V.folds.length) ? V.folds.map(function (f) {
         var isColor = f.isPnL >= 0 ? C.green : C.red;
         var oosColor = f.oosPnL >= 0 ? C.green : C.red;
+        // train/test are TRAIN/TEST window ranges from huginn (datetime-range
+        // strings, e.g. "2026-05-18T01:01 → 2026-05-18T05:48"); render verbatim,
+        // escaped, and left-aligned to match the "… WINDOW" column headers.
         return '<tr style="border-top:1px solid #111d2c;font-size:12px">' +
           '<td style="text-align:left;padding:9px 14px;color:#c4d0e0">#' + f.fold + '</td>' +
-          '<td style="text-align:right;padding:9px 8px;color:#7787a0">' + f.train + '</td>' +
-          '<td style="text-align:right;padding:9px 8px;color:#7787a0">' + f.test + '</td>' +
+          '<td style="text-align:left;padding:9px 8px;color:#7787a0">' + esc(String(f.train)) + '</td>' +
+          '<td style="text-align:left;padding:9px 8px;color:#7787a0">' + esc(String(f.test)) + '</td>' +
           '<td style="text-align:right;padding:9px 8px;color:' + isColor + '">' + signedUsd(f.isPnL, 1) + '</td>' +
           '<td style="text-align:right;padding:9px 14px;color:' + oosColor + ';font-weight:600">' + signedUsd(f.oosPnL, 1) + '</td></tr>';
       }).join('') : emptyRow(5, 'no folds');
@@ -1127,12 +1135,19 @@
     fetchWithTimeout('/api/breaker', {
       method: 'POST', headers: headers, body: JSON.stringify({ halted: target })
     }).then(function (r) {
-      if (r.ok) { halted = target; liveHaltReason = ''; showHaltNotice(''); applyHaltVisual(); }
-      else if (r.status === 401 || r.status === 403) {
+      if (r.ok) {
+        halted = target; liveHaltReason = ''; showHaltNotice(''); applyHaltVisual();
+        breakerAuthWarned = false; // re-arm the one-shot warn on a successful POST
+      } else if (r.status === 401 || r.status === 403) {
         showHaltNotice(token
           ? 'Breaker control rejected the token (' + r.status + '). Set a valid token via the TOKEN button.'
           : 'Breaker control requires a token (' + r.status + '). Click TOKEN to set one, then retry.');
-        console.warn('[norse-console] breaker POST returned ' + r.status + (token ? '' : ' (no token set — control plane locked)'));
+        // Warn only once per auth-failure streak — repeated retries during a
+        // no-token HALT keep the on-screen notice up but stay quiet in console.
+        if (!breakerAuthWarned) {
+          console.warn('[norse-console] breaker POST returned ' + r.status + (token ? '' : ' (no token set — control plane locked)'));
+          breakerAuthWarned = true;
+        }
       } else {
         showHaltNotice('Breaker control returned ' + r.status + '.');
         console.warn('[norse-console] breaker POST returned ' + r.status);
@@ -1150,6 +1165,7 @@
     var val = window.prompt('Breaker control token (stored in localStorage as nc_token; leave blank to clear):', current);
     if (val === null) return; // cancelled
     val = val.trim();
+    breakerAuthWarned = false; // token changed — re-arm the one-shot auth warn
     try {
       if (val) { localStorage.setItem('nc_token', val); showHaltNotice('Token saved. The HALT/RESUME button is now authorized.'); }
       else { localStorage.removeItem('nc_token'); showHaltNotice('Token cleared.'); }

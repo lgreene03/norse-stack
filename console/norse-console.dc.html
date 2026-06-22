@@ -360,8 +360,8 @@
             <thead>
               <tr style="font-size:9.5px;color:#5b6a82;text-align:right">
                 <th style="text-align:left;padding:8px 14px;font-weight:600;letter-spacing:.04em">FOLD</th>
-                <th style="padding:8px 8px;font-weight:600">TRAIN</th>
-                <th style="padding:8px 8px;font-weight:600">TEST</th>
+                <th style="text-align:left;padding:8px 8px;font-weight:600">TRAIN WINDOW</th>
+                <th style="text-align:left;padding:8px 8px;font-weight:600">TEST WINDOW</th>
                 <th style="padding:8px 8px;font-weight:600">IS PnL</th>
                 <th style="padding:8px 14px;font-weight:600">OOS PnL</th>
               </tr>
@@ -370,8 +370,8 @@
               <sc-for list="{{ folds }}" as="fd" hint-placeholder-count="4">
                 <tr style="border-top:1px solid #111d2c;font-size:12px">
                   <td style="text-align:left;padding:9px 14px;color:#c4d0e0">#{{ fd.fold }}</td>
-                  <td style="text-align:right;padding:9px 8px;color:#7787a0">{{ fd.train }}</td>
-                  <td style="text-align:right;padding:9px 8px;color:#7787a0">{{ fd.test }}</td>
+                  <td style="text-align:left;padding:9px 8px;color:#7787a0">{{ fd.train }}</td>
+                  <td style="text-align:left;padding:9px 8px;color:#7787a0">{{ fd.test }}</td>
                   <td style="text-align:right;padding:9px 8px;color:{{ fd.isColor }}">{{ fd.isStr }}</td>
                   <td style="text-align:right;padding:9px 14px;color:{{ fd.oosColor }};font-weight:600">{{ fd.oosStr }}</td>
                 </tr>

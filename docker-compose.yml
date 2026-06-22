@@ -331,6 +331,12 @@ services:
       retries: 3
       start_period: 20s
     mem_limit: 256m
+    # Conservative hardening (no read_only / cap_drop — keeps runtime + any
+    # local writes working): block privilege escalation, bound CPU + PIDs.
+    cpus: "1.0"
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   # ── Analytics & Explainability ───────────────────────────────────────
@@ -357,6 +363,10 @@ services:
       timeout: 5s
       retries: 3
     mem_limit: 256m
+    cpus: "1.0"
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   bragi:
@@ -382,6 +392,10 @@ services:
       timeout: 5s
       retries: 3
     mem_limit: 256m
+    cpus: "1.0"
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   # ── Research & Platform Services ──────────────────────────────────────
@@ -411,6 +425,10 @@ services:
       timeout: 5s
       retries: 3
     mem_limit: 256m
+    cpus: "1.0"
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   # Mimir — point-in-time (no-lookahead) feature store. Consumes features.obi.v1
@@ -439,6 +457,12 @@ services:
       timeout: 5s
       retries: 3
     mem_limit: 256m
+    cpus: "1.0"
+    pids_limit: 256
+    # no read_only rootfs / cap_drop here: mimir writes SQLite to its named
+    # volume and those would break it. no-new-privileges is safe.
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   # Forseti — execution transaction-cost analysis. Consumes executions.fills.v1
@@ -466,6 +490,10 @@ services:
       timeout: 5s
       retries: 3
     mem_limit: 256m
+    cpus: "1.0"
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   # ── ML & Intelligence ─────────────────────────────────────────────────
@@ -494,6 +522,10 @@ services:
       timeout: 5s
       retries: 3
     mem_limit: 512m
+    cpus: "1.0"
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   # ── Observability ─────────────────────────────────────────────────────
@@ -588,6 +620,10 @@ services:
       timeout: 5s
       retries: 3
     mem_limit: 256m
+    cpus: "1.0"
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
 volumes:
