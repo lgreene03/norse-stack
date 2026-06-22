@@ -27,7 +27,6 @@ import sqlite3
 import sys
 import threading
 import time
-import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -39,6 +38,12 @@ KAFKA_BROKERS = os.environ.get("KAFKA_BROKERS", "redpanda:29092")
 FEATURES_TOPIC = os.environ.get("FEATURES_TOPIC", "features.obi.v1")
 PORT = int(os.environ.get("MIMIR_PORT", "8095"))
 DB_PATH = os.environ.get("MIMIR_DB", "data/mimir.db")
+# Consumer group/offset: a STABLE group + committed offsets means ingest_time is
+# the true first-arrival instant and restarts resume rather than re-stamping the
+# whole topic. Default tails live ("latest"); set MIMIR_OFFSET_RESET=earliest
+# once against a fresh MIMIR_DB to backfill historical events.
+MIMIR_GROUP_ID = os.environ.get("MIMIR_GROUP_ID", "mimir-feature-store")
+MIMIR_OFFSET_RESET = os.environ.get("MIMIR_OFFSET_RESET", "latest")
 
 # CORS: default to "*" to preserve existing behaviour (matches odin), but allow
 # locking the allowed origin down to a single configured value in hardened
@@ -459,24 +464,31 @@ class MimirHandler(BaseHTTPRequestHandler):
 
 
 def _make_features_consumer(consumer_factory=KafkaConsumer):
-    """Build the features consumer as a FULL-TOPIC, append-based projection.
+    """Build the features consumer as a live-TAILING projection.
 
-    Like odin, Mimir replays the entire topic from the beginning on every
-    start: a fresh unique group_id (so Kafka has no committed offset to resume
-    from) + auto_offset_reset="earliest" + disabled auto-commit. Unlike odin,
-    Mimir does NOT dedup, because a re-run that re-inserts the same event with a
-    NEW ingest_time would corrupt the point-in-time history. Instead the store
-    is keyed to a persistent file (MIMIR_DB) so the history survives restarts,
-    and the consumer's job is purely to append newly-arrived events with a true
-    wall-clock ingest_time. (If a full rebuild is ever needed, delete the DB
-    file.)
+    ingest_time must record the TRUE wall-clock instant a feature first arrived,
+    so Mimir tails the stream with a STABLE consumer group and commits its
+    offset: a restart RESUMES from where it left off rather than re-replaying the
+    whole topic and re-stamping every historical event with a fresh (and
+    misleading) ingest_time. That earlier full-replay design made clean
+    historical data look as if it had arrived hours late — wrong for PIT and
+    misleading in the freshness panel.
+
+    Config (env-overridable so the same image can tail OR backfill):
+      - group_id = MIMIR_GROUP_ID (stable → offsets persist across restarts)
+      - auto_offset_reset = MIMIR_OFFSET_RESET ("latest" tails live; set
+        "earliest" ONCE against a fresh MIMIR_DB to backfill historical events —
+        those then carry their real first-seen ingest_time and are not
+        re-stamped on later restarts because the committed offset advances)
+      - auto-commit ON so resume works.
+    The store is keyed to a persistent file (MIMIR_DB) so history survives.
     """
     return consumer_factory(
         FEATURES_TOPIC,
         bootstrap_servers=KAFKA_BROKERS,
-        group_id="mimir-feature-store-{}".format(uuid.uuid4().hex),
-        auto_offset_reset="earliest",
-        enable_auto_commit=False,
+        group_id=MIMIR_GROUP_ID,
+        auto_offset_reset=MIMIR_OFFSET_RESET,
+        enable_auto_commit=True,
         consumer_timeout_ms=1000,
     )
 
