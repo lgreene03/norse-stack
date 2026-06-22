@@ -795,6 +795,157 @@ class PerformanceTracker:
 
         return matrix
 
+    # Minimum number of return observations required for an instrument's
+    # volatility estimate to be considered usable for portfolio construction.
+    PORTFOLIO_MIN_RETURNS = 5
+
+    def compute_portfolio(self):
+        """Compute target portfolio weights + factor exposures from the recent
+        per-instrument return series Odin already tracks (per round-trip
+        net_pnl). Pure stdlib — no numpy. Lock must be held.
+
+        Method (documented, deterministic):
+          * Per-instrument volatility = population std of its recent returns.
+          * Inverse-volatility raw weights (w_i ~ 1/vol_i) — the risk-parity
+            heuristic that overweights the calmer instrument.
+          * Dollar-neutralize: subtract the mean raw weight so the signed
+            weights sum to ~0 (market-neutral book).
+          * Scale to a gross cap of 1.0: divide by sum(|w_i|) so the gross
+            exposure (sum of absolute weights) is exactly 1.0.
+          * factorExposures: market = average correlation of each instrument's
+            returns to the equal-weight basket mean return; momentum =
+            cross-sectional mean of trailing per-instrument mean returns;
+            volatility = cross-sectional mean of per-instrument vols.
+          * riskContributions: normalized |w_i| * vol_i.
+
+        Returns {available: False, reason: ...} when fewer than 2 instruments
+        carry enough returns — never fabricates weights.
+        """
+        instruments = sorted(self.instrument_returns.keys())
+
+        # Collect only instruments with enough return history.
+        series = {}
+        for inst in instruments:
+            rets = list(self.instrument_returns[inst])
+            if len(rets) >= self.PORTFOLIO_MIN_RETURNS:
+                series[inst] = rets
+
+        usable = sorted(series.keys())
+        if len(usable) < 2:
+            return {
+                "available": False,
+                "reason": (
+                    "need >=2 instruments with >=%d returns; have %d"
+                    % (self.PORTFOLIO_MIN_RETURNS, len(usable))
+                ),
+            }
+
+        # Per-instrument mean return and population volatility, on the common
+        # tail length so factor stats compare like-for-like windows.
+        n_obs = min(len(series[inst]) for inst in usable)
+        means = {}
+        vols = {}
+        tails = {}
+        for inst in usable:
+            tail = series[inst][-n_obs:]
+            tails[inst] = tail
+            m = sum(tail) / len(tail)
+            v = sum((r - m) ** 2 for r in tail) / len(tail)
+            means[inst] = m
+            vols[inst] = math.sqrt(v)
+
+        # Inverse-volatility raw weights. A zero-vol instrument (constant
+        # returns) would divide by zero; floor the vol to a tiny epsilon so it
+        # gets a large-but-finite weight rather than crashing.
+        eps = 1e-9
+        raw = {inst: 1.0 / max(vols[inst], eps) for inst in usable}
+
+        # Dollar-neutralize: subtract the mean so signed weights sum to ~0.
+        mean_raw = sum(raw.values()) / len(raw)
+        signed = {inst: raw[inst] - mean_raw for inst in usable}
+
+        # Scale to gross cap of 1.0 (sum of absolute weights == 1).
+        gross = sum(abs(w) for w in signed.values())
+        if gross <= eps:
+            # Degenerate: all vols equal => neutralization zeroed everything.
+            return {
+                "available": False,
+                "reason": "degenerate weights (equal volatilities)",
+            }
+        weights = {inst: signed[inst] / gross for inst in usable}
+
+        # Equal-weight basket return series (the "market" proxy).
+        basket = [
+            sum(tails[inst][k] for inst in usable) / len(usable)
+            for k in range(n_obs)
+        ]
+        basket_mean = sum(basket) / len(basket)
+        basket_std = math.sqrt(
+            sum((b - basket_mean) ** 2 for b in basket) / len(basket)
+        )
+
+        # market exposure: average correlation of each instrument to the basket.
+        corrs = []
+        for inst in usable:
+            tail = tails[inst]
+            sd = vols[inst]
+            if sd <= eps or basket_std <= eps:
+                continue
+            cov = sum(
+                (tail[k] - means[inst]) * (basket[k] - basket_mean)
+                for k in range(n_obs)
+            ) / n_obs
+            corrs.append(max(-1.0, min(1.0, cov / (sd * basket_std))))
+        market = sum(corrs) / len(corrs) if corrs else 0.0
+
+        # momentum: cross-sectional mean of trailing mean returns.
+        momentum = sum(means.values()) / len(means)
+        # volatility: cross-sectional mean of per-instrument vols.
+        volatility = sum(vols.values()) / len(vols)
+
+        # Risk contributions: normalized |w_i| * vol_i.
+        rc_raw = {inst: abs(weights[inst]) * vols[inst] for inst in usable}
+        rc_total = sum(rc_raw.values())
+        if rc_total > eps:
+            risk_contributions = {
+                inst: round(rc_raw[inst] / rc_total, 6) for inst in usable
+            }
+        else:
+            risk_contributions = {inst: 0.0 for inst in usable}
+
+        # asOf: latest round-trip timestamp seen across the usable instruments.
+        as_of = None
+        for inst in usable:
+            inst_rts = [
+                r for r in self.round_trips if r.get("instrument") == inst
+            ]
+            if inst_rts:
+                t = inst_rts[-1].get("time")
+                if t and (as_of is None or t > as_of):
+                    as_of = t
+
+        return {
+            "available": True,
+            "weights": {inst: round(weights[inst], 6) for inst in usable},
+            "factorExposures": {
+                "market": round(market, 6),
+                "momentum": round(momentum, 6),
+                "volatility": round(volatility, 6),
+            },
+            "riskContributions": risk_contributions,
+            "asOf": as_of,
+            "basis": (
+                "inverse-volatility, dollar-neutralized, gross-capped 1.0; "
+                "computed from last %d per-instrument round-trip returns" % n_obs
+            ),
+            "n": n_obs,
+        }
+
+    def get_portfolio(self):
+        """Lock-acquiring wrapper for the /api/portfolio endpoint."""
+        with self.lock:
+            return self.compute_portfolio()
+
     def compute_portfolio_var(self, confidence=0.95):
         """Portfolio Value-at-Risk using the variance-covariance method.
 
@@ -1272,6 +1423,8 @@ class OdinHandler(BaseHTTPRequestHandler):
             self._json_response(tracker.get_recent_trades())
         elif self.path == "/api/reconciliation":
             self._json_response(tracker.get_reconciliation())
+        elif self.path == "/api/portfolio":
+            self._json_response(tracker.get_portfolio())
         elif self.path == "/healthz" or self.path == "/readyz":
             ok, age = liveness.status()
             payload = {
@@ -1445,6 +1598,7 @@ def main():
     log.info("    /api/analytics  — full performance analytics")
     log.info("    /api/equity     — equity curve time series")
     log.info("    /api/trades     — recent round-trip trades")
+    log.info("    /api/portfolio  — target weights + factor exposures")
     log.info("  Metrics: Sharpe, Sortino, CVaR, Calmar, Kelly,")
     log.info("           Monte Carlo permutation, correlation matrix")
     log.info("=" * 60)

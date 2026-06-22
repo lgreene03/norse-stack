@@ -189,13 +189,20 @@ services:
       KAFKA_BROKERS: redpanda:29092
       KAFKA_TOPICS: features.obi.v1
       KAFKA_GROUP_ID: huginn-paper-trader
-      STRATEGY_NAME: obi
-      # 0.7 (not 0.95): the cost gate needs signal-strength gradient above the
-      # threshold to estimate edge. At 0.95 every signal barely clears the line,
-      # so |obi-threshold| is tiny, expected edge < round-trip cost, and the gate
-      # suppresses 100% of trades. 0.7 is the config the gate was validated on
-      # (-59 -> +1 net). The gate (COST_HURDLE_K below) provides the selectivity.
-      STRATEGY_THRESHOLD: "0.7"
+      # Composite (pluggable-alpha) is the platform's flagship strategy: it blends
+      # the default weighted alpha set (OBI + multi-timeframe momentum + EMA
+      # mean-reversion) into one signed score, reusing the same cost-hurdle +
+      # signed-position + risk path as OBI. Running it live is what makes the
+      # console's Alpha Factory panel real — per-alpha contribution/confidence/IC
+      # and the composite score flow from THIS strategy, not a mock. Set
+      # STRATEGY_NAME back to "obi" for the single-signal microstructure baseline.
+      STRATEGY_NAME: composite
+      # For the composite this is the |combined score| entry band, NOT the OBI
+      # imbalance threshold. The blended weighted-sum score lives on a smaller
+      # scale than a single alpha (observed ~±0.12 on this feed), so 0.05 is the
+      # calibrated band that lets real conviction reach the cost hurdle; the gate
+      # (COST_HURDLE_K) then decides whether expected edge clears round-trip cost.
+      STRATEGY_THRESHOLD: "0.05"
       STRATEGY_ORDER_SIZE: "0.001"
       # Cost-aware trading: only take an entry whose expected edge exceeds
       # COST_HURDLE_K x round-trip cost. On the 24h fixture k=1 flipped realized
@@ -225,6 +232,13 @@ services:
       # Control-plane bearer token gating mutating endpoints. Empty disables
       # auth; the local-dev default keeps the fail-closed middleware active.
       HUGINN_API_TOKEN: ${HUGINN_API_TOKEN:-localdev-change-me}
+      # Walk-forward validation artifact served by GET /api/validation (and shown
+      # in the console's Validation panel). Produced by `go run ./cmd/walkforward`
+      # and mounted read-only below; the endpoint returns {available:false} if the
+      # file is absent/empty, so this never fabricates a result.
+      WALKFORWARD_RESULTS_PATH: /validation/walkforward_results.json
+    volumes:
+      - ../huginn/data/walkforward_results.json:/validation/walkforward_results.json:ro
     healthcheck:
       # Container health = liveness (process up). Use /healthz, NOT /readyz:
       # /readyz reflects consumer-loop progress (for alerting/k8s), and gating

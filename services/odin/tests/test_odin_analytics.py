@@ -777,3 +777,85 @@ def test_short_unrealized_sign_via_mark(monkeypatch):
     mark = 90.0
     unrealized = (mark - pos["avg_cost"]) * pos["qty"]
     assert unrealized == pytest.approx(10.0)  # short profits as price falls
+
+
+# ---------------------------------------------------------------------------
+# Portfolio construction (/api/portfolio): inverse-vol, dollar-neutral, gross 1
+# ---------------------------------------------------------------------------
+
+def _seed_returns(tracker, instrument, returns):
+    """Populate the per-instrument return series compute_portfolio reads."""
+    for r in returns:
+        tracker.instrument_returns[instrument].append(r)
+
+
+def test_portfolio_unavailable_with_one_instrument(tracker):
+    _seed_returns(tracker, "BTC", [1, -1, 2, -2, 1, -1])
+    out = tracker.compute_portfolio()
+    assert out["available"] is False
+    assert "reason" in out
+
+
+def test_portfolio_unavailable_insufficient_returns(tracker):
+    # Two instruments but each below the minimum return count.
+    _seed_returns(tracker, "BTC", [1, -1])
+    _seed_returns(tracker, "ETH", [1, -1])
+    out = tracker.compute_portfolio()
+    assert out["available"] is False
+
+
+def test_portfolio_weights_dollar_neutral_and_gross_one(tracker):
+    # Two instruments with clearly different volatilities.
+    _seed_returns(tracker, "BTC", [1.0, -1.0, 1.0, -1.0, 1.0, -1.0])      # low vol
+    _seed_returns(tracker, "ETH", [10.0, -10.0, 10.0, -10.0, 10.0, -10.0])  # high vol
+    out = tracker.compute_portfolio()
+    assert out["available"] is True
+    w = out["weights"]
+    # Dollar-neutral: signed weights sum to ~0.
+    assert sum(w.values()) == pytest.approx(0.0, abs=1e-6)
+    # Gross exposure (sum of absolute weights) ~1.0.
+    assert sum(abs(x) for x in w.values()) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_portfolio_lower_vol_gets_higher_weight(tracker):
+    # BTC is the calmer (lower-vol) instrument; inverse-vol should give it the
+    # higher raw weight, hence the higher (more positive) dollar-neutral weight.
+    _seed_returns(tracker, "BTC", [1.0, -1.0, 1.0, -1.0, 1.0, -1.0])
+    _seed_returns(tracker, "ETH", [10.0, -10.0, 10.0, -10.0, 10.0, -10.0])
+    out = tracker.compute_portfolio()
+    w = out["weights"]
+    assert w["BTC"] > w["ETH"]
+    # The low-vol leg is the long side under dollar-neutralization.
+    assert w["BTC"] > 0 > w["ETH"]
+
+
+def test_portfolio_risk_contributions_normalized(tracker):
+    _seed_returns(tracker, "BTC", [1.0, -1.0, 1.0, -1.0, 1.0, -1.0])
+    _seed_returns(tracker, "ETH", [10.0, -10.0, 10.0, -10.0, 10.0, -10.0])
+    out = tracker.compute_portfolio()
+    rc = out["riskContributions"]
+    assert sum(rc.values()) == pytest.approx(1.0, abs=1e-6)
+    assert set(rc.keys()) == {"BTC", "ETH"}
+
+
+def test_portfolio_factor_exposures_present(tracker):
+    _seed_returns(tracker, "BTC", [1.0, -1.0, 1.0, -1.0, 1.0, -1.0])
+    _seed_returns(tracker, "ETH", [10.0, -10.0, 10.0, -10.0, 10.0, -10.0])
+    out = tracker.compute_portfolio()
+    fe = out["factorExposures"]
+    assert set(fe.keys()) == {"market", "momentum", "volatility"}
+    # Both legs are mean-reverting around 0 => low cross-sectional momentum.
+    assert fe["momentum"] == pytest.approx(0.0, abs=1e-9)
+    # Volatility is the cross-sectional mean of per-instrument vols (positive).
+    assert fe["volatility"] > 0
+
+
+def test_portfolio_degenerate_equal_vols_unavailable(tracker):
+    # Identical return series => identical vols => inverse-vol weights are equal,
+    # so dollar-neutralization zeroes every weight. Must report unavailable
+    # rather than emit an all-zero (or NaN) book.
+    _seed_returns(tracker, "BTC", [1.0, -1.0, 1.0, -1.0, 1.0, -1.0])
+    _seed_returns(tracker, "ETH", [1.0, -1.0, 1.0, -1.0, 1.0, -1.0])
+    out = tracker.compute_portfolio()
+    assert out["available"] is False
+    assert "degenerate" in out["reason"]
