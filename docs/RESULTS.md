@@ -150,8 +150,8 @@ Real output (summary; per-fold detail below):
 Folds:                4
 Combos searched/fold: 4  (best-of-4 in-sample → multiple-testing bias)
 OOS folds profitable: 0/4 (0%)
-Total OOS PnL:        -122.2957
-Avg OOS PnL/fold:     -30.5739
+Total OOS PnL:        -146.1090
+Avg OOS PnL/fold:     -36.5273
 OOS Sharpe:           mean +0.0000  std 0.0000
 ─── Confidence ───
 Mean/std (OOS Sharpe SNR): n/a (zero cross-fold dispersion)
@@ -161,12 +161,12 @@ Reminder: 4 combos searched/fold — read the best as upward-biased.
 
 | Fold | Train events | Test events | IS PnL | OOS PnL |
 |-----:|-------------:|------------:|-------:|--------:|
-| 1 | 288 | 288 | −45.27 | −57.83 |
-| 2 | 576 | 288 | −99.61 | −0.05 |
-| 3 | 864 | 288 | −99.01 | −20.82 |
-| 4 | 1,152 | 288 | −232.44 | −43.60 |
+| 1 | 288 | 288 | −51.34 | −59.85 |
+| 2 | 576 | 288 | −111.55 | −0.05 |
+| 3 | 864 | 288 | −120.20 | −20.82 |
+| 4 | 1,152 | 288 | −219.94 | −65.38 |
 
-**Result: 0 of 4 out-of-sample folds were profitable; total OOS PnL −122.30.**
+**Result: 0 of 4 out-of-sample folds were profitable; total OOS PnL −146.11.**
 This is the most important number on the page. The full-sample OBI backtest above
 looked roughly flat and nominally edged buy-and-hold (+0.51% excess, almost
 entirely because BTC fell over the window), but under proper walk-forward — where
