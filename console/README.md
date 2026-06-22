@@ -73,7 +73,7 @@ shows stale fake numbers.
 
 | Panel              | Source                                   | Notes                                                                                          |
 |--------------------|------------------------------------------|------------------------------------------------------------------------------------------------|
-| Live trading       | `/api/snapshot` + `/api/metrics`         | `portfolio.{Cash,TotalValue,RealizedPnL,UnrealizedPnL,TotalCosts,TotalFills,Positions{}}` + top-level `fills[]`; `ordersCostSuppressed` from `huginn_orders_cost_suppressed_total`. Positions are an object keyed by instrument; flat (0-qty) entries are dropped. |
+| Live trading       | `/api/snapshot` + `/api/metrics`         | `portfolio.{Cash,TotalValue,RealizedPnL,UnrealizedPnL,TotalCosts,TotalFills,Positions{}}` + top-level `fills[]`; `ordersCostSuppressed` from `huginn_orders_cost_suppressed_total`. Positions are an object keyed by instrument; flat (0-qty) entries are dropped. Top-level `halted` (bool) + `halt_reason` (string) drive the EXECUTION indicator (see HALT / RESUME). |
 | Equity curve       | `/api/equity`                            | `points[].value` time series.                                                                  |
 | Alpha factory      | `/api/alphas` (+ `/api/metrics`)         | Live composite score, per-alpha weight / contribution / confidence / rolling IC. Powered by the **composite** strategy (`STRATEGY_NAME=composite`); a field the engine hasn't computed yet renders as a muted dash, never a fake value. |
 | Portfolio          | `/api/portfolio`                         | Inverse-vol, dollar-neutral target weights + factor exposures + risk contributions, computed by Odin from recent per-instrument returns. `{available:false}` → "no portfolio run" empty state. |
@@ -103,13 +103,26 @@ PBO 1.00.)
 
 ### HALT / RESUME
 
-The HALT/RESUME button reads a token from `window.NC_TOKEN` or
-`localStorage['nc_token']`:
+The **EXECUTION RUNNING/HALTED** indicator is driven by **live breaker state**,
+not the button press. Each 3s poll reads the top-level breaker fields from
+huginn `/api/snapshot`:
 
-- **With a token** it `POST`s through the proxy to huginn's breaker endpoint with
-  `Authorization: Bearer <token>` and reflects the halted state (red banner).
-- **Without a token** it only toggles the local visual state and `console.warn`s
-  — live order routing is **not** changed.
+| Field         | Type    | Meaning                                                            |
+|---------------|---------|-------------------------------------------------------------------|
+| `halted`      | bool    | `true` when the kill-switch is engaged (drives the red HALTED state + banner). |
+| `halt_reason` | string  | Human-readable reason; surfaced in the banner when halted, empty otherwise. |
+
+The HALT/RESUME button reads a control token from `window.NC_TOKEN` or
+`localStorage['nc_token']` (set it with the **TOKEN** button next to the switch):
+
+- **With a valid token** it `POST`s through the proxy to huginn's breaker endpoint
+  with `Authorization: Bearer <token>`. The click optimistically echoes the new
+  state, but the indicator is reconciled to the authoritative `halted` value on
+  the next poll — so it stays correct even if the request fails.
+- **Without a token (or a rejected one)** the breaker `POST` returns `401`/`403`;
+  the console shows an on-screen notice prompting you to set a token, and the
+  indicator does **not** toggle — live order routing is **not** changed. (Set the
+  token first via **TOKEN**, then the button is usable.)
 
 > `norse-console.dc.html` is the original Claude Design export and is not used at
 > runtime; `index.html` is the servable build.

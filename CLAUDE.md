@@ -2,7 +2,7 @@
 
 ## What Is norse-stack
 
-Meta-repository and entry point for the Norse Stack — a four-service distributed quantitative trading infrastructure. This repo contains the unified docker-compose, end-to-end smoke test, and architecture documentation. It does not contain application code; each service lives in its own repo.
+Meta-repository and entry point for the Norse Stack — a distributed quantitative trading infrastructure that boots as 22 containers (`docker compose config --services | wc -l`) via one-command `make bootstrap`. This repo provides the unified docker-compose, console, monitoring stack, end-to-end smoke test, and architecture documentation. The core engines (muninn, huginn, sleipnir) live in their own sibling repos, but this repo is **not** purely orchestration: the analytics, ML, research, and bridge services under `services/` are application code built directly from here.
 
 ## Commands
 
@@ -22,15 +22,30 @@ docker compose down -v
 
 ## Service Repos
 
-All repos are expected as sibling directories:
+The core engines live as sibling directories:
 
 ```
 parent/
   norse-stack/     ← this repo
   muninn/          ← Java feature engine
-  huginn/          ← Go strategy engine
+  huginn/          ← Go strategy engine (also builds the `research` gateway, cmd/research)
   sleipnir/        ← Go execution gateway
   muninn-py/       ← Python research SDK
+```
+
+## In-Repo Services
+
+These services are application code built directly from this repo (`services/<name>/Dockerfile`):
+
+```
+norse-stack/services/
+  obi-bridge/      ← order-book-imbalance feature bridge (Muninn → Kafka)
+  odin/            ← performance / risk analytics (port 8086)
+  bragi/           ← trade explainability (port 8087)
+  huginn-ai/       ← XGBoost ML signal predictor (port 8092)
+  mimir/           ← point-in-time feature store (port 8095)
+  forseti/         ← execution TCA (port 8096)
+  news-sentinel/   ← LLM news-sentiment feed (port 8089)
 ```
 
 ## Ports

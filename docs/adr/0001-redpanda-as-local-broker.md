@@ -17,7 +17,7 @@ Candidates for the local broker:
 
 | Option | Pros | Cons |
 |---|---|---|
-| Apache Kafka + ZooKeeper | Reference implementation, ubiquitous | Two JVM processes (broker + ZK), ~1.5 GB+ RAM, slow start — heavy for a 15-container laptop stack |
+| Apache Kafka + ZooKeeper | Reference implementation, ubiquitous | Two JVM processes (broker + ZK), ~1.5 GB+ RAM, slow start — heavy for a 22-container laptop stack |
 | Apache Kafka (KRaft) | No ZooKeeper | Still a JVM broker, still heavy; KRaft tuning is fiddly |
 | Redpanda | Single C++ binary, Kafka wire-compatible, sub-second start, low memory (`--memory 512M` here), built-in `rpk` admin | Newer; not the literal Apache codebase |
 | Cloud-hosted Kafka | Zero local resource | Defeats the "runs offline on one machine" goal; needs credentials |

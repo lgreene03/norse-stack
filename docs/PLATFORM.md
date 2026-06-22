@@ -234,5 +234,5 @@ validation gate is non-negotiable and applies to all of them equally.
 - [`ADDING_AN_ALPHA.md`](ADDING_AN_ALPHA.md) — the concrete recipe.
 - [`EDGE_VERDICT.md`](EDGE_VERDICT.md) — the honest no-edge result and why it is a
   feature.
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — the 15-container service topology.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — the 22-container service topology.
 - [`RESULTS.md`](RESULTS.md) — full unedited backtester/walk-forward output.

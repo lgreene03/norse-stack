@@ -261,7 +261,12 @@
         realizedPnL: p.RealizedPnL, unrealizedPnL: p.UnrealizedPnL,
         fees: p.TotalCosts, totalFills: p.TotalFills,
         ordersCostSuppressed: null, regime: null,
-        positions: [], fills: [], equitySeries: null
+        positions: [], fills: [], equitySeries: null,
+        // live breaker state — top-level `halted` (bool) + `halt_reason` (string)
+        // on the huginn /api/snapshot response. Authoritative source for the
+        // RUNNING/HALTED indicator (the optimistic `halted` flag is only an echo).
+        halted: (j.halted === true || j.Halted === true),
+        haltReason: (j.halt_reason || j.HaltReason || '')
       };
       // huginn serializes Positions as an OBJECT keyed by instrument
       // ({"BTC-USDT": {...}}), not an array — normalize both forms and drop
@@ -480,6 +485,7 @@
   // anything genuinely unavailable.
   // ====================================================================
   var halted = false;
+  var liveHaltReason = ''; // halt_reason from the live snapshot, surfaced when halted
 
   function regimeStyle(regime) {
     var map = {
@@ -1064,6 +1070,15 @@
     applyFeatures(d.features);
     applyTCA(d.tca);
     applyServices(d.services);
+    // Drive the RUNNING/HALTED indicator from authoritative live breaker state
+    // (huginn /api/snapshot `halted` + `halt_reason`), not the optimistic echo.
+    // Only override when the snapshot actually landed (d.live present); a failed
+    // poll leaves the last known state in place rather than flipping to RUNNING.
+    // In ?demo=1 mode the button drives `halted` locally — don't clobber it.
+    if (!res.demo && d.live) {
+      halted = d.live.halted === true;
+      liveHaltReason = d.live.haltReason || '';
+    }
     applyHaltVisual();
     applyFooter(res.sources, res.demo);
   }
@@ -1075,7 +1090,7 @@
   // ====================================================================
   function applyHaltVisual() {
     var btn = $('halt-btn'), label = $('halt-btn-label'), status = $('halt-status');
-    var banner = $('halt-banner'), icon2 = $('halt-icon-second');
+    var banner = $('halt-banner'), icon2 = $('halt-icon-second'), reason = $('halt-reason');
     if (label) label.textContent = halted ? 'RESUME' : 'HALT';
     if (status) { status.textContent = halted ? 'HALTED' : 'RUNNING'; status.style.color = halted ? C.red : C.green; }
     if (btn) {
@@ -1085,6 +1100,16 @@
     }
     if (icon2) icon2.style.display = halted ? 'none' : '';
     if (banner) banner.style.display = halted ? 'flex' : 'none';
+    // Surface halt_reason from the live snapshot when present.
+    if (reason) reason.textContent = (halted && liveHaltReason) ? ('· ' + liveHaltReason) : '';
+  }
+
+  // Breaker-auth notice — shown on-screen when a breaker POST is rejected.
+  function showHaltNotice(msg) {
+    var n = $('halt-notice');
+    if (!n) return;
+    n.textContent = msg;
+    n.style.display = msg ? 'flex' : 'none';
   }
 
   function getToken() {
@@ -1102,11 +1127,35 @@
     fetchWithTimeout('/api/breaker', {
       method: 'POST', headers: headers, body: JSON.stringify({ halted: target })
     }).then(function (r) {
-      if (r.ok) { halted = target; applyHaltVisual(); }
-      else { console.warn('[norse-console] breaker POST returned ' + r.status + (token ? '' : ' (no token set — control plane may be locked)')); }
+      if (r.ok) { halted = target; liveHaltReason = ''; showHaltNotice(''); applyHaltVisual(); }
+      else if (r.status === 401 || r.status === 403) {
+        showHaltNotice(token
+          ? 'Breaker control rejected the token (' + r.status + '). Set a valid token via the TOKEN button.'
+          : 'Breaker control requires a token (' + r.status + '). Click TOKEN to set one, then retry.');
+        console.warn('[norse-console] breaker POST returned ' + r.status + (token ? '' : ' (no token set — control plane locked)'));
+      } else {
+        showHaltNotice('Breaker control returned ' + r.status + '.');
+        console.warn('[norse-console] breaker POST returned ' + r.status);
+      }
     }).catch(function (e) {
+      showHaltNotice('Breaker control unreachable.');
       console.warn('[norse-console] breaker POST failed:', e && e.message);
     });
+  }
+
+  // Token entry — store/clear localStorage nc_token used as the breaker bearer token.
+  function onTokenClick() {
+    var current = '';
+    try { current = localStorage.getItem('nc_token') || ''; } catch (e) {}
+    var val = window.prompt('Breaker control token (stored in localStorage as nc_token; leave blank to clear):', current);
+    if (val === null) return; // cancelled
+    val = val.trim();
+    try {
+      if (val) { localStorage.setItem('nc_token', val); showHaltNotice('Token saved. The HALT/RESUME button is now authorized.'); }
+      else { localStorage.removeItem('nc_token'); showHaltNotice('Token cleared.'); }
+    } catch (e) {
+      showHaltNotice('Could not access localStorage to store the token.');
+    }
   }
 
   // ====================================================================
@@ -1154,7 +1203,10 @@
         return;
       }
       // terminal: render immediately and let the next poll refresh the list.
-      if (det && det.status === 'done') { setText('rg-run-state', 'done · ' + (det.strategy || '')); setColor('rg-run-state', C.green); }
+      if (det && det.status === 'done') {
+        var doneStrat = det.strategy || (det.request && det.request.strategy) || '';
+        setText('rg-run-state', doneStrat ? ('done · ' + doneStrat) : 'done'); setColor('rg-run-state', C.green);
+      }
       else if (det && det.status === 'error') { setText('rg-run-state', 'error: ' + (det.error || 'run failed')); setColor('rg-run-state', C.red); }
       else { setText('rg-run-state', String(det && det.status || 'finished')); setColor('rg-run-state', C.mut); }
       // Patch the latest-result panel directly so the operator sees it without
@@ -1201,6 +1253,8 @@
     if (!DEMO_MODE) neutralFirstPaint();
     var btn = $('halt-btn');
     if (btn) btn.addEventListener('click', onHaltClick);
+    var tokenBtn = $('token-btn');
+    if (tokenBtn) tokenBtn.addEventListener('click', onTokenClick);
     // Research gateway: Run button kicks off a walk-forward + polls to terminal.
     var rgBtn = $('rg-run-btn');
     if (rgBtn) rgBtn.addEventListener('click', onResearchRun);

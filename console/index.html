@@ -106,13 +106,18 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor"/><rect data-nc="halt-icon-second" x="14" y="5" width="4" height="14" rx="1" fill="currentColor"/></svg>
             <span data-nc="halt-btn-label">HALT</span>
           </button>
+          <!-- breaker auth: stores localStorage nc_token so the HALT button works on first run -->
+          <button data-nc="token-btn" title="Set breaker control token" style="cursor:pointer;border:1px solid #2a3b54;background:#0e1726;color:#7787a0;font-family:'Public Sans',sans-serif;font-size:11px;font-weight:600;letter-spacing:.04em;padding:9px 10px;border-radius:8px;transition:all .15s">TOKEN</button>
         </div>
       </div>
       <!-- halted banner -->
       <div data-nc="halt-banner" style="display:none;align-items:center;gap:10px;padding:8px 20px;background:#2a0f12;border-top:1px solid #5a1f25;color:#ff8b8b;font-size:12px;font-weight:600;letter-spacing:.02em">
         <span style="width:7px;height:7px;border-radius:50%;background:#ff6262;animation:ncpulse 1s infinite"></span>
-        Trading halted — kill-switch engaged. Live order routing suspended; monitoring continues read-only.
+        <span>Trading halted — kill-switch engaged. Live order routing suspended; monitoring continues read-only.</span>
+        <span data-nc="halt-reason" style="color:#ffc4c4;font-weight:500"></span>
       </div>
+      <!-- breaker auth notice — shown when a breaker POST is rejected (e.g. 401) -->
+      <div data-nc="halt-notice" style="display:none;align-items:center;gap:10px;padding:8px 20px;background:#241803;border-top:1px solid #5a431c;color:#e8b96b;font-size:12px;font-weight:600;letter-spacing:.02em"></div>
     </div>
 
     <!-- ============ (2) LIVE TRADING ============ -->

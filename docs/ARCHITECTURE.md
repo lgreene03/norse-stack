@@ -15,7 +15,7 @@ contracts are documented in [`CONTRACTS.md`](CONTRACTS.md)).
 
 ## Container topology
 
-All 15 containers from `docker-compose.yml`. Solid edges are Kafka topics
+All 22 containers from `docker-compose.yml`. Solid edges are Kafka topics
 (labelled with the topic name); dashed edges are synchronous calls (HTTP/gRPC,
 JDBC, S3, OTLP) or scrapes.
 

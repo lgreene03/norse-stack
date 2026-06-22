@@ -8,7 +8,7 @@
 [![muninn-py CI](https://github.com/lgreene03/muninn-py/actions/workflows/ci.yml/badge.svg)](https://github.com/lgreene03/muninn-py/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Norse Stack is a 15-container distributed crypto trading system that ingests live Binance market data, computes 10 independent signal layers, executes quantitative strategies with regime-aware threshold adaptation, routes orders through TWAP/VWAP execution algorithms, and monitors everything through Prometheus and Grafana. Named after figures from Norse mythology.
+Norse Stack is a 22-container distributed crypto trading system that ingests live Binance market data, computes 10 independent signal layers, executes quantitative strategies with regime-aware threshold adaptation, routes orders through TWAP/VWAP execution algorithms, and monitors everything through Prometheus and Grafana. Named after figures from Norse mythology.
 
 ## Quant platform, not a bot
 
@@ -70,7 +70,7 @@ Two short, specific write-ups of senior-level findings on this stack — real nu
 ## Architecture
 
 > **See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** for the full rendered
-> diagrams — a 15-container topology with Kafka topics on every edge, plus a
+> diagrams — a 22-container topology with Kafka topics on every edge, plus a
 > single-trade sequence diagram (feature → signal → cost-hurdle gate → intent →
 > risk → fill → portfolio + analytics). GitHub renders the mermaid natively.
 
@@ -206,7 +206,7 @@ engine services' `build:` for `image: ghcr.io/lgreene03/<svc>:${TAG:-latest}`.
 back to Path A (build from source). Pin a tag with
 `HUGINN_TAG=… SLEIPNIR_TAG=… MUNINN_TAG=…`.
 
-Either path starts all 15 containers. No exchange credentials needed — Sleipnir runs in simulated mode, Obi-Bridge connects to Binance's public (unauthenticated) WebSocket streams.
+Either path starts all 22 containers. No exchange credentials needed — Sleipnir runs in simulated mode, Obi-Bridge connects to Binance's public (unauthenticated) WebSocket streams.
 
 ### Run the end-to-end smoke test
 
@@ -313,7 +313,7 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 - **Deterministic replay.** Muninn's feature engine produces byte-identical outputs from the same input events, enforced by ArchUnit rules and CI integration tests.
 - **One computation path.** Live and replay use the same code — no separate batch pipeline.
 - **Kafka-native boundaries.** Services communicate exclusively through Redpanda topics. No shared databases, no direct RPC (except Huginn's optional gRPC for programmatic queries).
-- **Local-first.** The full 15-container stack runs on a single machine. No cloud services required.
+- **Local-first.** The full 22-container stack runs on a single machine. No cloud services required.
 - **Sim mode everywhere.** Sleipnir's sim exchange and Muninn's synthetic trade ingestion mean the entire pipeline is testable without exchange credentials.
 
 ---
@@ -323,7 +323,7 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 | Metric | Value |
 |--------|-------|
 | Languages | Java, Go, Python, TypeScript |
-| Docker containers | 15 |
+| Docker containers | 22 |
 | Signal layers | 10 |
 | Kafka topics | 3 (features, intents, fills) + prices |
 | Architecture Decision Records | 28 across the stack (Muninn 14, Huginn 7, Sleipnir 7) + stack-level ADRs in [`docs/adr/`](docs/adr/) |
