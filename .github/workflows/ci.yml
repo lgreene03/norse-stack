@@ -185,7 +185,7 @@ jobs:
 
       - name: Upload coverage to Codecov
         if: matrix.has_tests == 'true'
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v7
         continue-on-error: true
         with:
           files: services/${{ matrix.service }}/coverage.xml
