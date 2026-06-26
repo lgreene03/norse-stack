@@ -12,8 +12,6 @@ Covers sre-resilience-8 / sre-data-ops-15:
 And sre-resilience-5: poller liveness for /readyz.
 """
 
-import pytest
-
 import sentinel
 
 
