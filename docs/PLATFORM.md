@@ -49,7 +49,8 @@ flowchart LR
     subgraph PLANES[Self-serve platform planes]
         M1[Mimir: point-in-time<br/>feature store :8095]
         RG[Research gateway:<br/>walk-forward/PBO/DSR as a service :8094]
-        FT[Forseti: execution<br/>TCA from real fills :8096]
+        FT[Forseti: execution TCA +<br/>market impact / capacity :8096]
+        HD[Heimdall: market-regime<br/>Gaussian HMM / Baum-Welch :8097]
     end
 
     M1 --> F1
@@ -217,9 +218,38 @@ figure as **`null`** rather than inventing a flattering number.
   same discipline as the walk-forward gate: the platform refuses to print a number
   it cannot actually back with data.
 
-Together these are the same "prove it, honestly" ethic as the validation gate,
-projected onto three planes: **research** (is the edge real?), **data** (is the
-input free of lookahead?), and **execution** (did the costs behave as modeled?).
+**Market impact and capacity (the same plane, pre-trade):** `GET /api/impact`
+estimates the cost of *sending* an order — square-root-law temporary impact
+(`eta·sigma·sqrt(Q/ADV)`) plus an Almgren-Chriss permanent term — and
+`GET /api/capacity` inverts it to ask how large a strategy could scale before that
+modelled impact eats a given edge. Capacity is deliberately labelled as resting on
+an **assumed, illustrative** edge: this simulation has no measured out-of-sample
+edge (PBO = 1.0), so the figure is a what-if bound, not a promise. Modelling
+capacity and transaction cost was, per the public record, one of Renaissance
+Medallion's real disciplines; here it is reproduced as an honest tool rather than
+an edge claim.
+
+### Heimdall — the market-regime plane (port 8097)
+
+**A Gaussian HMM fit with Baum-Welch (EM)** over a rolling window of feature
+events, reporting the **causal forward-filtered** regime — the state inferred using
+only information available up to each instant, never smoothed with the future.
+`GET /api/regime` returns the current state, its probability, the full transition
+matrix, and the stationary distribution; `/api/regime/model` exposes the fitted
+per-state means and covariances. Labels (calm / trending / turbulent / choppy) are
+**derived from those fitted parameters**, so they are descriptive, not predictive.
+
+- **The point:** the hidden-Markov / Baum-Welch regime model is the piece of the
+  Medallion lineage that is most often mythologised. Heimdall implements it for
+  real — correct forward-backward in log space, k-means++ initialisation,
+  covariance regularisation, a warm-start from Mimir's persisted history — and then
+  refuses to overclaim: a regime label is a lens on the data, and the validation
+  gate still says there is no out-of-sample edge. Same "prove it, honestly" ethic.
+
+Together these are the same ethic as the validation gate, projected onto four
+planes: **research** (is the edge real?), **data** (is the input free of
+lookahead?), **execution** (did the costs behave as modeled, and how far could this
+scale?), and **regime** (what state is the market in — descriptively?).
 
 ## The loop, in one sentence
 

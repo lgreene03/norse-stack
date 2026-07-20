@@ -118,7 +118,8 @@ The quick ASCII view:
 | **News Sentinel** | Python | LLM-powered crypto news sentiment via Ollama |
 | **Research Gateway** | Go 1.25 | Walk-forward + PBO + Deflated-Sharpe validation as a service, out of the live trading process |
 | **Mimir** | Python | Point-in-time (no-lookahead) feature store: event_time + ingest_time, as-of queries |
-| **Forseti** | Python | Execution TCA from real fills: slippage, maker/taker, fees, implementation shortfall |
+| **Forseti** | Python | Execution TCA from real fills, plus market-impact (square-root law) and strategy-capacity modelling |
+| **Heimdall** | Python | Market-regime detector: Gaussian HMM fit with Baum-Welch, causal forward-filtered state |
 | **[muninn-py](https://github.com/lgreene03/muninn-py)** | Python | Research SDK: Polars DataFrames, IC analysis, Streamlit dashboard |
 
 ### Signal Layers (Obi-Bridge)
@@ -206,7 +207,7 @@ engine services' `build:` for `image: ghcr.io/lgreene03/<svc>:${TAG:-latest}`.
 back to Path A (build from source). Pin a tag with
 `HUGINN_TAG=… SLEIPNIR_TAG=… MUNINN_TAG=…`.
 
-Either path starts all 22 containers. No exchange credentials needed — Sleipnir runs in simulated mode, Obi-Bridge connects to Binance's public (unauthenticated) WebSocket streams.
+Either path starts all 23 containers. No exchange credentials needed — Sleipnir runs in simulated mode, Obi-Bridge connects to Binance's public (unauthenticated) WebSocket streams.
 
 ### Run the end-to-end smoke test
 
@@ -239,7 +240,8 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 | 8092 | Huginn-AI ML | http://localhost:8092/api/model/status |
 | 8094 | Research Gateway | http://localhost:8094/api/research/runs |
 | 8095 | Mimir Feature Store | http://localhost:8095/api/features |
-| 8096 | Forseti TCA | http://localhost:8096/api/tca |
+| 8096 | Forseti TCA / Impact | http://localhost:8096/api/tca · http://localhost:8096/api/impact |
+| 8097 | Heimdall Regime | http://localhost:8097/api/regime |
 | 9091 | Prometheus | http://localhost:9091 |
 | 9093 | Alertmanager | http://localhost:9093 |
 | 3001 | Grafana | http://localhost:3001 (admin/norse) |
@@ -286,11 +288,21 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 - Stamps both `event_time` (when a fact was true) and `ingest_time` (when the platform learned it); onboarding a source replays the topic and stamps a fresh `ingest_time`
 - **What it demonstrates:** prevents the #1 backtest sin — lookahead bias — structurally at the data layer
 
-### Forseti (execution TCA)
+### Forseti (execution TCA + market impact / capacity)
 - `GET /api/tca` — aggregate transaction-cost analysis: realized slippage, maker/taker mix, fees, implementation shortfall
 - `GET /api/tca/fills` — the underlying per-fill records
+- `GET /api/impact` — pre-trade market-impact estimate: square-root-law temporary impact + Almgren-Chriss permanent term (bps). The `basis` field names every defaulted input rather than silently fabricating one.
+- `GET /api/impact/schedule` — Almgren-Chriss optimal execution schedule (impact vs. timing-risk trade-off)
+- `GET /api/capacity` — strategy capacity: notional at which modelled impact equals an **assumed, illustrative** edge (this simulation has no measured out-of-sample edge, so it is a what-if bound)
 - Never fabricates a benchmark: with no arrival price (e.g. simulated/paper fills) it reports slippage as `null` rather than inventing a number
-- **What it demonstrates:** independently measures whether the `CostHurdle` gate actually works in execution — execution-quality rigor
+- **What it demonstrates:** independently measures whether the `CostHurdle` gate actually works in execution, and models how far a strategy could scale before impact eats the (hypothetical) edge — execution-quality rigor
+
+### Heimdall (market-regime detection — Gaussian HMM)
+- `GET /api/regime` — current market regime from a Gaussian HMM fit with Baum-Welch (EM): causal forward-filtered `currentRegime`, full `stateProbs`, `transitionMatrix`, `stationary` distribution, `logLikelihood`
+- `GET /api/regime/history` — recent regime assignments over the rolling window
+- `GET /api/regime/model` — fitted per-state means/covariances and the deterministic label derivation
+- Fits a 3-state HMM over a rolling window of `features.obi.v1`, refits online, and warm-starts from Mimir's persisted history so it is trained on boot. Regime **labels** (calm / trending / turbulent / choppy) are derived from the fitted parameters — descriptive, not predictive.
+- **What it demonstrates:** the HMM/Baum-Welch regime-modelling lineage that Renaissance's Medallion fund is documented to have used — implemented honestly, as a descriptive lens with no edge claim (PBO = 1.0)
 
 ### Observability
 - Prometheus scraping Huginn, Sleipnir, Odin, Huginn-AI, and Muninn metrics (15s interval)

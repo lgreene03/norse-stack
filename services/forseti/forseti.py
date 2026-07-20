@@ -40,6 +40,7 @@ import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
 
 from kafka import KafkaConsumer
 from kafka.errors import KafkaConnectionError
@@ -77,6 +78,197 @@ FILLS_HISTORY_MAX = int(os.environ.get("FILLS_HISTORY_MAX", "5000"))
 # whether ANY fill in the window was benchmarked against an arrival price.
 BASIS_WITH_ARRIVAL = "fees + arrival/mid slippage where available"
 BASIS_NO_ARRIVAL = "fees + reported-slippage only"
+
+# ---------------------------------------------------------------------------
+# MARKET-IMPACT + CAPACITY model configuration.
+#
+# This block extends Forseti from pure post-trade TCA into a pre-trade cost /
+# capacity model: the square-root law for temporary impact, the Almgren-Chriss
+# permanent+temporary decomposition with its closed-form optimal-execution
+# trajectory, and a capacity estimate (the size at which modelled impact eats an
+# ASSUMED per-trade edge). Everything is pure stdlib math (no numpy).
+#
+# HONESTY: the capacity number depends on an assumed edge. THIS SIMULATION HAS
+# NO MEASURED OUT-OF-SAMPLE EDGE (walk-forward PBO = 1.0). Any edge fed in is
+# illustrative only; the capacity it implies is a demonstration of technique,
+# never a claim of realisable AUM or profit.
+# ---------------------------------------------------------------------------
+
+# Square-root-law temporary-impact coefficient (dimensionless, ~1 empirically).
+#   temporary_impact_bps = eta * sigma * sqrt(Q / ADV) * 1e4
+# where sigma is DAILY volatility as a fraction, Q and ADV share units (both a
+# notional in quote currency, or both a share/base quantity), so Q/ADV is the
+# dimensionless participation rate.
+IMPACT_ETA = float(os.environ.get("IMPACT_ETA", "1.0"))
+
+# Permanent-impact coefficient (dimensionless). Permanent impact is LINEAR in
+# participation (Almgren-Chriss / Kyle-lambda style), typically a smaller
+# coefficient than the temporary sqrt term:
+#   permanent_impact_bps = gamma * sigma * (Q / ADV) * 1e4
+IMPACT_GAMMA = float(os.environ.get("IMPACT_GAMMA", "0.1"))
+
+# Almgren-Chriss OPTIMAL-EXECUTION trajectory coefficients. These shape the
+# child-order schedule (the sinh curve), not the impact-vs-size curve above.
+# The schedule works in slice-time units (tau = 1 slice, horizon T = N slices);
+# the decay rate kappa is derived from the closed form
+#   cosh(kappa*tau) = 1 + (lambda * sigma^2 / eta_tilde) * tau^2 / 2,
+#   eta_tilde = AC_ETA - AC_GAMMA*tau/2.
+# lambda (risk aversion) is a request parameter; AC_ETA/AC_GAMMA are structural.
+AC_ETA = float(os.environ.get("AC_ETA", "0.01"))
+AC_GAMMA = float(os.environ.get("AC_GAMMA", "0.001"))
+AC_TAU = float(os.environ.get("AC_TAU", "1.0"))
+AC_DEFAULT_LAMBDA = float(os.environ.get("AC_DEFAULT_LAMBDA", "1.0"))
+# Cap on kappa*T so sinh() never overflows a float (sinh(700) ~ 1e304).
+KAPPA_T_CAP = float(os.environ.get("KAPPA_T_CAP", "600.0"))
+
+# ASSUMED per-trade edge for the capacity crossover, in bps. CONFIGURABLE and
+# clearly labelled: this simulation measured NO out-of-sample edge, so this is
+# an input assumption, never an observed quantity.
+DEFAULT_EDGE_BPS = float(os.environ.get("FORSETI_DEFAULT_EDGE_BPS", "10.0"))
+
+# Fallback ADV / sigma / trade-size when Forseti has too little history to
+# estimate them from its own fill stream. Illustrative placeholders.
+DEFAULT_ADV = float(os.environ.get("FORSETI_DEFAULT_ADV", "1.0e8"))
+DEFAULT_SIGMA = float(os.environ.get("FORSETI_DEFAULT_SIGMA", "0.02"))
+DEFAULT_SIZE = float(os.environ.get("FORSETI_DEFAULT_SIZE", "1.0e6"))
+DEFAULT_INSTRUMENT = os.environ.get("FORSETI_DEFAULT_INSTRUMENT", "BTC-USDT")
+
+# Estimation guards.
+SIGMA_MIN = float(os.environ.get("FORSETI_SIGMA_MIN", "1.0e-4"))
+SIGMA_MAX = float(os.environ.get("FORSETI_SIGMA_MAX", "2.0"))
+ADV_MIN = float(os.environ.get("FORSETI_ADV_MIN", "1.0"))
+MIN_SPAN_DAYS = float(os.environ.get("FORSETI_MIN_SPAN_DAYS", str(1.0 / 24)))
+MIN_ESTIMATE_SAMPLES = int(os.environ.get("FORSETI_MIN_ESTIMATE_SAMPLES", "3"))
+PX_SERIES_MAX = int(os.environ.get("FORSETI_PX_SERIES_MAX", "5000"))
+
+IMPACT_MODEL_NAME = "sqrt-law + Almgren-Chriss"
+
+# The mandatory honesty label attached to every edge-dependent number.
+EDGE_DISCLAIMER = (
+    "illustrative; this simulation has no measured out-of-sample edge (PBO=1.0)"
+)
+
+
+def assumed_edge_label(edge_bps):
+    """Return the mandatory honesty label for an assumed-edge figure."""
+    return "assumed edge = {} bps ({})".format(edge_bps, EDGE_DISCLAIMER)
+
+
+# -- pure impact math (stdlib only) ------------------------------------------
+
+def sqrt_law_temporary_bps(size, adv, sigma, eta=IMPACT_ETA):
+    """Square-root-law temporary impact, in bps.
+
+    impact_bps = eta * sigma * sqrt(size / adv) * 1e4
+
+    size and adv must share units (both notional, or both shares); sigma is the
+    daily volatility as a fraction. Concave (sqrt) in size: a 4x size gives ~2x
+    impact. Returns 0.0 for a non-positive size/adv (no trade, no impact).
+    """
+    if size <= 0 or adv <= 0 or sigma <= 0:
+        return 0.0
+    return eta * sigma * math.sqrt(size / adv) * 1e4
+
+
+def permanent_bps(size, adv, sigma, gamma=IMPACT_GAMMA):
+    """Permanent impact, in bps. LINEAR in participation (Almgren-Chriss).
+
+    impact_bps = gamma * sigma * (size / adv) * 1e4
+    """
+    if size <= 0 or adv <= 0 or sigma <= 0:
+        return 0.0
+    return gamma * sigma * (size / adv) * 1e4
+
+
+def total_impact_bps(size, adv, sigma, eta=IMPACT_ETA, gamma=IMPACT_GAMMA):
+    """Total modelled impact = temporary (sqrt) + permanent (linear), in bps."""
+    return (
+        sqrt_law_temporary_bps(size, adv, sigma, eta)
+        + permanent_bps(size, adv, sigma, gamma)
+    )
+
+
+def almgren_chriss_kappa(sigma, risk_aversion, tau=AC_TAU,
+                         ac_eta=AC_ETA, ac_gamma=AC_GAMMA):
+    """Almgren-Chriss trajectory decay rate kappa (per unit time).
+
+    Closed form: cosh(kappa*tau) = 1 + (lambda * sigma^2 / eta_tilde)*tau^2/2,
+    eta_tilde = ac_eta - ac_gamma*tau/2. As lambda -> 0, kappa -> 0 (the schedule
+    reduces to uniform / TWAP); as lambda rises, kappa rises (front-loading).
+    """
+    if risk_aversion <= 0 or sigma <= 0 or tau <= 0:
+        return 0.0
+    eta_tilde = ac_eta - ac_gamma * tau / 2.0
+    if eta_tilde <= 0:
+        # Degenerate config: fall back to the raw temporary coefficient so the
+        # decay rate stays finite and positive rather than blowing up.
+        eta_tilde = ac_eta if ac_eta > 0 else 1.0
+    kappa_tilde_sq = risk_aversion * sigma * sigma / eta_tilde
+    c = 1.0 + kappa_tilde_sq * tau * tau / 2.0
+    if c <= 1.0:
+        return 0.0
+    return math.acosh(c) / tau
+
+
+def almgren_chriss_schedule(size, slices, risk_aversion, sigma,
+                            tau=AC_TAU, ac_eta=AC_ETA, ac_gamma=AC_GAMMA):
+    """Closed-form Almgren-Chriss optimal-execution child-order sizes.
+
+    Minimises E[cost] + lambda*Var[cost]. The inventory trajectory is
+        x_j = size * sinh(kappa*(T - t_j)) / sinh(kappa*T),  t_j = j*tau,
+    and the child order for slice j is n_j = x_{j-1} - x_j. Returns
+    (child_sizes, kappa). Child sizes always sum to `size`. Front-loaded for
+    lambda > 0 (largest child first); uniform (TWAP) as lambda -> 0.
+    """
+    n = max(1, int(slices))
+    if size <= 0:
+        return [0.0] * n, 0.0
+    kappa = almgren_chriss_kappa(sigma, risk_aversion, tau, ac_eta, ac_gamma)
+    T = n * tau
+    kT = kappa * T
+    if kT < 1e-9:
+        # TWAP limit: sinh(kappa*(T-t))/sinh(kappa*T) -> (T-t)/T. Equal children.
+        return [size / n] * n, kappa
+    if kT > KAPPA_T_CAP:
+        # Clamp to keep sinh() inside float range; the schedule is already
+        # essentially "sell everything in the first slice" at this point.
+        kappa = KAPPA_T_CAP / T
+    sinh_kT = math.sinh(kappa * T)
+    x = [size * math.sinh(kappa * (T - j * tau)) / sinh_kT for j in range(n + 1)]
+    # x[0] == size, x[n] == 0 (up to rounding); children are the differences.
+    children = [x[j - 1] - x[j] for j in range(1, n + 1)]
+    # Renormalise away any floating rounding so children sum EXACTLY to size.
+    s = sum(children)
+    if s > 0:
+        children = [c * size / s for c in children]
+    return children, kappa
+
+
+def capacity_notional(edge_bps, adv, sigma, eta=IMPACT_ETA, gamma=IMPACT_GAMMA):
+    """Crossover size Q* where total_impact_bps(Q*) == edge_bps.
+
+    Beyond Q* the modelled round-trip impact exceeds the assumed edge, so extra
+    size erodes (then destroys) the edge. Closed form: with participation
+    p = Q/ADV, a = eta*sigma*1e4, b = gamma*sigma*1e4, solve
+        a*sqrt(p) + b*p = edge  ->  b*u^2 + a*u - edge = 0  (u = sqrt(p)).
+    Returns the notional Q* (same units as ADV), or None if unsolvable.
+    """
+    if edge_bps <= 0 or adv <= 0 or sigma <= 0:
+        return None
+    a = eta * sigma * 1e4
+    b = gamma * sigma * 1e4
+    if a <= 0 and b <= 0:
+        return None
+    if b <= 1e-15:
+        # Pure sqrt law: a*sqrt(p) = edge.
+        u = edge_bps / a
+    else:
+        disc = a * a + 4.0 * b * edge_bps
+        u = (-a + math.sqrt(disc)) / (2.0 * b)
+    if u <= 0:
+        return None
+    return (u * u) * adv
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -221,6 +413,12 @@ class TCATracker:
         # idempotent / restart-safe and memory stays flat.
         self._seen_ids = deque(maxlen=50000)
         self._seen_set = set()
+
+        # Per-instrument price/notional series, used by the impact/capacity
+        # model to estimate daily volatility (sigma) and average daily volume
+        # (ADV) from Forseti's own fill stream. Bounded so memory stays flat.
+        # Each entry: (fill_dt_or_None, fill_price, notional).
+        self.px_series = defaultdict(lambda: deque(maxlen=PX_SERIES_MAX))
 
         # Latest fill timestamp seen, surfaced as asOf.
         self._as_of = None
@@ -489,6 +687,7 @@ class TCATracker:
                 "timestamp": ts,
             }
             self.fill_tca.append(record)
+            self.px_series[instrument].append((fill_dt, price, notional))
             counters.inc("fills_processed_total")
             if ts and (self._as_of is None or str(ts) > self._as_of):
                 self._as_of = str(ts)
@@ -593,8 +792,264 @@ class TCATracker:
             "fills": list(reversed(recent)),
         }
 
+    # -- market-impact model estimators --------------------------------------
+
+    def tracked_instruments(self):
+        """Instruments Forseti has seen at least one valid fill for, sorted."""
+        with self.lock:
+            return sorted(self.agg.keys())
+
+    def estimate_sigma(self, instrument):
+        """Estimate daily volatility (fraction) for an instrument.
+
+        Uses the sample standard deviation of consecutive fill-to-fill log
+        returns, scaled to a daily figure by the median inter-fill gap. Returns
+        (sigma, source). Falls back to the documented default (clearly labelled)
+        when there is too little history or the series is degenerate.
+        """
+        with self.lock:
+            series = list(self.px_series.get(instrument, ()))
+        if len(series) < MIN_ESTIMATE_SAMPLES:
+            return DEFAULT_SIGMA, "default (insufficient price history)"
+        rets = []
+        gaps = []
+        prev = None
+        for dt, price, _notional in series:
+            if price is None or price <= 0:
+                prev = None
+                continue
+            if prev is not None:
+                p_dt, p_price = prev
+                rets.append(math.log(price / p_price))
+                if dt is not None and p_dt is not None:
+                    g = (dt - p_dt).total_seconds()
+                    if g > 0:
+                        gaps.append(g)
+            prev = (dt, price)
+        if len(rets) < 2:
+            return DEFAULT_SIGMA, "default (insufficient returns)"
+        mean = sum(rets) / len(rets)
+        var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
+        per_fill_sd = math.sqrt(var)
+        if per_fill_sd <= 0:
+            return DEFAULT_SIGMA, "default (degenerate volatility)"
+        if gaps:
+            gaps.sort()
+            med = gaps[len(gaps) // 2]
+            if med > 0:
+                sigma = per_fill_sd * math.sqrt(86400.0 / med)
+                source = ("estimated-from-fills "
+                          "(fill log-return sd scaled to daily)")
+            else:
+                sigma = per_fill_sd
+                source = "estimated-from-fills (unscaled; no usable time gaps)"
+        else:
+            sigma = per_fill_sd
+            source = "estimated-from-fills (unscaled; no usable time gaps)"
+        sigma = max(SIGMA_MIN, min(SIGMA_MAX, sigma))
+        return sigma, source
+
+    def estimate_adv(self, instrument):
+        """Estimate average daily volume (as a quote-notional) for an instrument.
+
+        Scales Forseti's own executed notional to a per-day figure over the
+        observed time span. Returns (adv, source). NOTE: this is Forseti's OWN
+        traded notional, a LOWER BOUND on true market ADV, so it is labelled as
+        such; falls back to the documented default when history is too thin.
+        """
+        with self.lock:
+            agg = self.agg.get(instrument)
+            series = list(self.px_series.get(instrument, ()))
+            total_notional = agg["notional"] if agg else 0.0
+            fills = agg["fills"] if agg else 0
+        if fills < MIN_ESTIMATE_SAMPLES or total_notional <= 0:
+            return DEFAULT_ADV, "default (insufficient fills)"
+        dts = [dt for dt, _p, _n in series if dt is not None]
+        span = (max(dts) - min(dts)).total_seconds() if len(dts) >= 2 else 0.0
+        span_days = max(span / 86400.0, MIN_SPAN_DAYS)
+        adv = max(total_notional / span_days, ADV_MIN)
+        return adv, ("estimated-from-fills (own executed notional / observed "
+                     "span; lower bound on market ADV)")
+
+    def estimate_trade_notional(self, instrument):
+        """Estimate a representative single-order notional for an instrument."""
+        with self.lock:
+            agg = self.agg.get(instrument)
+            notional = agg["notional"] if agg else 0.0
+            fills = agg["fills"] if agg else 0
+        if fills > 0 and notional > 0:
+            return notional / fills, "estimated-from-fills (avg fill notional)"
+        return DEFAULT_SIZE, "default"
+
 
 tracker = TCATracker()
+
+
+# ---------------------------------------------------------------------------
+# Response builders for the impact / capacity endpoints. Kept as pure module
+# functions (not handler methods) so unit tests can exercise them directly with
+# a seeded tracker and no HTTP server.
+# ---------------------------------------------------------------------------
+
+def build_impact_response(tracker, instrument=None, size=None, adv=None,
+                          sigma=None, eta=None):
+    """Assemble GET /api/impact. Missing params default to tracked estimates."""
+    instrument = instrument or DEFAULT_INSTRUMENT
+    eta_val = eta if eta is not None else IMPACT_ETA
+    gamma_val = IMPACT_GAMMA
+
+    if adv is None:
+        adv, adv_src = tracker.estimate_adv(instrument)
+    else:
+        adv_src = "query"
+    if sigma is None:
+        sigma, sigma_src = tracker.estimate_sigma(instrument)
+    else:
+        sigma_src = "query"
+    if size is None:
+        size, size_src = tracker.estimate_trade_notional(instrument)
+    else:
+        size_src = "query"
+
+    temporary = sqrt_law_temporary_bps(size, adv, sigma, eta_val)
+    permanent = permanent_bps(size, adv, sigma, gamma_val)
+    participation = (size / adv) if adv > 0 else None
+
+    return {
+        "instrument": instrument,
+        "size": round(size, 6),
+        "adv": round(adv, 6),
+        "sigma": round(sigma, 8),
+        "eta": eta_val,
+        "gamma": gamma_val,
+        "participation": round(participation, 8) if participation is not None
+        else None,
+        "temporaryBps": round(temporary, 6),
+        "permanentBps": round(permanent, 6),
+        "totalBps": round(temporary + permanent, 6),
+        "basis": (
+            "size={}, adv={}, sigma={}; eta={} (sqrt-law temp coeff), "
+            "gamma={} (permanent coeff)"
+        ).format(size_src, adv_src, sigma_src, eta_val, gamma_val),
+        "model": IMPACT_MODEL_NAME,
+        "note": ("pre-trade impact estimate; coefficients are illustrative, not "
+                 "calibrated to a measured cost curve"),
+    }
+
+
+def build_schedule_response(size=None, slices=10, risk_aversion=None,
+                            sigma=None, instrument=None, tracker=None):
+    """Assemble GET /api/impact/schedule (Almgren-Chriss child-order sizes)."""
+    n = max(1, int(slices))
+    if risk_aversion is None:
+        risk_aversion = AC_DEFAULT_LAMBDA
+    if size is None:
+        if tracker is not None and instrument:
+            size, _ = tracker.estimate_trade_notional(instrument)
+        else:
+            size = DEFAULT_SIZE
+    if sigma is None:
+        if tracker is not None and instrument:
+            sigma, sigma_src = tracker.estimate_sigma(instrument)
+        else:
+            sigma, sigma_src = DEFAULT_SIGMA, "default"
+    else:
+        sigma_src = "query"
+
+    children, kappa = almgren_chriss_schedule(size, n, risk_aversion, sigma)
+    slice_list = []
+    cumulative = 0.0
+    for j, qty in enumerate(children, start=1):
+        cumulative += qty
+        slice_list.append({
+            "t": j,
+            "qty": round(qty, 6),
+            "cumulative": round(cumulative, 6),
+        })
+
+    return {
+        "instrument": instrument,
+        "size": round(size, 6),
+        "sliceCount": n,
+        "riskAversion": risk_aversion,
+        "sigma": round(sigma, 8),
+        "sigmaSource": sigma_src,
+        "kappa": round(kappa, 8),
+        "slices": slice_list,
+        "model": "Almgren-Chriss",
+        "note": ("closed-form optimal schedule minimising E[cost] + "
+                 "lambda*Var[cost]; front-loaded as riskAversion rises, "
+                 "uniform (TWAP) as riskAversion -> 0. Slice-time units, "
+                 "tau=1 per slice."),
+    }
+
+
+def build_capacity_response(tracker, edge_bps=None, instrument=None,
+                            curve_points=12):
+    """Assemble GET /api/capacity: impact-vs-size curve + edge crossover.
+
+    The capacity is the size at which modelled impact equals the ASSUMED edge.
+    Every edge-dependent figure carries the honesty label.
+    """
+    if edge_bps is None:
+        edge_bps = DEFAULT_EDGE_BPS
+
+    if instrument:
+        instruments = [instrument]
+    else:
+        instruments = tracker.tracked_instruments() or [DEFAULT_INSTRUMENT]
+
+    by_instrument = {}
+    for inst in instruments:
+        adv, adv_src = tracker.estimate_adv(inst)
+        sigma, sigma_src = tracker.estimate_sigma(inst)
+        cap = capacity_notional(edge_bps, adv, sigma, IMPACT_ETA, IMPACT_GAMMA)
+
+        curve = []
+        if cap is not None and cap > 0:
+            # Sample from ~5% of capacity out to 2x capacity so the crossover is
+            # visible in the middle of the curve.
+            lo, hi = 0.05 * cap, 2.0 * cap
+            steps = max(2, int(curve_points))
+            for i in range(steps + 1):
+                s = lo + (hi - lo) * i / steps
+                curve.append({
+                    "size": round(s, 6),
+                    "impactBps": round(
+                        total_impact_bps(s, adv, sigma, IMPACT_ETA,
+                                         IMPACT_GAMMA), 6),
+                })
+            crossover = {
+                "size": round(cap, 6),
+                "impactBps": round(
+                    total_impact_bps(cap, adv, sigma, IMPACT_ETA,
+                                     IMPACT_GAMMA), 6),
+            }
+        else:
+            crossover = None
+
+        by_instrument[inst] = {
+            "capacityNotional": round(cap, 6) if cap is not None else None,
+            "participationAtCapacity": (
+                round(cap / adv, 8) if cap is not None and adv > 0 else None
+            ),
+            "adv": round(adv, 6),
+            "advSource": adv_src,
+            "sigma": round(sigma, 8),
+            "sigmaSource": sigma_src,
+            "crossover": crossover,
+            "curve": curve,
+        }
+
+    return {
+        "assumedEdgeBps": edge_bps,
+        "assumedEdgeLabel": assumed_edge_label(edge_bps),
+        "byInstrument": by_instrument,
+        "model": IMPACT_MODEL_NAME,
+        "note": ("illustrative; no measured edge. Capacity is the size where "
+                 "modelled impact equals the ASSUMED edge (" + EDGE_DISCLAIMER
+                 + "); beyond it, per-trade cost exceeds the edge."),
+    }
 
 
 class ForsetiHandler(BaseHTTPRequestHandler):
@@ -604,6 +1059,33 @@ class ForsetiHandler(BaseHTTPRequestHandler):
             self._json_response(tracker.get_tca())
         elif path == "/api/tca/fills":
             self._json_response(tracker.get_fills(self._limit_param(default=50)))
+        elif path == "/api/impact/schedule":
+            q = self._query()
+            self._json_response(build_schedule_response(
+                size=self._fparam(q, "size"),
+                slices=int(self._fparam(q, "slices") or 10),
+                risk_aversion=self._fparam(q, "riskAversion"),
+                sigma=self._fparam(q, "sigma"),
+                instrument=q.get("instrument"),
+                tracker=tracker,
+            ))
+        elif path == "/api/impact":
+            q = self._query()
+            self._json_response(build_impact_response(
+                tracker,
+                instrument=q.get("instrument"),
+                size=self._fparam(q, "size"),
+                adv=self._fparam(q, "adv"),
+                sigma=self._fparam(q, "sigma"),
+                eta=self._fparam(q, "eta"),
+            ))
+        elif path == "/api/capacity":
+            q = self._query()
+            self._json_response(build_capacity_response(
+                tracker,
+                edge_bps=self._fparam(q, "edgeBps"),
+                instrument=q.get("instrument"),
+            ))
         elif path == "/healthz" or path == "/readyz":
             ok, age = liveness.status()
             payload = {
@@ -620,6 +1102,21 @@ class ForsetiHandler(BaseHTTPRequestHandler):
             self._text_response(counters.render_prometheus())
         else:
             self.send_error(404)
+
+    def _query(self):
+        """Parse the query string into a {key: first-value} dict."""
+        return {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+
+    @staticmethod
+    def _fparam(q, key):
+        """Return q[key] as a float, or None if absent/unparseable."""
+        raw = q.get(key)
+        if raw is None:
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
 
     def _limit_param(self, default):
         """Parse ?limit=N from the query string; fall back to default."""
@@ -788,9 +1285,12 @@ def main():
              "enabled" if PRICES_ENABLED else "disabled")
     log.info("  API port:     %d", PORT)
     log.info("  Endpoints:")
-    log.info("    /api/tca        — overall + per-instrument cost analysis")
-    log.info("    /api/tca/fills  — recent per-fill TCA records (newest-first)")
-    log.info("    /healthz        — liveness")
+    log.info("    /api/tca            — overall + per-instrument cost analysis")
+    log.info("    /api/tca/fills      — recent per-fill TCA records (newest-first)")
+    log.info("    /api/impact         — sqrt-law + Almgren-Chriss impact estimate")
+    log.info("    /api/impact/schedule— Almgren-Chriss optimal child-order sizes")
+    log.info("    /api/capacity       — impact-vs-size curve + edge crossover")
+    log.info("    /healthz            — liveness")
     log.info("=" * 60)
 
     consumer_thread = threading.Thread(target=consume_fills, daemon=True)

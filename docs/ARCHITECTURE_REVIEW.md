@@ -4,7 +4,7 @@
 
 ### Architecture Overview
 
-Norse Stack is a distributed quantitative trading infrastructure (22 containers) built on event-driven, deterministic-replay-first principles, with a four-stage core pipeline. The data flow is:
+Norse Stack is a distributed quantitative trading infrastructure (23 containers) built on event-driven, deterministic-replay-first principles, with a four-stage core pipeline. The data flow is:
 
 ```
 Exchange Data → Muninn (ingest + features) → Huginn (strategy + risk) → Sleipnir (execution) → Fill

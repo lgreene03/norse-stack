@@ -849,9 +849,113 @@
       </div>
     </section>
 
+    <!-- MARKET REGIME · HEIMDALL -->
+    <section data-screen-label="Market Regime" style="background:#0a111e;border:1px solid #1b2b42;border-radius:12px;padding:16px 18px 18px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:8px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:13px;font-weight:700;letter-spacing:.06em;color:#cdd7e6">MARKET REGIME · HEIMDALL</span>
+          <span style="font-size:10px;color:#5b6a82;letter-spacing:.06em">heimdall:8097 · Gaussian HMM · Baum-Welch · causal forward-filter</span>
+        </div>
+        <span data-nc="regime-basis" style="font-size:10.5px;color:#6b7c95;font-family:'JetBrains Mono',monospace">—</span>
+      </div>
+
+      <!-- regime tiles -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px;margin-top:10px">
+        <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
+          <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">CURRENT REGIME</span>
+          <span data-nc="hmm-regime" style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#9fb0c8;line-height:1">—</span>
+          <span style="font-size:9.5px;color:#4f5e75">forward-filtered state</span>
+        </div>
+        <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
+          <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">CONFIDENCE</span>
+          <span data-nc="hmm-prob" style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#9fb0c8;line-height:1">—</span>
+          <span style="font-size:9.5px;color:#4f5e75">P(current state)</span>
+        </div>
+        <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
+          <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">STATES (K)</span>
+          <span data-nc="hmm-nstates" style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#9fb0c8;line-height:1">—</span>
+          <span style="font-size:9.5px;color:#4f5e75">hidden regimes</span>
+        </div>
+        <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
+          <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">LOG-LIKELIHOOD</span>
+          <span data-nc="hmm-loglik" style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#9fb0c8;line-height:1">—</span>
+          <span style="font-size:9.5px;color:#4f5e75">fit quality</span>
+        </div>
+        <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
+          <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">OBSERVATIONS</span>
+          <span data-nc="hmm-nobs" style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#9fb0c8;line-height:1">—</span>
+          <span style="font-size:9.5px;color:#4f5e75">rolling window</span>
+        </div>
+      </div>
+
+      <!-- per-state table -->
+      <div style="background:#070d17;border:1px solid #16233a;border-radius:10px;overflow:hidden;margin-top:14px">
+        <div style="padding:10px 14px;font-size:10.5px;color:#7787a0;font-weight:600;letter-spacing:.06em;border-bottom:1px solid #14202f">HIDDEN STATES · stationary vs current</div>
+        <table style="width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace">
+          <thead>
+            <tr style="font-size:9.5px;color:#5b6a82;text-align:right">
+              <th style="text-align:left;padding:8px 14px;font-weight:600;letter-spacing:.04em">STATE</th>
+              <th style="text-align:left;padding:8px 8px;font-weight:600">LABEL</th>
+              <th style="padding:8px 8px;font-weight:600">STATIONARY</th>
+              <th style="padding:8px 14px;font-weight:600">CURRENT P</th>
+            </tr>
+          </thead>
+          <tbody data-nc="hmm-states-body">
+            <tr><td colspan="4" style="padding:16px 14px;text-align:center;color:#4f5e75;font-size:11.5px;font-style:italic">connecting to heimdall…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div style="margin-top:10px;font-size:10px;color:#5b6a82;line-height:1.55">
+        Regime labels are <b style="color:#7787a0">descriptive</b> — derived from the fitted means and covariances, not from any forward return. Simulation only; no measured out-of-sample edge (PBO&nbsp;=&nbsp;1.0).
+      </div>
+    </section>
+
+    <!-- MARKET IMPACT & CAPACITY · FORSETI -->
+    <section data-screen-label="Market Impact" style="background:#0a111e;border:1px solid #1b2b42;border-radius:12px;padding:16px 18px 18px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:8px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:13px;font-weight:700;letter-spacing:.06em;color:#cdd7e6">MARKET IMPACT &amp; CAPACITY · FORSETI</span>
+          <span style="font-size:10px;color:#5b6a82;letter-spacing:.06em">forseti:8096 · square-root law + Almgren-Chriss</span>
+        </div>
+        <span data-nc="impact-basis" style="font-size:10.5px;color:#6b7c95;font-family:'JetBrains Mono',monospace">—</span>
+      </div>
+
+      <!-- impact + capacity tiles -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:10px">
+        <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
+          <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">TEMPORARY IMPACT</span>
+          <span data-nc="impact-temp" style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#9fb0c8;line-height:1">—</span>
+          <span style="font-size:9.5px;color:#4f5e75">bps · η·σ·√(Q/ADV)</span>
+        </div>
+        <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
+          <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">PERMANENT IMPACT</span>
+          <span data-nc="impact-perm" style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#9fb0c8;line-height:1">—</span>
+          <span style="font-size:9.5px;color:#4f5e75">bps · Almgren-Chriss γ</span>
+        </div>
+        <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
+          <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">TOTAL IMPACT</span>
+          <span data-nc="impact-total" style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#9fb0c8;line-height:1">—</span>
+          <span data-nc="impact-ref" style="font-size:9.5px;color:#4f5e75">reference order</span>
+        </div>
+        <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
+          <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">CAPACITY</span>
+          <span data-nc="capacity-notional" style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#9fb0c8;line-height:1">—</span>
+          <span style="font-size:9.5px;color:#4f5e75">size where impact = edge</span>
+        </div>
+        <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
+          <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">PARTICIPATION</span>
+          <span data-nc="capacity-participation" style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#9fb0c8;line-height:1">—</span>
+          <span style="font-size:9.5px;color:#4f5e75">% ADV at capacity</span>
+        </div>
+      </div>
+      <div data-nc="capacity-note" style="margin-top:10px;font-size:10px;color:#5b6a82;line-height:1.55">
+        Capacity uses an <b style="color:#7787a0">assumed, illustrative</b> edge — this simulation has no measured out-of-sample edge (PBO&nbsp;=&nbsp;1.0).
+      </div>
+    </section>
+
     <!-- footer -->
     <div style="display:flex;align-items:center;justify-content:space-between;padding:2px 4px;margin-top:2px">
-      <span style="font-size:10px;color:#3f4d62;font-family:'JetBrains Mono',monospace">muninn · huginn · sleipnir · odin · redpanda</span>
+      <span style="font-size:10px;color:#3f4d62;font-family:'JetBrains Mono',monospace">muninn · huginn · sleipnir · odin · heimdall · forseti · redpanda</span>
       <span data-nc="status-badge" style="display:inline-flex;align-items:center;gap:6px;font-size:10px;color:#7e6a3a;background:#211a0c;border:1px solid #3d3214;padding:4px 10px;border-radius:6px;letter-spacing:.04em;font-weight:600">
         <span data-nc="status-dot" style="width:6px;height:6px;border-radius:50%;background:#f3b13c"></span><span data-nc="status-text">DEMO DATA · not connected to live endpoints</span>
       </span>

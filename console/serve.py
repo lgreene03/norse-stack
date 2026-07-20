@@ -20,11 +20,14 @@ Proxied paths (browser → console origin → backend):
     /api/sources       → mimir   :8095/api/sources
     /api/tca           → forseti :8096/api/tca
     /api/tca/fills     → forseti :8096/api/tca/fills
-    /api/health/<svc>  → <svc>/healthz  (huginn|sleipnir|odin|muninn|redpanda-console)
+    /api/impact[/schedule] → forseti :8096/api/impact[/schedule] (market impact)
+    /api/capacity      → forseti :8096/api/capacity  (strategy capacity)
+    /api/regime[/*]    → heimdall:8097/api/regime[/history|/model]  (HMM regime)
+    /api/health/<svc>  → <svc>/healthz  (huginn|sleipnir|odin|muninn|redpanda-console|heimdall|forseti)
 
 Backend hosts are 127.0.0.1 by default and overridable via env vars
 (HUGINN_HOST, ODIN_HOST, SLEIPNIR_HOST, MUNINN_HOST, REDPANDA_CONSOLE_HOST,
-RESEARCH_HOST, MIMIR_HOST, FORSETI_HOST).
+RESEARCH_HOST, MIMIR_HOST, FORSETI_HOST, HEIMDALL_HOST).
 
 A backend being down NEVER crashes the console: the proxy returns 502 with a
 JSON {"error": ...} body and short timeouts so a hung backend can't wedge the
@@ -58,12 +61,14 @@ REDPANDA_CONSOLE_HOST = os.environ.get("REDPANDA_CONSOLE_HOST", "127.0.0.1")
 RESEARCH_HOST = os.environ.get("RESEARCH_HOST", "127.0.0.1")
 MIMIR_HOST = os.environ.get("MIMIR_HOST", "127.0.0.1")
 FORSETI_HOST = os.environ.get("FORSETI_HOST", "127.0.0.1")
+HEIMDALL_HOST = os.environ.get("HEIMDALL_HOST", "127.0.0.1")
 
 HUGINN = (HUGINN_HOST, 8083)
 ODIN = (ODIN_HOST, 8086)
 RESEARCH = (RESEARCH_HOST, 8094)
 MIMIR = (MIMIR_HOST, 8095)
 FORSETI = (FORSETI_HOST, 8096)
+HEIMDALL = (HEIMDALL_HOST, 8097)
 
 # Health-check service map: svc name → (host, port). Matches the footer dots.
 HEALTH_TARGETS = {
@@ -72,6 +77,8 @@ HEALTH_TARGETS = {
     "odin": (ODIN_HOST, 8086),
     "muninn": (MUNINN_HOST, 8080),
     "redpanda-console": (REDPANDA_CONSOLE_HOST, 8088),
+    "heimdall": (HEIMDALL_HOST, 8097),
+    "forseti": (FORSETI_HOST, 8096),
 }
 
 # GET proxy routes: console path → (host, port, backend path).
@@ -89,6 +96,14 @@ GET_ROUTES = {
     # Execution TCA / Forseti.
     "/api/tca": (FORSETI[0], FORSETI[1], "/api/tca"),
     "/api/tca/fills": (FORSETI[0], FORSETI[1], "/api/tca/fills"),
+    # Market-impact & capacity / Forseti (square-root law + Almgren-Chriss).
+    "/api/impact": (FORSETI[0], FORSETI[1], "/api/impact"),
+    "/api/impact/schedule": (FORSETI[0], FORSETI[1], "/api/impact/schedule"),
+    "/api/capacity": (FORSETI[0], FORSETI[1], "/api/capacity"),
+    # Market-regime / Heimdall (Gaussian HMM, Baum-Welch, causal filtering).
+    "/api/regime": (HEIMDALL[0], HEIMDALL[1], "/api/regime"),
+    "/api/regime/history": (HEIMDALL[0], HEIMDALL[1], "/api/regime/history"),
+    "/api/regime/model": (HEIMDALL[0], HEIMDALL[1], "/api/regime/model"),
 }
 
 
@@ -294,8 +309,8 @@ def main():
         print("Norse Console serving %s" % DIRECTORY)
         print("  -> %s" % url)
         print("  proxy: huginn=%s:8083  odin=%s:8086" % (HUGINN_HOST, ODIN_HOST))
-        print("  proxy: research=%s:8094  mimir=%s:8095  forseti=%s:8096"
-              % (RESEARCH_HOST, MIMIR_HOST, FORSETI_HOST))
+        print("  proxy: research=%s:8094  mimir=%s:8095  forseti=%s:8096  heimdall=%s:8097"
+              % (RESEARCH_HOST, MIMIR_HOST, FORSETI_HOST, HEIMDALL_HOST))
         print("  (Ctrl-C to stop)")
         try:
             httpd.serve_forever()

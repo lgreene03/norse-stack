@@ -2,7 +2,7 @@
 
 ## What Is norse-stack
 
-Meta-repository and entry point for the Norse Stack — a distributed quantitative trading infrastructure that boots as 22 containers (`docker compose config --services | wc -l`) via one-command `make bootstrap`. This repo provides the unified docker-compose, console, monitoring stack, end-to-end smoke test, and architecture documentation. The core engines (muninn, huginn, sleipnir) live in their own sibling repos, but this repo is **not** purely orchestration: the analytics, ML, research, and bridge services under `services/` are application code built directly from here.
+Meta-repository and entry point for the Norse Stack — a distributed quantitative trading infrastructure that boots as 23 containers (`docker compose config --services | wc -l`) via one-command `make bootstrap`. This repo provides the unified docker-compose, console, monitoring stack, end-to-end smoke test, and architecture documentation. The core engines (muninn, huginn, sleipnir) live in their own sibling repos, but this repo is **not** purely orchestration: the analytics, ML, research, and bridge services under `services/` are application code built directly from here.
 
 ## Commands
 
@@ -44,7 +44,8 @@ norse-stack/services/
   bragi/           ← trade explainability (port 8087)
   huginn-ai/       ← XGBoost ML signal predictor (port 8092)
   mimir/           ← point-in-time feature store (port 8095)
-  forseti/         ← execution TCA (port 8096)
+  forseti/         ← execution TCA + market impact / capacity (port 8096)
+  heimdall/        ← market-regime detector (Gaussian HMM) (port 8097)
   news-sentinel/   ← LLM news-sentiment feed (port 8089)
 ```
 
@@ -63,6 +64,7 @@ norse-stack/services/
 | 8094  | Research Gateway   |
 | 8095  | Mimir Feature Store|
 | 8096  | Forseti TCA        |
+| 8097  | Heimdall Regime    |
 | 9002  | MinIO API          |
 | 9003  | MinIO Console      |
 | 5437  | PostgreSQL (Muninn)|
@@ -116,7 +118,16 @@ norse-stack/services/
 - `GET /api/sources` — registered data sources
 - Stamps both event_time and ingest_time; prevents lookahead bias structurally at the data layer
 
-### Forseti (Execution TCA)
+### Forseti (Execution TCA + Market Impact / Capacity)
 - `GET /api/tca` — aggregate transaction-cost analysis: slippage, maker/taker, fees, implementation shortfall
 - `GET /api/tca/fills` — underlying per-fill records
+- `GET /api/impact?instrument=&size=&adv=&sigma=&eta=` — pre-trade market-impact estimate: square-root-law temporary impact (`eta·sigma·sqrt(Q/ADV)`) plus an Almgren-Chriss permanent term, in bps. Missing inputs fall back to documented defaults and the `basis` field states exactly which were defaulted (no silent fabrication).
+- `GET /api/impact/schedule?size=&slices=&riskAversion=` — Almgren-Chriss optimal execution schedule (per-slice sizes trading off impact against timing risk)
+- `GET /api/capacity?edgeBps=&instrument=` — strategy capacity: the notional at which modelled impact equals an ASSUMED edge. The response labels the edge as illustrative — this simulation has no measured out-of-sample edge (PBO=1.0), so capacity is a "what-if" bound, not a live figure.
 - Computed from real fills; reports `null` slippage when there is no arrival price (e.g. paper fills) rather than fabricating a benchmark
+
+### Heimdall (Market-Regime Detection — Gaussian HMM)
+- `GET /api/regime` — current market regime via a Gaussian HMM fit with Baum-Welch (EM). Reports the causal forward-filtered state (`currentRegime` id/label/probability), full `stateProbs`, `transitionMatrix`, `stationary` distribution, `logLikelihood`, and observation counts.
+- `GET /api/regime/history` — recent regime assignments over the rolling window
+- `GET /api/regime/model` — fitted parameters (per-state means/covariances) and the deterministic label derivation
+- Consumes `features.obi.v1`, fits a `HEIMDALL_N_STATES`-state HMM (default 3) over a rolling window (default 1000 obs), and refits online. Warm-starts from Mimir's persisted feature history on boot so it is trained immediately rather than waiting for the live feed. Regime **labels** (calm / trending / turbulent / choppy) are derived from the fitted means and covariances — they are descriptive, not predictive, and carry no measured out-of-sample edge (this is a modelling homage to Renaissance/Medallion's HMM lineage, not an edge claim).

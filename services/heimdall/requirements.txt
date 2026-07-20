@@ -1,0 +1,9 @@
+# Pinned for reproducible Docker builds.
+# Unlike the sibling analytics services, Heimdall needs linear algebra (a
+# Gaussian HMM: Cholesky factorisations, matrix solves, eigen-decomposition), so
+# numpy is a runtime dependency in addition to the Kafka client.
+# kafka-python pinned to the same 2.x line odin/obi-bridge/forseti/mimir target
+# so a silent 3.x major jump can't change consumer semantics under us.
+# numpy pinned to the current 2.x line for a reproducible image.
+kafka-python==2.3.2
+numpy==2.3.2

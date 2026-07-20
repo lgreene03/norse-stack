@@ -15,9 +15,11 @@ contracts are documented in [`CONTRACTS.md`](CONTRACTS.md)).
 
 ## Container topology
 
-All 22 containers from `docker-compose.yml`. Solid edges are Kafka topics
-(labelled with the topic name); dashed edges are synchronous calls (HTTP/gRPC,
-JDBC, S3, OTLP) or scrapes.
+The 21 long-running services from `docker-compose.yml` (the full stack is 23
+containers — `topic-init` and `minio-init` are one-shot bootstrap jobs that
+provision Kafka topics / the MinIO bucket and then exit, so they are omitted here).
+Solid edges are Kafka topics (labelled with the topic name); dashed edges are
+synchronous calls (HTTP/gRPC, JDBC, S3, OTLP) or scrapes.
 
 ```mermaid
 flowchart LR
@@ -38,6 +40,13 @@ flowchart LR
         bragi["bragi<br/>Python<br/>trade explainability"]
         huginnai["huginn-ai<br/>Python<br/>XGBoost signal predictor"]
         newssentinel["news-sentinel<br/>Python<br/>LLM news sentiment"]
+    end
+
+    subgraph planes["Research, data & execution-quality planes"]
+        mimir["mimir<br/>Python<br/>point-in-time feature store"]
+        research["research-gateway<br/>Go<br/>walk-forward/PBO as a service"]
+        forseti["forseti<br/>Python<br/>execution TCA · market impact"]
+        heimdall["heimdall<br/>Python<br/>Gaussian-HMM regime"]
     end
 
     subgraph infra["Shared infrastructure"]
@@ -78,6 +87,14 @@ flowchart LR
     redpanda -->|"executions.fills.v1"| bragi
     redpanda -->|"features.obi.v1 + fills"| huginnai
     redpanda -->|"features.obi.v1"| bragi
+
+    %% ── Platform planes: feature store, regime, execution-quality ───
+    redpanda -->|"features.obi.v1"| mimir
+    redpanda -->|"features.obi.v1"| heimdall
+    redpanda -->|"executions.fills.v1"| forseti
+    heimdall -.->|"warm-start /api/features/history"| mimir
+    %% research-gateway is a standalone sidecar: it replays a JSONL dataset over
+    %% HTTP (POST /api/research/runs), off the live Kafka path, so it has no topic edge.
 
     %% ── Synchronous deps (dashed) ───────────────────────────────────
     muninn -.->|JDBC| pgmuninn

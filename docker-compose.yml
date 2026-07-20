@@ -496,6 +496,40 @@ services:
       - no-new-privileges:true
     restart: unless-stopped
 
+  # Heimdall — Gaussian-HMM market-regime detector trained with Baum-Welch (a
+  # direct Renaissance homage: Leonard Baum co-invented the algorithm at RenTech).
+  # Consumes features.obi.v1, fits a K-state HMM over a rolling window, and reports
+  # the current regime (calm/trending/turbulent) via causal forward-filtering.
+  heimdall:
+    build:
+      context: ./services/heimdall
+      dockerfile: Dockerfile
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      mimir:
+        condition: service_started
+    ports:
+      - "8097:8097"
+    environment:
+      KAFKA_BROKERS: redpanda:29092
+      FEATURES_TOPIC: features.obi.v1
+      HEIMDALL_PORT: "8097"
+      HEIMDALL_N_STATES: "3"
+      MIMIR_URL: http://mimir:8095
+      ACCESS_CONTROL_ALLOW_ORIGIN: ${ACCESS_CONTROL_ALLOW_ORIGIN:-*}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8097/healthz',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    mem_limit: 512m
+    cpus: "1.0"
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
   # ── ML & Intelligence ─────────────────────────────────────────────────
 
   huginn-ai:

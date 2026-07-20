@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- Unified docker-compose.yml booting the full stack (22 containers) plus infrastructure
+- Unified docker-compose.yml booting the full stack (23 containers) plus infrastructure
 - End-to-end smoke test validating the full trade-to-fill pipeline
 - clone-all.sh script for one-command repo setup
 - README with architecture diagram, service table, quick start guide
@@ -18,6 +18,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   :8086), Bragi (trade explainability, :8087), Huginn AI (XGBoost ML signal predictor,
   :8092), and News Sentinel (LLM news-sentiment feed, :8089)
 - Mimir point-in-time feature store (:8095) and Forseti execution TCA (:8096) services
+- Heimdall market-regime detector (:8097): Gaussian HMM fit with Baum-Welch (EM),
+  causal forward-filtered state, online refit, and a Mimir warm-start so it is trained
+  on boot rather than waiting for the live feed. Descriptive regime labels only (no edge claim)
+- Forseti market-impact & capacity endpoints (`/api/impact`, `/api/impact/schedule`,
+  `/api/capacity`): square-root-law + Almgren-Chriss impact and assumed-edge capacity bound
+- Console panels for both: MARKET REGIME · HEIMDALL and MARKET IMPACT & CAPACITY · FORSETI,
+  wired live through the same-origin proxy (serve.py) with honest no-edge disclaimers
 - Research gateway service (validation-as-a-service, walk-forward + PBO + Deflated-Sharpe,
   built from `../huginn` cmd/research, :8094)
 - obi-bridge service (order-book-imbalance feature bridge, built from `services/obi-bridge`)

@@ -124,6 +124,30 @@
         'BTC-USDT': { totalFills: 9, avgSlippageBps: null, totalFees: 0.11, totalNotional: 230.4 },
         'ETH-USDT': { totalFills: 13, avgSlippageBps: null, totalFees: 0.10, totalNotional: 182.2 }
       }
+    },
+    regime: {
+      trained: true,
+      currentRegime: { id: 2, label: 'calm', probability: 0.9998 },
+      stateProbs: [0.0002, 0.0, 0.9998],
+      nStates: 3, nObservations: 1000, fitObservations: 1000, refits: 2,
+      logLikelihood: -3249.5,
+      stationary: [0.336, 0.205, 0.459],
+      labels: ['turbulent', 'trending', 'calm'],
+      features: ['trend_m5_momentum', 'volatility_atr', 'abs_obi_imbalance'],
+      asOf: '2026-06-22T14:56:00Z'
+    },
+    impact: {
+      impact: {
+        instrument: 'BTC-USDT', size: 100000, adv: 1e8, sigma: 0.02, eta: 1.0, gamma: 0.1,
+        temporaryBps: 6.324555, permanentBps: 0.02, totalBps: 6.344555,
+        basis: 'size=query, adv=default, sigma=default; eta=1.0 (sqrt-law), gamma=0.1 (permanent)',
+        model: 'sqrt-law + Almgren-Chriss'
+      },
+      capacity: {
+        assumedEdgeBps: 5.0,
+        assumedEdgeLabel: 'assumed edge = 5.0 bps (illustrative; this simulation has no measured out-of-sample edge (PBO=1.0))',
+        byInstrument: { 'BTC-USDT': { capacityNotional: 62189.44, participationAtCapacity: 0.00062189, adv: 1e8 } }
+      }
     }
   };
 
@@ -245,7 +269,7 @@
     }
 
     var data = { live: null, alpha: null, portfolio: null, validation: null, services: null,
-                 research: null, features: null, tca: null };
+                 research: null, features: null, tca: null, regime: null, impact: null };
     var sources = new Set();
 
     // shared metrics text (huginn /api/metrics)
@@ -474,8 +498,28 @@
       sources.add('forseti');
     }).catch(function () { /* tca stays null → empty state */ });
 
+    // ---- regime ← heimdall (Gaussian HMM) ----
+    var regimeP = getJSON('/api/regime').then(function (j) {
+      data.regime = j || null;
+      if (j) sources.add('heimdall');
+    }).catch(function () { /* regime stays null → empty state */ });
+
+    // ---- market impact + capacity ← forseti ----
+    // A fixed reference order ($100k BTC-USDT) and assumed edge (5 bps) so the
+    // panel shows a concrete, comparable figure; the honest disclaimer that the
+    // edge is illustrative rides along in the payload's labels.
+    var impactP = Promise.all([
+      getJSON('/api/impact?instrument=BTC-USDT&size=100000').catch(function () { return null; }),
+      getJSON('/api/capacity?edgeBps=5&instrument=BTC-USDT').catch(function () { return null; })
+    ]).then(function (r) {
+      if (r[0] || r[1]) {
+        data.impact = { impact: r[0], capacity: r[1] };
+        sources.add('forseti');
+      }
+    }).catch(function () { /* impact stays null → empty state */ });
+
     return Promise.all([liveP, metricsApplyP, alphaP, portfolioP, validationP, equityP, servicesP,
-                        researchP, featuresP, tcaP])
+                        researchP, featuresP, tcaP, regimeP, impactP])
       .then(function () { return { data: data, sources: sources, demo: false }; })
       .catch(function () { return { data: data, sources: sources, demo: false }; });
   }
@@ -1040,6 +1084,80 @@
     }
   }
 
+  // HMM regime label → colour. calm→green, trending→blue, turbulent→red,
+  // choppy→amber; unknown → muted. Purely descriptive styling.
+  function hmmRegimeColor(label) {
+    var m = { calm: C.green, trending: C.blue, turbulent: C.red, choppy: C.amber };
+    return m[String(label || '').toLowerCase()] || C.mut;
+  }
+
+  function applyRegime(R) {
+    var body = $('hmm-states-body');
+    if (!R || R.trained !== true) {
+      // Untrained (warming up) or unreachable — honest placeholders.
+      setText('hmm-regime', R ? 'warming up' : DASH); setColor('hmm-regime', C.dim);
+      setText('hmm-prob', DASH); setColor('hmm-prob', C.dim);
+      setText('hmm-nstates', (R && isNum(R.nStates)) ? R.nStates : DASH);
+      setText('hmm-loglik', DASH);
+      setText('hmm-nobs', (R && isNum(R.nObservations)) ? R.nObservations : DASH);
+      if (body) body.innerHTML = emptyRow(4, R ? (R.reason || 'training…') : 'connecting to heimdall…');
+      setText('regime-basis', (R && R.reason) ? R.reason : DASH);
+      return;
+    }
+    var cur = R.currentRegime || {};
+    setText('hmm-regime', cur.label || DASH); setColor('hmm-regime', hmmRegimeColor(cur.label));
+    setText('hmm-prob', isNum(cur.probability) ? nf(cur.probability * 100, 1) + '%' : DASH); setColor('hmm-prob', C.mut);
+    setText('hmm-nstates', isNum(R.nStates) ? R.nStates : DASH); setColor('hmm-nstates', C.mut);
+    setText('hmm-loglik', isNum(R.logLikelihood) ? nf(R.logLikelihood, 1) : DASH); setColor('hmm-loglik', C.mut);
+    setText('hmm-nobs', isNum(R.nObservations) ? R.nObservations : DASH); setColor('hmm-nobs', C.mut);
+    setText('regime-basis', (R.nStates || '?') + '-state HMM · ' + (isNum(R.nObservations) ? R.nObservations : '?') +
+      ' obs · ' + (isNum(R.refits) ? R.refits : '?') + ' refits');
+
+    var labels = Array.isArray(R.labels) ? R.labels : [];
+    var stat = Array.isArray(R.stationary) ? R.stationary : [];
+    var sp = Array.isArray(R.stateProbs) ? R.stateProbs : [];
+    var curId = isNum(cur.id) ? cur.id : -1;
+    if (body) {
+      body.innerHTML = labels.length ? labels.map(function (lab, i) {
+        var isCur = i === curId;
+        var lc = hmmRegimeColor(lab);
+        return '<tr style="border-top:1px solid #111d2c;font-size:12px' + (isCur ? ';background:#0b1626' : '') + '">' +
+          '<td style="text-align:left;padding:9px 14px;color:#dbe4f0">' + i + (isCur ? ' ◀ now' : '') + '</td>' +
+          '<td style="text-align:left;padding:9px 8px;color:' + lc + ';font-weight:600">' + esc(lab) + '</td>' +
+          '<td style="text-align:right;padding:9px 8px;color:#9fb0c8">' + (isNum(stat[i]) ? nf(stat[i] * 100, 1) + '%' : DASH) + '</td>' +
+          '<td style="text-align:right;padding:9px 14px;color:' + (isCur ? lc : '#7787a0') + '">' + (isNum(sp[i]) ? nf(sp[i] * 100, 1) + '%' : DASH) + '</td></tr>';
+      }).join('') : emptyRow(4, 'no states');
+    }
+  }
+
+  function applyImpact(IC) {
+    var im = IC && IC.impact, cap = IC && IC.capacity;
+    // impact tiles
+    if (im) {
+      setText('impact-temp', isNum(im.temporaryBps) ? nf(im.temporaryBps, 2) : DASH); setColor('impact-temp', C.amber);
+      setText('impact-perm', isNum(im.permanentBps) ? nf(im.permanentBps, 3) : DASH); setColor('impact-perm', C.mut);
+      setText('impact-total', isNum(im.totalBps) ? nf(im.totalBps, 2) : DASH); setColor('impact-total', C.blue);
+      setText('impact-ref', (im.instrument || 'BTC-USDT') + ' · ' + (isNum(im.size) ? usd(im.size, 0) : '$100k'));
+      setText('impact-basis', im.basis || im.model || DASH);
+    } else {
+      ['impact-temp', 'impact-perm', 'impact-total'].forEach(function (k) { setText(k, DASH); setColor(k, C.dim); });
+      setText('impact-ref', 'reference order');
+      setText('impact-basis', IC ? DASH : 'connecting to forseti…');
+    }
+    // capacity tiles
+    var bi = cap && cap.byInstrument && cap.byInstrument['BTC-USDT'];
+    if (bi) {
+      setText('capacity-notional', isNum(bi.capacityNotional) ? usd(bi.capacityNotional, 0) : DASH); setColor('capacity-notional', C.green);
+      setText('capacity-participation', isNum(bi.participationAtCapacity) ? nf(bi.participationAtCapacity * 100, 3) + '%' : DASH); setColor('capacity-participation', C.mut);
+    } else {
+      setText('capacity-notional', DASH); setColor('capacity-notional', C.dim);
+      setText('capacity-participation', DASH); setColor('capacity-participation', C.dim);
+    }
+    if (cap && cap.assumedEdgeLabel) {
+      setText('capacity-note', 'Capacity assumes ' + cap.assumedEdgeLabel);
+    }
+  }
+
   function applyFooter(sources, demo) {
     var badge = $('status-badge'), dotF = $('status-dot'), textF = $('status-text');
     if (!badge || !dotF || !textF) return;
@@ -1077,6 +1195,8 @@
     applyResearch(d.research);
     applyFeatures(d.features);
     applyTCA(d.tca);
+    applyRegime(d.regime);
+    applyImpact(d.impact);
     applyServices(d.services);
     // Drive the RUNNING/HALTED indicator from authoritative live breaker state
     // (huginn /api/snapshot `halted` + `halt_reason`), not the optimistic echo.

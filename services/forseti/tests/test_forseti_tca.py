@@ -4,6 +4,7 @@ Run with: python3 -m pytest services/forseti/tests/  (kafka is stubbed in
 conftest). Tests seed fills DIRECTLY into the tracker — no Kafka, no DB.
 """
 
+import math
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -273,3 +274,215 @@ def test_maker_taker_ratio_null_when_no_takers(tracker):
     overall = tracker.get_tca()["overall"]
     # Ratio undefined (division by zero) -> None, not a fabricated infinity.
     assert overall["makerTakerRatio"] is None
+
+
+# ===========================================================================
+# MARKET-IMPACT + CAPACITY model (the Medallion capacity constraint).
+#
+# Honest framing: this is a trading SIMULATION with NO measured out-of-sample
+# edge (PBO=1.0). These tests verify the MATHEMATICS of the impact/capacity
+# technique, not any claim of realisable profit or AUM.
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# (1) Square-root-law temporary impact: monotonicity + the sqrt scaling.
+# ---------------------------------------------------------------------------
+
+def test_sqrt_law_rises_with_size():
+    small = forseti.sqrt_law_temporary_bps(1.0e6, 1.0e8, 0.02, eta=1.0)
+    big = forseti.sqrt_law_temporary_bps(4.0e6, 1.0e8, 0.02, eta=1.0)
+    assert big > small
+
+
+def test_sqrt_law_falls_with_adv():
+    thin = forseti.sqrt_law_temporary_bps(1.0e6, 1.0e8, 0.02, eta=1.0)
+    deep = forseti.sqrt_law_temporary_bps(1.0e6, 2.0e8, 0.02, eta=1.0)
+    # Doubling ADV halves participation -> impact scales by sqrt(1/2).
+    assert deep < thin
+    assert deep == pytest.approx(thin / math.sqrt(2.0), rel=1e-9)
+
+
+def test_sqrt_law_scales_linearly_with_sigma():
+    base = forseti.sqrt_law_temporary_bps(1.0e6, 1.0e8, 0.02, eta=1.0)
+    doubled = forseti.sqrt_law_temporary_bps(1.0e6, 1.0e8, 0.04, eta=1.0)
+    assert doubled == pytest.approx(2.0 * base, rel=1e-9)
+
+
+def test_sqrt_law_four_x_size_is_two_x_impact():
+    # A 4x order gives ~2x temporary impact because sqrt(4) == 2.
+    one_x = forseti.sqrt_law_temporary_bps(1.0e6, 1.0e8, 0.02, eta=1.0)
+    four_x = forseti.sqrt_law_temporary_bps(4.0e6, 1.0e8, 0.02, eta=1.0)
+    assert four_x == pytest.approx(2.0 * one_x, rel=1e-9)
+
+
+def test_sqrt_law_closed_form_value():
+    # size/adv = 1e6/1e8 = 0.01, sqrt = 0.1; 1.0 * 0.02 * 0.1 * 1e4 = 20 bps.
+    assert forseti.sqrt_law_temporary_bps(1.0e6, 1.0e8, 0.02, eta=1.0) == \
+        pytest.approx(20.0, rel=1e-12)
+
+
+def test_permanent_impact_is_linear_in_size():
+    one_x = forseti.permanent_bps(1.0e6, 1.0e8, 0.02, gamma=0.1)
+    two_x = forseti.permanent_bps(2.0e6, 1.0e8, 0.02, gamma=0.1)
+    # Linear (not sqrt): doubling size doubles permanent impact.
+    assert two_x == pytest.approx(2.0 * one_x, rel=1e-9)
+
+
+def test_impact_endpoint_shape_and_defaults(tracker):
+    # Seed a couple of fills so adv/sigma can be estimated from the stream.
+    tracker.add_fill(_fill(instrument="BTC-USDT", quantity=1.0, fill_price=100.0,
+                           execution_id="i1",
+                           timestamp="2026-06-22T00:00:00+00:00"))
+    tracker.add_fill(_fill(instrument="BTC-USDT", quantity=1.0, fill_price=101.0,
+                           execution_id="i2",
+                           timestamp="2026-06-22T01:00:00+00:00"))
+    tracker.add_fill(_fill(instrument="BTC-USDT", quantity=1.0, fill_price=100.5,
+                           execution_id="i3",
+                           timestamp="2026-06-22T02:00:00+00:00"))
+    out = forseti.build_impact_response(tracker, instrument="BTC-USDT",
+                                        size=1.0e6, adv=1.0e8, sigma=0.02,
+                                        eta=1.0)
+    assert out["model"] == "sqrt-law + Almgren-Chriss"
+    assert out["temporaryBps"] == pytest.approx(20.0, rel=1e-9)
+    # permanent = 0.1 * 0.02 * (1e6/1e8) * 1e4 = 0.1*0.02*0.01*1e4 = 0.2 bps.
+    assert out["permanentBps"] == pytest.approx(0.2, rel=1e-9)
+    assert out["totalBps"] == pytest.approx(20.2, rel=1e-9)
+    # Defaults come from tracker estimates when params are omitted.
+    dflt = forseti.build_impact_response(tracker, instrument="BTC-USDT")
+    assert dflt["adv"] > 0 and dflt["sigma"] > 0 and dflt["size"] > 0
+
+
+# ---------------------------------------------------------------------------
+# (2) Almgren-Chriss optimal-execution schedule.
+# ---------------------------------------------------------------------------
+
+def test_ac_schedule_sums_to_parent_size():
+    children, _ = forseti.almgren_chriss_schedule(
+        size=1000.0, slices=10, risk_aversion=1.0, sigma=0.02)
+    assert len(children) == 10
+    assert sum(children) == pytest.approx(1000.0, rel=1e-9)
+
+
+def test_ac_schedule_reduces_to_twap_as_risk_aversion_zero():
+    children, kappa = forseti.almgren_chriss_schedule(
+        size=1000.0, slices=10, risk_aversion=1e-12, sigma=0.02)
+    # Every child ~ equal (uniform / TWAP) and kappa ~ 0.
+    assert kappa == pytest.approx(0.0, abs=1e-6)
+    for c in children:
+        assert c == pytest.approx(100.0, rel=1e-3)
+
+
+def test_ac_schedule_is_front_loaded_and_more_so_as_risk_aversion_rises():
+    low, _ = forseti.almgren_chriss_schedule(
+        size=1000.0, slices=10, risk_aversion=0.5, sigma=0.02)
+    high, _ = forseti.almgren_chriss_schedule(
+        size=1000.0, slices=10, risk_aversion=5.0, sigma=0.02)
+    # Front-loaded: first child is the largest and exceeds the uniform 100.
+    assert low[0] == max(low)
+    assert low[0] > 100.0
+    assert high[0] == max(high)
+    # More risk-averse -> more front-loaded (bigger first child, smaller last).
+    assert high[0] > low[0]
+    assert high[-1] < low[-1]
+    # Inventory is drawn down monotonically (children never go negative).
+    assert all(c >= 0 for c in high)
+
+
+def test_ac_schedule_endpoint_shape():
+    out = forseti.build_schedule_response(size=1000.0, slices=5,
+                                          risk_aversion=2.0, sigma=0.02)
+    assert out["model"] == "Almgren-Chriss"
+    assert out["sliceCount"] == 5
+    assert len(out["slices"]) == 5
+    # Cumulative reaches the parent size on the final slice.
+    assert out["slices"][-1]["cumulative"] == pytest.approx(1000.0, rel=1e-9)
+    assert out["slices"][0]["t"] == 1
+    # t index is monotonically increasing.
+    assert [s["t"] for s in out["slices"]] == [1, 2, 3, 4, 5]
+
+
+# ---------------------------------------------------------------------------
+# (3) Capacity crossover: at capacity, modelled impact == assumed edge; a
+#     larger size pushes impact above the edge (the edge is eroded).
+# ---------------------------------------------------------------------------
+
+def test_capacity_crossover_impact_equals_edge():
+    edge = 10.0
+    adv, sigma = 1.0e8, 0.02
+    cap = forseti.capacity_notional(edge, adv, sigma, eta=1.0, gamma=0.1)
+    assert cap is not None and cap > 0
+    at_cap = forseti.total_impact_bps(cap, adv, sigma, eta=1.0, gamma=0.1)
+    assert at_cap == pytest.approx(edge, rel=1e-6)
+
+
+def test_capacity_larger_size_erodes_edge():
+    edge = 10.0
+    adv, sigma = 1.0e8, 0.02
+    cap = forseti.capacity_notional(edge, adv, sigma, eta=1.0, gamma=0.1)
+    # Just below capacity: impact < edge (edge survives). Above: impact > edge.
+    below = forseti.total_impact_bps(0.5 * cap, adv, sigma, eta=1.0, gamma=0.1)
+    above = forseti.total_impact_bps(2.0 * cap, adv, sigma, eta=1.0, gamma=0.1)
+    assert below < edge
+    assert above > edge
+
+
+def test_capacity_crossover_pure_sqrt_law_when_no_permanent():
+    # gamma=0 -> pure sqrt law: a*sqrt(p)=edge closed form.
+    edge = 20.0
+    adv, sigma = 1.0e8, 0.02
+    cap = forseti.capacity_notional(edge, adv, sigma, eta=1.0, gamma=0.0)
+    at_cap = forseti.total_impact_bps(cap, adv, sigma, eta=1.0, gamma=0.0)
+    assert at_cap == pytest.approx(edge, rel=1e-9)
+    # edge 20 bps, temp = 1*0.02*sqrt(p)*1e4 = 20 -> sqrt(p)=0.1 -> p=0.01.
+    assert cap == pytest.approx(0.01 * adv, rel=1e-9)
+
+
+def test_capacity_endpoint_shape_and_crossover(tracker):
+    tracker.add_fill(_fill(instrument="ETH-USDT", quantity=1.0, fill_price=100.0,
+                           execution_id="c1",
+                           timestamp="2026-06-22T00:00:00+00:00"))
+    tracker.add_fill(_fill(instrument="ETH-USDT", quantity=1.0, fill_price=101.0,
+                           execution_id="c2",
+                           timestamp="2026-06-22T01:00:00+00:00"))
+    tracker.add_fill(_fill(instrument="ETH-USDT", quantity=1.0, fill_price=100.5,
+                           execution_id="c3",
+                           timestamp="2026-06-22T02:00:00+00:00"))
+    out = forseti.build_capacity_response(tracker, edge_bps=10.0)
+    assert out["assumedEdgeBps"] == 10.0
+    assert "ETH-USDT" in out["byInstrument"]
+    inst = out["byInstrument"]["ETH-USDT"]
+    assert inst["capacityNotional"] > 0
+    # At the returned crossover, modelled impact ~= the assumed edge.
+    assert inst["crossover"]["impactBps"] == pytest.approx(10.0, rel=1e-4)
+    # Curve is monotonically increasing in size.
+    curve = inst["curve"]
+    assert len(curve) > 2
+    for a, b in zip(curve, curve[1:]):
+        assert b["size"] > a["size"]
+        assert b["impactBps"] >= a["impactBps"]
+
+
+# ---------------------------------------------------------------------------
+# (4) Honest labels: the assumed-edge disclaimer must be present.
+# ---------------------------------------------------------------------------
+
+def test_capacity_carries_honest_edge_labels(tracker):
+    tracker.add_fill(_fill(execution_id="h1"))
+    out = forseti.build_capacity_response(tracker, edge_bps=15.0)
+    assert "no measured out-of-sample edge" in out["assumedEdgeLabel"]
+    assert "assumed edge = 15.0 bps" in out["assumedEdgeLabel"]
+    assert "illustrative; no measured edge" in out["note"]
+    # The module-level label helper is explicit about the assumption.
+    lbl = forseti.assumed_edge_label(7.0)
+    assert "assumed edge = 7.0 bps" in lbl
+    assert "PBO=1.0" in lbl
+
+
+def test_capacity_falls_back_to_default_instrument_when_none_tracked(tracker):
+    # No fills seeded -> still returns a usable default-instrument capacity.
+    out = forseti.build_capacity_response(tracker, edge_bps=10.0)
+    assert forseti.DEFAULT_INSTRUMENT in out["byInstrument"]
+    inst = out["byInstrument"][forseti.DEFAULT_INSTRUMENT]
+    assert inst["capacityNotional"] > 0
+    assert inst["advSource"].startswith("default")
+    assert inst["sigmaSource"].startswith("default")
