@@ -530,6 +530,10 @@
   // ====================================================================
   var halted = false;
   var liveHaltReason = ''; // halt_reason from the live snapshot, surfaced when halted
+  // Whether huginn's snapshot supplied a strategy regime for the top REGIME tile.
+  // When it does not (the OBI strategy leaves it empty), applyRegime falls the tile
+  // back to Heimdall's HMM regime instead of leaving it as a dash.
+  var strategyRegimeShown = false;
   // Guard so a repeatedly-clicked breaker control (e.g. a no-token HALT that the
   // user keeps retrying) logs to the console only once per auth-failure streak.
   // The on-screen halt-notice is the primary feedback; the console.warn is a
@@ -588,9 +592,13 @@
       if (pill) { pill.style.background = rm.bg; pill.style.borderColor = rm.border; }
       var rdot = $('regime-dot'); if (rdot) rdot.style.background = rm.color;
       setText('regime', L.regime); setColor('regime', rm.color);
+      strategyRegimeShown = true;
     } else {
+      // No strategy regime from huginn — leave the tile for applyRegime to fill
+      // from Heimdall's HMM (or dash if Heimdall is not trained yet).
       setText('regime', DASH); setColor('regime', C.dim);
       if (pill) { pill.style.background = '#11192a'; pill.style.borderColor = '#22324a'; }
+      strategyRegimeShown = false;
     }
 
     // stat tiles
@@ -1112,6 +1120,16 @@
     setText('hmm-nobs', isNum(R.nObservations) ? R.nObservations : DASH); setColor('hmm-nobs', C.mut);
     setText('regime-basis', (R.nStates || '?') + '-state HMM · ' + (isNum(R.nObservations) ? R.nObservations : '?') +
       ' obs · ' + (isNum(R.refits) ? R.refits : '?') + ' refits');
+
+    // Feed the top-header REGIME tile from Heimdall when huginn's strategy did
+    // not supply one, so it shows the live HMM regime instead of a dash. The HMM
+    // label is descriptive (calm/trending/turbulent/choppy), not a signal.
+    if (!strategyRegimeShown && cur.label) {
+      var hc = hmmRegimeColor(cur.label);
+      setText('regime', cur.label); setColor('regime', hc);
+      var pill2 = $('regime-pill'); if (pill2) { pill2.style.background = '#0b1626'; pill2.style.borderColor = '#22324a'; }
+      var rdot2 = $('regime-dot'); if (rdot2) rdot2.style.background = hc;
+    }
 
     var labels = Array.isArray(R.labels) ? R.labels : [];
     var stat = Array.isArray(R.stationary) ? R.stationary : [];
