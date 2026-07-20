@@ -74,13 +74,19 @@ jobs:
       matrix:
         include:
           # has_tests: services whose tests are wired here. odin/obi-bridge/
-          # huginn-ai ship unit tests; bragi/news-sentinel are lint-only until
-          # their owning agents add tests.
+          # huginn-ai/mimir/forseti/heimdall ship unit tests; bragi/news-sentinel
+          # are lint-only until their owning agents add tests.
           - service: odin
             has_tests: "true"
           - service: obi-bridge
             has_tests: "true"
           - service: huginn-ai
+            has_tests: "true"
+          - service: mimir
+            has_tests: "true"
+          - service: forseti
+            has_tests: "true"
+          - service: heimdall
             has_tests: "true"
           - service: bragi
             has_tests: "false"

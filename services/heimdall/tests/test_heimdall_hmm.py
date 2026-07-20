@@ -20,7 +20,6 @@ These tests are the correctness guardrail. In order:
 import itertools
 
 import numpy as np
-import pytest
 
 import heimdall
 from heimdall import GaussianHMM, derive_labels, stationary_distribution
