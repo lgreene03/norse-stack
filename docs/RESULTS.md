@@ -258,3 +258,10 @@ go run ./cmd/calibrate --data data/btc_test.jsonl --strategy obi \
 go run ./cmd/walkforward --data data/btc_test.jsonl --folds 4 \
   --thresholds 0.5,0.6,0.7,0.8
 ```
+
+**Reproduce the verdict in one command.** The headline numbers here are not
+hand-typed: `cd ../huginn && make reproduce` re-runs the walk-forward above from
+the committed fixture and **fails** unless it regenerates exactly (0/4 OOS folds,
+PBO = 1.00, OOS PnL −146.1090). The same check runs in huginn CI on every push,
+so the no-edge verdict is drift-guarded, not just asserted. An interviewer can
+verify it live rather than take the documentation on trust.
