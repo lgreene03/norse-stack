@@ -210,11 +210,14 @@ services:
       # marginal trades. 0 disables the gate.
       COST_HURDLE_K: "1.0"
       OBI_EDGE_BPS_PER_UNIT: "60"
-      # ML-confidence floor relaxed from the 0.35 default: the obi-bridge ML
-      # layer is undertrained and emits a near-constant ~0.08, which at 0.35
-      # blocks every OBI signal. 0.05 lets real signals trade on their own
-      # merit (the cost hurdle still provides selectivity); raise back toward
-      # 0.35 once the ML model has enough training data to discriminate.
+      # The served XGBoost model is untrained on this data (near-constant ~0.08),
+      # so it is PROVENANCE, not a live signal: the OBI ML gate is OFF by default
+      # (STRATEGY_OBI_ML_GATE=false) and the shipped strategy is `composite`, whose
+      # alphas never read mlScore. The floor below is therefore inert unless someone
+      # both switches to STRATEGY_NAME=obi AND enables the gate. Keep the model
+      # served (versioning/provenance) and turn the gate on only once it is trained
+      # and its out-of-sample value is demonstrated (see docs/EDGE_VERDICT.md).
+      STRATEGY_OBI_ML_GATE: "false"
       STRATEGY_ML_MIN_CONFIDENCE: "0.05"
       LIVE_EXECUTION: "true"
       KAFKA_INTENTS_TOPIC: executions.intents.v1

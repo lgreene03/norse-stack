@@ -93,7 +93,7 @@ strings) lives at the top level only.
 | `fearGreed`        | Crypto Fear & Greed Index (0–100). |
 | `fundingRate`      | Perpetual funding rate (per 8h). |
 | `oiChange`         | Open-interest % change since last poll. |
-| `mlScore`          | Huginn-AI XGBoost confidence (0–1). |
+| `mlScore`          | Huginn-AI XGBoost confidence (0-1); provenance carried in the feature payload, consulted by the OBI strategy only when `STRATEGY_OBI_ML_GATE` is enabled (off by default). |
 | `mlReady`          | 1.0 if the ML model is trained, else 0.0. |
 | `newsSentiment`    | News-sentinel sentiment score. |
 | `regimeVolAnn`     | Annualized realized volatility. |

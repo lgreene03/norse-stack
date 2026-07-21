@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Huginn-AI -- XGBoost Signal Quality Predictor.
+Huginn-AI: XGBoost signal-quality model (served; not a live signal by default).
 
 Consumes feature events and fill executions from Kafka, labels trade outcomes
 via FIFO round-trip accounting, trains an XGBoost binary classifier on signal
@@ -1258,7 +1258,7 @@ def main():
     signal.signal(signal.SIGTERM, handle_signal)
 
     log.info("=" * 60)
-    log.info("  HUGINN-AI -- XGBoost Signal Quality Predictor")
+    log.info("  HUGINN-AI: XGBoost signal-quality model (served; not a live signal by default)")
     log.info("=" * 60)
     log.info("  Features topic:  %s", FEATURES_TOPIC)
     log.info("  Fills topic:     %s", FILLS_TOPIC)

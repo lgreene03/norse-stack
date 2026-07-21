@@ -42,7 +42,7 @@ norse-stack/services/
   obi-bridge/      ← order-book-imbalance feature bridge (Muninn → Kafka)
   odin/            ← performance / risk analytics (port 8086)
   bragi/           ← trade explainability (port 8087)
-  huginn-ai/       ← XGBoost ML signal predictor (port 8092)
+  huginn-ai/       ← XGBoost signal-quality model, served; not a live signal by default (port 8092)
   mimir/           ← point-in-time feature store (port 8095)
   forseti/         ← execution TCA + market impact / capacity (port 8096)
   heimdall/        ← market-regime detector (Gaussian HMM) (port 8097)
@@ -96,7 +96,8 @@ norse-stack/services/
 - `GET /api/decisions/trades` — only executed trades
 - `GET /api/decisions/stats` — filter effectiveness breakdown
 
-### Huginn AI (ML Signal Predictor)
+### Huginn AI (Signal-Quality Model, Served)
+Served with versioning, provenance and online retraining; the score is provenance, not a live signal in the shipped config (OBI ML gate off by default, `STRATEGY_OBI_ML_GATE`).
 - `GET /api/predict?instrument=BTC-USDT` — XGBoost confidence score for current signal
 - `GET /api/model/status` — model state, sample counts, feature importance
 - `GET /api/model/metrics` — precision, recall, F1, accuracy

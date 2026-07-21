@@ -114,7 +114,7 @@ The quick ASCII view:
 | **Obi-Bridge** | Python | Real-time 10-layer signal computation from live Binance order books |
 | **Odin** | Python | Performance analytics: Sharpe, Sortino, CVaR, VaR, Monte Carlo, correlation matrix |
 | **Bragi** | Python | Trade explainability engine with human-readable decision logs |
-| **Huginn-AI** | Python | XGBoost ML signal predictor with online retraining |
+| **Huginn-AI** | Python | XGBoost signal-quality model, served with versioning, provenance and online retraining; not a live signal in the shipped config (OBI ML gate off by default) |
 | **News Sentinel** | Python | LLM-powered crypto news sentiment via Ollama |
 | **Research Gateway** | Go 1.25 | Walk-forward + PBO + Deflated-Sharpe validation as a service, out of the live trading process |
 | **Mimir** | Python | Point-in-time (no-lookahead) feature store: event_time + ingest_time, as-of queries |
@@ -135,7 +135,7 @@ The bridge computes 10 independent signal layers from live Binance data, each ca
 | 5 | Fear & Greed Index | Market-wide sentiment indicator |
 | 6 | Funding Rate | Perpetual futures positioning pressure |
 | 7 | Open Interest Cascade | Futures contract count delta |
-| 8 | ML Confidence | XGBoost prediction probability |
+| 8 | ML Confidence | XGBoost probability, carried as provenance; consumed only when STRATEGY_OBI_ML_GATE is on (off by default) |
 | 9 | News Sentiment | Ollama LLM headline analysis |
 | 10 | Regime Detection | Hurst exponent + autocorrelation classification |
 

@@ -38,7 +38,7 @@ flowchart LR
     subgraph analytics["Analytics, explainability & ML"]
         odin["odin<br/>Python<br/>analytics (Sharpe, VaR, cost)"]
         bragi["bragi<br/>Python<br/>trade explainability"]
-        huginnai["huginn-ai<br/>Python<br/>XGBoost signal predictor"]
+        huginnai["huginn-ai<br/>Python<br/>XGBoost signal-quality model<br/>served, not a live signal"]
         newssentinel["news-sentinel<br/>Python<br/>LLM news sentiment"]
     end
 

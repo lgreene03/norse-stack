@@ -15,8 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Apache 2.0 LICENSE
 - CLAUDE.md agent context
 - Analytics & ML services (built from `services/`): Odin (performance/risk analytics,
-  :8086), Bragi (trade explainability, :8087), Huginn AI (XGBoost ML signal predictor,
-  :8092), and News Sentinel (LLM news-sentiment feed, :8089)
+  :8086), Bragi (trade explainability, :8087), Huginn AI (XGBoost signal-quality
+  model, served; not a live signal by default, :8092), and News Sentinel (LLM
+  news-sentiment feed, :8089)
 - Mimir point-in-time feature store (:8095) and Forseti execution TCA (:8096) services
 - Heimdall market-regime detector (:8097): Gaussian HMM fit with Baum-Welch (EM),
   causal forward-filtered state, online refit, and a Mimir warm-start so it is trained

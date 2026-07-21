@@ -12,7 +12,7 @@ Data layers:
   5. Sentiment — Fear & Greed Index (crowd positioning)
   6. Funding rate — perpetual futures funding (leverage indicator)
   7. Open interest — OI change for liquidation cascade detection
-  8. ML signal quality — XGBoost confidence from Huginn AI
+  8. ML signal quality: XGBoost confidence from Huginn AI, fetched and carried as provenance (consumed only when the OBI ML gate is on, off by default)
   9. News sentiment — LLM-classified headline sentiment
 
 No API key required — uses unauthenticated public endpoints.
@@ -677,7 +677,7 @@ def main():
                 oi_change = compute_oi_change(current_oi, prev_oi[symbol])
                 prev_oi[symbol] = current_oi
 
-                # Layer 7: ML signal quality prediction
+                # Layer 7: ML signal quality, fetched and carried as provenance (consumed only when the OBI ML gate is on, off by default)
                 ml_score, ml_ready = fetch_ml_score(instrument)
 
                 # Layer 8: News sentiment
