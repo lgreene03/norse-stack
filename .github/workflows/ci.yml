@@ -73,9 +73,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # has_tests: services whose tests are wired here. odin/obi-bridge/
-          # huginn-ai/mimir/forseti/heimdall ship unit tests; bragi/news-sentinel
-          # are lint-only until their owning agents add tests.
+          # has_tests: every in-repo service now ships unit tests that gate here.
           - service: odin
             has_tests: "true"
           - service: obi-bridge
@@ -89,9 +87,9 @@ jobs:
           - service: heimdall
             has_tests: "true"
           - service: bragi
-            has_tests: "false"
+            has_tests: "true"
           - service: news-sentinel
-            has_tests: "false"
+            has_tests: "true"
     steps:
       - uses: actions/checkout@v7
 
