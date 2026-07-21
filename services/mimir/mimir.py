@@ -176,15 +176,33 @@ class FeatureStore:
                     instrument   TEXT NOT NULL,
                     event_time   TEXT NOT NULL,
                     ingest_time  TEXT NOT NULL,
-                    feature_json TEXT NOT NULL
+                    feature_json TEXT NOT NULL,
+                    event_id     TEXT
                 )
                 """
             )
+            # Migrate a pre-existing table that predates the event_id column. The
+            # column is additive and nullable, so existing rows are untouched (a
+            # NULL event_id never dedups).
+            cols = {row[1] for row in self.conn.execute("PRAGMA table_info(features)")}
+            if "event_id" not in cols:
+                self.conn.execute("ALTER TABLE features ADD COLUMN event_id TEXT")
             # The point-in-time query filters and orders on exactly this triple.
             self.conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_features_pit
                 ON features (instrument, event_time, ingest_time)
+                """
+            )
+            # Idempotent ingestion: the same feature event (keyed by its payload
+            # eventId) delivered twice, e.g. on a Kafka consumer replay or the
+            # Heimdall warm-start re-read, is stored ONCE. SQLite treats every NULL
+            # as distinct in a UNIQUE index, so events that carry no eventId still
+            # insert normally rather than collapsing into one row.
+            self.conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_features_eventid
+                ON features (event_id)
                 """
             )
             self.conn.commit()
@@ -202,11 +220,15 @@ class FeatureStore:
         if ing is None:
             ing = normalize_iso(now_iso())
         feat_json = json.dumps(feature, separators=(",", ":"))
+        # The payload's own eventId is the idempotency key: a replayed event is
+        # ignored rather than stored twice (INSERT OR IGNORE against the UNIQUE
+        # index). Events without an eventId key on NULL and always insert.
+        eid = feature.get("eventId") if isinstance(feature, dict) else None
         with self.lock:
             self.conn.execute(
-                "INSERT INTO features (instrument, event_time, ingest_time, "
-                "feature_json) VALUES (?, ?, ?, ?)",
-                (instrument, ev, ing, feat_json),
+                "INSERT OR IGNORE INTO features (instrument, event_time, "
+                "ingest_time, feature_json, event_id) VALUES (?, ?, ?, ?, ?)",
+                (instrument, ev, ing, feat_json, eid),
             )
             self.conn.commit()
         return ev, ing

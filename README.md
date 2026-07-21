@@ -286,6 +286,7 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 - `GET /api/features/history` — auditable record history with event_time and ingest_time
 - `GET /api/sources` — registered data sources
 - Stamps both `event_time` (when a fact was true) and `ingest_time` (when the platform learned it); onboarding a source replays the topic and stamps a fresh `ingest_time`
+- Idempotent ingestion: keyed on the feature payload's `eventId` (UNIQUE index + `INSERT OR IGNORE`), so a consumer replay or the Heimdall warm-start re-read stores each event once rather than duplicating history
 - **What it demonstrates:** prevents the #1 backtest sin — lookahead bias — structurally at the data layer
 
 ### Forseti (execution TCA + market impact / capacity)

@@ -118,6 +118,7 @@ Served with versioning, provenance and online retraining; the score is provenanc
 - `GET /api/features/history` — record history with event_time + ingest_time
 - `GET /api/sources` — registered data sources
 - Stamps both event_time and ingest_time; prevents lookahead bias structurally at the data layer
+- Idempotent ingestion: keyed on each feature's payload `eventId` (UNIQUE index + `INSERT OR IGNORE`), so a Kafka replay or Heimdall warm-start re-read is stored once, not duplicated
 
 ### Forseti (Execution TCA + Market Impact / Capacity)
 - `GET /api/tca` — aggregate transaction-cost analysis: slippage, maker/taker, fees, implementation shortfall

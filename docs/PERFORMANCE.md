@@ -46,12 +46,24 @@ Reading these honestly:
   ingests from a Kafka poll loop, so batching commits per poll would raise
   throughput by roughly an order of magnitude; the single-insert number is the
   conservative, fully-durable figure.
-- **The all-instruments as-of query (~5.7 ms) is the current hotspot.** Without
-  an instrument filter the correlated subquery re-evaluates per candidate row, so
-  it scales with the row count. Per-instrument queries (the console's and
-  Heimdall's actual access pattern) do not hit this path. It is the natural
-  target for the shared cache tier on the roadmap, and is called out here rather
-  than hidden.
+- **The all-instruments as-of query (~5.7 ms) is the slowest path,** and is
+  called out here rather than hidden. Without an instrument filter the correlated
+  subquery re-evaluates per candidate row, so it scales with the row count. It is
+  rarely hit: the console and Heimdall query per-instrument, which is the fast
+  path above.
+
+  Two "fixes" were tried and rejected on evidence. A `ROW_NUMBER()` window
+  rewrite was measured and **regressed the hot per-instrument path from ~6 µs to
+  ~2.6 ms** (it scans an instrument's whole history instead of index-seeking the
+  single latest row), so it was reverted: the correlated subquery with `LIMIT 1`
+  is already optimal for the common case. A shared Redis L2 cache tier (as some
+  reference projects use) is a deliberate **non-adoption** here: Mimir is
+  single-node and dependency-free (stdlib only), the per-instrument path is
+  already microsecond-scale, and the all-instruments path is polled seldom, so a
+  Redis dependency and container would be cost without a matching benefit at this
+  scale. If the access pattern changed (many processes, high all-instruments QPS)
+  an in-process TTL cache on the as-of=now result would be the first step, not a
+  broker.
 
 ## Decision path — Huginn signal-to-decision latency
 
