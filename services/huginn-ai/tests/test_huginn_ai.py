@@ -16,10 +16,9 @@ Covers:
 
 import os
 
+import huginn_ai
 import numpy as np
 import pytest
-
-import huginn_ai
 
 
 @pytest.fixture(autouse=True)
@@ -141,7 +140,7 @@ def test_find_preceding_uses_strictly_earlier_and_records_event_id(mgr):
 
     res = mgr._find_preceding_features("BTC", "2026-06-20T12:00:10Z")
     assert res is not None
-    event_time, values, event_id = res
+    event_time, _vals, event_id = res
     matched_ts = huginn_ai._parse_ts(event_time)
     fill_ts = huginn_ai._parse_ts("2026-06-20T12:00:10Z")
     # Invariant: matched feature time must be <= fill time (strictly earlier).
@@ -291,16 +290,17 @@ def test_validate_feature_event():
 def test_temporal_split_no_leakage(mgr):
     """No train row's label-resolution time may be later than any test row's
     feature time."""
-    labeled = []
     # Build 20 samples with monotonically increasing feature + label times.
-    for i in range(20):
-        labeled.append({
+    labeled = [
+        {
             "features": huginn_ai.extract_features(_values(), ""),
             "label": i % 2,
             "feature_event_time": f"2026-06-20T12:{i:02d}:00Z",
             "fill_time": f"2026-06-20T12:{i:02d}:30Z",
             "label_time": f"2026-06-20T12:{i:02d}:45Z",
-        })
+        }
+        for i in range(20)
+    ]
     train, test = mgr._temporal_split(labeled, test_frac=0.2)
     assert len(train) > 0 and len(test) > 0
 
@@ -316,18 +316,19 @@ def test_temporal_split_no_leakage(mgr):
 
 
 def test_temporal_split_holds_out_recent(mgr):
-    labeled = []
-    for i in range(10):
-        labeled.append({
+    labeled = [
+        {
             "features": huginn_ai.extract_features(_values(), ""),
             "label": 1,
             "feature_event_time": f"2026-06-20T12:{i:02d}:00Z",
             "fill_time": f"2026-06-20T12:{i:02d}:30Z",
             "label_time": f"2026-06-20T12:{i:02d}:45Z",
-        })
+        }
+        for i in range(10)
+    ]
     # Shuffle input order; split must still hold out the latest by time.
     shuffled = list(reversed(labeled))
-    train, test = mgr._temporal_split(shuffled, test_frac=0.2)
+    _train, test = mgr._temporal_split(shuffled, test_frac=0.2)
     latest = max(labeled, key=lambda s: huginn_ai._parse_ts(s["label_time"]))
     assert latest in test
 

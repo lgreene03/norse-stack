@@ -10,9 +10,8 @@ claim, so it should be actively attacked in CI, not merely asserted in prose.
 Run with: python3 -m pytest services/mimir/tests/  (kafka is stubbed in conftest)
 """
 
-import pytest
-
 import mimir
+import pytest
 
 
 @pytest.fixture
@@ -56,7 +55,7 @@ def test_redteam_no_leak_survives_as_of_guard(fs):
     # --- leaks: none may ever be the as-of-NOW answer ---
     fs.store(inst, FUTURE, _feat(0.90), ingest_time=FUTURE)               # a) future event
     for i in range(1, 6):                                                  # b) a future window
-        et = "2026-06-20T13:%02d:00Z" % i
+        et = f"2026-06-20T13:{i:02d}:00Z"
         fs.store(inst, et, _feat(0.80 + i / 100.0), ingest_time=et)
     fs.store(inst, PAST, _feat(0.91), ingest_time=LATER)                  # c) backfilled past row, known later
     fs.store(inst, NOW, _feat(0.92), ingest_time=FUTURE)                  # d) revision of NOW, not yet known
@@ -67,8 +66,8 @@ def test_redteam_no_leak_survives_as_of_guard(fs):
     assert len(res["features"]) == 1, "expected exactly one latest-known row"
     obi = res["features"][0]["feature"]["values"]["obi"]
     assert obi == 0.11, (
-        "as-of NOW must surface the row known at NOW, got %r, a future/backfill/"
-        "revision value leaked past the guard" % obi)
+        f"as-of NOW must surface the row known at NOW, got {obi!r}, a future/backfill/"
+        "revision value leaked past the guard")
 
     # And the past row must NOT be over-blocked: as-of between PAST and NOW must
     # still surface it (a guard that hides known data is as broken as one that leaks).
@@ -123,5 +122,5 @@ def test_redteam_training_window_is_causally_clean(fs):
     for et, obi in known:
         res = fs.query_as_of(as_of=et, instrument=inst)
         vals = _obis(res)
-        assert vals == [obi], "as-of %s should surface only the row known then, got %s" % (et, vals)
-        assert 0.99 not in vals and 0.98 not in vals, "future/backfill leaked into as-of %s" % et
+        assert vals == [obi], f"as-of {et} should surface only the row known then, got {vals}"
+        assert 0.99 not in vals and 0.98 not in vals, f"future/backfill leaked into as-of {et}"

@@ -26,10 +26,10 @@ import subprocess
 import sys
 import threading
 import time
-import uuid
-import urllib.request
 import urllib.error
-from datetime import datetime, timezone
+import urllib.request
+import uuid
+from datetime import UTC, datetime
 
 try:
     from kafka import KafkaProducer
@@ -322,11 +322,12 @@ class RegimeDetector:
             return {"regime": "unknown", "volatility_ann": 0, "hurst_proxy": 0.5,
                     "autocorr_lag1": 0, "regime_confidence": 0}
 
-        returns = []
         p = list(prices)
-        for i in range(1, len(p)):
-            if p[i - 1] > 0 and p[i] > 0:
-                returns.append(math.log(p[i] / p[i - 1]))
+        returns = [
+            math.log(p[i] / p[i - 1])
+            for i in range(1, len(p))
+            if p[i - 1] > 0 and p[i] > 0
+        ]
 
         if len(returns) < 10:
             return {"regime": "unknown", "volatility_ann": 0, "hurst_proxy": 0.5,
@@ -390,7 +391,7 @@ def compute_oi_change(current_oi, prev_oi):
 
 def ms_to_iso(epoch_ms):
     """Convert an exchange epoch-millis timestamp to an ISO-8601 Z string."""
-    return datetime.fromtimestamp(epoch_ms / 1000.0, tz=timezone.utc).strftime(
+    return datetime.fromtimestamp(epoch_ms / 1000.0, tz=UTC).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
 
@@ -418,7 +419,7 @@ def build_feature_event(instrument, metrics, mom_5m, mom_1m, mom_15m,
                         oi_change, ml_score, ml_ready, news_sentiment,
                         regime_info=None, window_start_ms=None,
                         window_end_ms=None, input_event_ids=None):
-    ingest = datetime.now(timezone.utc)
+    ingest = datetime.now(UTC)
     ingest_str = ingest.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # eventTime / window are stamped from exchange-provided data times so the
@@ -551,7 +552,7 @@ def ws_price_feed(instruments_map, kafka_producer):
                 "instrument": instrument,
                 "price": float(payload.get("p", 0)),
                 "quantity": float(payload.get("q", 0)),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "trade_time": payload.get("T", 0),
                 "is_buyer_maker": payload.get("m", False),
             }

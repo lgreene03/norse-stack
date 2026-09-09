@@ -14,7 +14,6 @@ And sre-resilience-5: poller liveness for /readyz.
 
 import sentinel
 
-
 # ---------------------------------------------------------------------------
 # Ollama response parsing returns an explicit ok flag
 # ---------------------------------------------------------------------------
@@ -40,7 +39,7 @@ def test_parse_no_json_is_not_ok():
 
 def test_parse_malformed_json_is_not_ok():
     neutral = sentinel._neutral_sentiment()
-    result, ok = sentinel._parse_ollama_response("{not valid json", neutral)
+    _result, ok = sentinel._parse_ollama_response("{not valid json", neutral)
     assert ok is False
 
 

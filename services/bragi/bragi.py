@@ -22,7 +22,7 @@ import sys
 import threading
 import time
 from collections import defaultdict, deque
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from kafka import KafkaConsumer
 from kafka.errors import KafkaConnectionError
@@ -358,7 +358,7 @@ decision_log = DecisionLog()
 
 class BragiHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == "/" or self.path == "/api/decisions":
+        if self.path in {"/", "/api/decisions"}:
             self._json_response(decision_log.get_decisions())
         elif self.path == "/api/decisions/blocked":
             self._json_response(decision_log.get_decisions(filter_type="blocked"))
@@ -366,7 +366,7 @@ class BragiHandler(BaseHTTPRequestHandler):
             self._json_response(decision_log.get_decisions(filter_type="trade"))
         elif self.path == "/api/decisions/stats":
             self._json_response(decision_log.get_stats())
-        elif self.path == "/healthz" or self.path == "/readyz":
+        elif self.path in {"/healthz", "/readyz"}:
             ok, age = liveness.status()
             self._json_response(
                 {

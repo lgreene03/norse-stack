@@ -11,9 +11,8 @@ Run with: python3 -m pytest services/mimir/tests/  (kafka is stubbed in conftest
 
 import sqlite3
 
-import pytest
-
 import mimir
+import pytest
 
 
 @pytest.fixture

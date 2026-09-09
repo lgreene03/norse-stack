@@ -21,7 +21,7 @@ import sys
 import tempfile
 import time
 import types
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 # Mimir imports `kafka` at module load; the FeatureStore logic under benchmark
 # never touches it, so install lightweight stubs first (mirrors tests/conftest).
@@ -35,10 +35,10 @@ if "kafka" not in sys.modules:
     sys.modules["kafka.errors"] = _e
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import mimir  # noqa: E402
+import mimir
 
 INSTRUMENTS = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT"]
-_BASE = datetime(2026, 1, 1, tzinfo=timezone.utc)
+_BASE = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def _feat(obi):
@@ -58,8 +58,10 @@ def _report(name, samples_ns):
         return s[min(n - 1, int(q * n))] / 1000.0  # ns -> microseconds
 
     mean_us = (sum(s) / n) / 1000.0
-    print("  %-26s n=%-6d  p50=%8.1fus  p95=%8.1fus  p99=%8.1fus  mean=%8.1fus"
-          % (name, n, at(0.50), at(0.95), at(0.99), mean_us))
+    print(
+        f"  {name:<26} n={n:<6d}  p50={at(0.50):8.1f}us  p95={at(0.95):8.1f}us  "
+        f"p99={at(0.99):8.1f}us  mean={mean_us:8.1f}us"
+    )
 
 
 def main():
@@ -72,7 +74,7 @@ def main():
     store = mimir.FeatureStore(db_path=os.path.join(tmp, "bench.db"))
 
     print("Mimir point-in-time store — storage-path latency")
-    print("  rows=%d  timed-ops=%d  instruments=%d\n" % (args.rows, args.ops, len(INSTRUMENTS)))
+    print(f"  rows={args.rows}  timed-ops={args.ops}  instruments={len(INSTRUMENTS)}\n")
 
     # Pre-generate all inputs OUTSIDE the timed regions so we measure the store,
     # not string/dict construction.
@@ -90,7 +92,7 @@ def main():
     _report("single insert", ins[-args.ops:])
     steady = ins[-args.ops:]
     ips = 1e9 / (sum(steady) / len(steady))
-    print("  %-26s %.0f inserts/sec (durable, one commit per insert)\n" % ("throughput:", ips))
+    print(f"  {'throughput:':<26} {ips:.0f} inserts/sec (durable, one commit per insert)\n")
 
     # --- as-of query (the differentiating op): latest-per-instrument at T ---
     late = (_BASE + timedelta(seconds=args.rows + 10)).strftime("%Y-%m-%dT%H:%M:%SZ")

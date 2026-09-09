@@ -38,9 +38,9 @@ import threading
 import time
 import uuid
 from collections import defaultdict, deque
-from datetime import datetime, timezone
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+from datetime import UTC, datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import parse_qs, urlparse
 
 from kafka import KafkaConsumer
 from kafka.errors import KafkaConnectionError
@@ -151,7 +151,7 @@ EDGE_DISCLAIMER = (
 
 def assumed_edge_label(edge_bps):
     """Return the mandatory honesty label for an assumed-edge figure."""
-    return "assumed edge = {} bps ({})".format(edge_bps, EDGE_DISCLAIMER)
+    return f"assumed edge = {edge_bps} bps ({EDGE_DISCLAIMER})"
 
 
 # -- pure impact math (stdlib only) ------------------------------------------
@@ -384,9 +384,9 @@ class TCATracker:
     # may carry the flag in several shapes (a string "maker"/"taker", a venue
     # code "M"/"T", or a boolean is_maker / is_buyer_maker), so we normalize
     # defensively rather than assuming one source's convention.
-    _MAKER_TOKENS = {"maker", "m", "added", "add", "post", "passive", "true", "1"}
-    _TAKER_TOKENS = {"taker", "t", "removed", "remove", "aggressive", "active",
-                     "false", "0"}
+    _MAKER_TOKENS = frozenset({"maker", "m", "added", "add", "post", "passive", "true", "1"})
+    _TAKER_TOKENS = frozenset({"taker", "t", "removed", "remove", "aggressive", "active",
+                               "false", "0"})
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -514,9 +514,9 @@ class TCATracker:
             counters.inc("prices_rejected_total")
             return
         ts = self._get(tick, "timestamp", "Timestamp")
-        dt = _parse_ts(ts) if ts is not None else datetime.now(timezone.utc)
+        dt = _parse_ts(ts) if ts is not None else datetime.now(UTC)
         if dt is None:
-            dt = datetime.now(timezone.utc)
+            dt = datetime.now(UTC)
         with self.lock:
             self.last_arrival[instrument] = (price, dt)
             counters.inc("prices_processed_total")
@@ -928,9 +928,9 @@ def build_impact_response(tracker, instrument=None, size=None, adv=None,
         "permanentBps": round(permanent, 6),
         "totalBps": round(temporary + permanent, 6),
         "basis": (
-            "size={}, adv={}, sigma={}; eta={} (sqrt-law temp coeff), "
-            "gamma={} (permanent coeff)"
-        ).format(size_src, adv_src, sigma_src, eta_val, gamma_val),
+            f"size={size_src}, adv={adv_src}, sigma={sigma_src}; eta={eta_val} (sqrt-law temp coeff), "
+            f"gamma={gamma_val} (permanent coeff)"
+        ),
         "model": IMPACT_MODEL_NAME,
         "note": ("pre-trade impact estimate; coefficients are illustrative, not "
                  "calibrated to a measured cost curve"),
@@ -1055,7 +1055,7 @@ def build_capacity_response(tracker, edge_bps=None, instrument=None,
 class ForsetiHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?", 1)[0]
-        if path == "/api/tca" or path == "/":
+        if path in {"/api/tca", "/"}:
             self._json_response(tracker.get_tca())
         elif path == "/api/tca/fills":
             self._json_response(tracker.get_fills(self._limit_param(default=50)))
@@ -1086,7 +1086,7 @@ class ForsetiHandler(BaseHTTPRequestHandler):
                 edge_bps=self._fparam(q, "edgeBps"),
                 instrument=q.get("instrument"),
             ))
-        elif path == "/healthz" or path == "/readyz":
+        elif path in {"/healthz", "/readyz"}:
             ok, age = liveness.status()
             payload = {
                 "status": "ok" if ok else "degraded",
@@ -1165,7 +1165,7 @@ def _make_fills_consumer(consumer_factory=KafkaConsumer):
     return consumer_factory(
         FILLS_TOPIC,
         bootstrap_servers=KAFKA_BROKERS,
-        group_id="forseti-tca-{}".format(uuid.uuid4().hex),
+        group_id=f"forseti-tca-{uuid.uuid4().hex}",
         auto_offset_reset="earliest",
         enable_auto_commit=False,
         consumer_timeout_ms=1000,
@@ -1182,7 +1182,7 @@ def _make_prices_consumer(consumer_factory=KafkaConsumer):
     return consumer_factory(
         PRICES_TOPIC,
         bootstrap_servers=KAFKA_BROKERS,
-        group_id="forseti-prices-{}".format(uuid.uuid4().hex),
+        group_id=f"forseti-prices-{uuid.uuid4().hex}",
         auto_offset_reset="latest",
         enable_auto_commit=False,
         consumer_timeout_ms=1000,
@@ -1206,7 +1206,7 @@ def consume_prices():
     while not shutdown:
         try:
             records = consumer.poll(timeout_ms=1000)
-            for tp, messages in records.items():
+            for messages in records.values():
                 for msg in messages:
                     try:
                         tick = json.loads(msg.value.decode("utf-8"))
@@ -1244,7 +1244,7 @@ def consume_fills():
             # Heartbeat once per poll cycle, whether or not records arrived, so
             # /healthz reflects loop liveness rather than message arrival rate.
             liveness.beat()
-            for tp, messages in records.items():
+            for messages in records.values():
                 for msg in messages:
                     try:
                         fill = json.loads(msg.value.decode("utf-8"))

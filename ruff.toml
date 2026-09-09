@@ -1,0 +1,59 @@
+# Ruff configuration for the norse-stack in-repo Python services.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# CI previously ran `ruff check .` with no configuration at all, which meant the
+# lint gate was whatever the *latest* ruff release happened to enable by default.
+# When ruff 0.16.0 broadened its default rule set (2026-07-24) every one of the
+# eight service jobs went red overnight with no code change on our side, and main
+# stayed red for seven weeks. Selecting rules explicitly here means a ruff upgrade
+# can no longer silently change what this repo is gated on.
+#
+# The version of ruff itself is pinned in requirements-dev.txt and consumed by
+# both CI and the pre-commit hook, so local and CI results always agree.
+
+target-version = "py312"
+line-length = 100
+
+[lint]
+# An explicit, deliberate set. Adding a family here is a decision, not a default.
+select = [
+    "E4",    # pycodestyle: imports
+    "E7",    # pycodestyle: statement/comparison errors
+    "E9",    # pycodestyle: syntax/IO errors
+    "F",     # pyflakes
+    "I",     # isort: deterministic import order
+    "B",     # flake8-bugbear: likely bugs
+    "UP",    # pyupgrade: keep syntax current with target-version
+    "EXE",   # flake8-executable: shebang/permission consistency
+    "PERF",  # perflint: avoidable overhead in hot loops
+    # pylint refactor: specific rules only, never the whole PLR family. The
+    # family also carries PLR2004 (magic-value comparison) and the PLR09xx
+    # complexity metrics, which together fire 100+ times against validated
+    # quantitative code where numeric thresholds ARE the domain and long
+    # signal-computation functions are inherent. Gating on those would mean
+    # refactoring working, result-bearing numerics to satisfy a style metric.
+    "PLR1714",  # merge repeated comparisons into a set membership test
+    "PLR1730",  # use min()/max() instead of an if-guard reassignment
+    "RUF",   # ruff-native rules
+]
+
+ignore = [
+    # BLE001 (blind `except Exception`) is wrong for this codebase by design.
+    # These services are Kafka consumer daemons and external-feed clients in a
+    # distributed system: every blind catch here is a deliberate bulkhead that
+    # degrades instead of cascading. Concretely, they are (a) top-level consumer
+    # supervision loops that must survive one poison message, (b) external feed
+    # fetchers (Binance funding/open-interest, news sentiment, fear-greed) that
+    # fall back to a neutral default when a third-party endpoint is down, and
+    # (c) best-effort startup paths such as the HMM warm-start fit, which carries
+    # its own "never let a warm-start fit abort boot" comment. Narrowing these to
+    # specific exception types would make the stack *less* robust, not more.
+    # Genuine over-broad catches are caught in review, not by this rule.
+    "BLE001",
+]
+
+[lint.per-file-ignores]
+# Tests deliberately assert on broad failure behaviour and use fixture-style
+# star imports and long literal tables; they are not production hot paths.
+"tests/*" = ["PLR2004"]

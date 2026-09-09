@@ -19,11 +19,9 @@ These tests are the correctness guardrail. In order:
 
 import itertools
 
-import numpy as np
-
 import heimdall
+import numpy as np
 from heimdall import GaussianHMM, derive_labels, stationary_distribution
-
 
 # ---------------------------------------------------------------------------
 # Helpers.
@@ -94,15 +92,15 @@ def test_synthetic_parameter_recovery():
     mean_err = np.max(np.abs(rec_means - TRUE_MEANS))
     trans_err = np.max(np.abs(rec_trans - TRUE_TRANSMAT))
 
-    assert mean_err < 0.25, "mean recovery error {:.4f} too large".format(mean_err)
+    assert mean_err < 0.25, f"mean recovery error {mean_err:.4f} too large"
     assert trans_err < 0.08, (
-        "transition recovery error {:.4f} too large".format(trans_err)
+        f"transition recovery error {trans_err:.4f} too large"
     )
 
     # Recovered covariances should be close to the true 0.5*I too.
     rec_covars = model.covars_[perm]
     cov_err = np.max(np.abs(rec_covars - TRUE_COVARS))
-    assert cov_err < 0.2, "covariance recovery error {:.4f} too large".format(cov_err)
+    assert cov_err < 0.2, f"covariance recovery error {cov_err:.4f} too large"
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +120,7 @@ def test_monotone_loglikelihood():
     diffs = np.diff(hist)
     # Allow a tiny negative tolerance for floating-point noise only.
     assert np.all(diffs >= -1e-6), (
-        "log-likelihood decreased during EM: min step {:.3e}".format(diffs.min())
+        f"log-likelihood decreased during EM: min step {diffs.min():.3e}"
     )
 
 
@@ -148,14 +146,14 @@ def test_forward_backward_consistency():
     gamma = np.exp(log_gamma)
     sums = gamma.sum(axis=1)
     assert np.allclose(sums, 1.0, atol=1e-8), (
-        "gamma rows not normalised: max dev {:.3e}".format(np.max(np.abs(sums - 1)))
+        f"gamma rows not normalised: max dev {np.max(np.abs(sums - 1)):.3e}"
     )
 
     # Backward total log-likelihood == forward total log-likelihood.
     log_startprob = np.log(model.startprob_)
     bwd_ll = heimdall._logsumexp(log_startprob + log_emission[0] + log_beta[0])
     assert abs(fwd_ll - bwd_ll) < 1e-6, (
-        "forward LL {:.6f} != backward LL {:.6f}".format(fwd_ll, bwd_ll)
+        f"forward LL {fwd_ll:.6f} != backward LL {bwd_ll:.6f}"
     )
 
     # score() must agree with the forward total, and with predict_proba's
@@ -192,7 +190,7 @@ def test_viterbi_recovers_hidden_path():
     mapped = inv[path]
 
     acc = np.mean(mapped == true_states)
-    assert acc > 0.95, "Viterbi accuracy {:.3f} too low".format(acc)
+    assert acc > 0.95, f"Viterbi accuracy {acc:.3f} too low"
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +321,7 @@ def test_stationary_distribution_is_left_eigenvector():
 
 def _ts(i):
     """Distinct, strictly-increasing ISO timestamps for ordered warm-start."""
-    return "2026-07-20T{:02d}:{:02d}:00Z".format(i // 60, i % 60)
+    return f"2026-07-20T{i // 60:02d}:{i % 60:02d}:00Z"
 
 
 def test_warmstart_bulk_loads_and_fits_once():

@@ -6,8 +6,20 @@
 # The gitleaks hook is the local mirror of the CI `secret-scan` job: it blocks a
 # commit that introduces a hard-coded credential before it ever reaches a push,
 # so contributors get the same backstop locally that CI enforces on the PR.
+#
+# The ruff hook is the local mirror of the CI `services` lint step. It was
+# missing until 2026-09-10, which is why a ruff default-rule-set change could
+# turn main red for seven weeks without anyone seeing it locally: ruff simply
+# never ran outside CI. Its `rev` MUST stay in lockstep with the ruff pin in
+# requirements-dev.txt, otherwise local and CI can disagree again.
 repos:
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.18.4
     hooks:
       - id: gitleaks
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Keep in lockstep with requirements-dev.txt.
+    rev: v0.16.6
+    hooks:
+      - id: ruff-check

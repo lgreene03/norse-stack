@@ -102,7 +102,12 @@ jobs:
         working-directory: services/${{ matrix.service }}
         run: |
           python -m pip install --upgrade pip
-          pip install ruff
+          # Lint toolchain is PINNED in requirements-dev.txt at the repo root.
+          # It used to be a bare `pip install ruff`, which made the lint gate
+          # whatever ruff released most recently: ruff 0.16.0 broadened its
+          # default rule set on 2026-07-24 and turned all eight service jobs red
+          # with no code change on our side. Never unpin this.
+          pip install -r "$GITHUB_WORKSPACE/requirements-dev.txt"
           # Each service pins its runtime deps in requirements.txt (reproducible
           # builds — recruiter-5). Install them so imports resolve under pytest.
           if [ -f requirements.txt ]; then
