@@ -1,0 +1,17 @@
+# Pinned development toolchain for norse-stack.
+#
+# This is the single source of truth for the lint toolchain version. CI installs
+# from this file, and .pre-commit-config.yaml pins the ruff hook to the SAME
+# version, so a contributor's local run and the CI gate can never disagree.
+#
+# WHY PINNED: CI used to `pip install ruff` unpinned. On 2026-07-24 ruff 0.16.0
+# broadened its default rule set and every service lint job went red overnight
+# with no change on our side; main stayed red for seven weeks because nothing
+# ran ruff locally to catch it. An unpinned linter is an unversioned dependency
+# on someone else's release schedule. This matches the pinning discipline the
+# service requirements.txt files already follow.
+#
+# UPGRADING: dependabot (pip ecosystem, see .github/dependabot.yml) opens a PR
+# when a new ruff lands. That PR runs full CI, so a rule-set change shows up as
+# a reviewable red PR instead of a surprise red main.
+ruff==0.16.6

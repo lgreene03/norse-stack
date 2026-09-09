@@ -4,3 +4,13 @@ updates:
     directory: /
     schedule:
       interval: weekly
+
+  # The pinned lint toolchain (requirements-dev.txt). Without this entry the
+  # ruff pin would silently rot: pinning alone only converts "main breaks one
+  # night" into "we never upgrade". With it, a new ruff arrives as a PR that
+  # runs full CI, so any rule-set change is reviewed on a red PR instead of
+  # discovered on a red main. This is the whole point of the 2026-09-10 fix.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
