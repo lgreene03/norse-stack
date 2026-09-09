@@ -21,7 +21,7 @@ import sys
 import tempfile
 import time
 import types
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 # Mimir imports `kafka` at module load; the FeatureStore logic under benchmark
 # never touches it, so install lightweight stubs first (mirrors tests/conftest).
@@ -35,10 +35,10 @@ if "kafka" not in sys.modules:
     sys.modules["kafka.errors"] = _e
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import mimir  # noqa: E402
+import mimir
 
 INSTRUMENTS = ["BTC-USDT", "ETH-USDT", "SOL-USDT", "XRP-USDT", "DOGE-USDT"]
-_BASE = datetime(2026, 1, 1, tzinfo=timezone.utc)
+_BASE = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def _feat(obi):

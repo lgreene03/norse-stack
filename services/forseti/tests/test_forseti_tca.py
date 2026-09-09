@@ -5,11 +5,10 @@ conftest). Tests seed fills DIRECTLY into the tracker — no Kafka, no DB.
 """
 
 import math
-from datetime import datetime, timedelta, timezone
-
-import pytest
+from datetime import UTC, datetime, timedelta
 
 import forseti
+import pytest
 
 
 @pytest.fixture
@@ -32,9 +31,7 @@ def _fill(instrument="BTC-USDT", side="BUY", quantity=1.0, fill_price=100.0,
         "transaction_cost": transaction_cost,
         "slippage_bps": slippage_bps,
         "timestamp": timestamp,
-        "execution_id": execution_id or "exec-{}-{}-{}-{}".format(
-            instrument, side, fill_price, timestamp
-        ),
+        "execution_id": execution_id or f"exec-{instrument}-{side}-{fill_price}-{timestamp}",
     }
     if liquidity is not None:
         f["liquidity"] = liquidity
@@ -212,7 +209,7 @@ def test_basis_flips_to_arrival_when_benchmark_used(tracker):
 
 def test_stale_arrival_price_is_not_used(tracker):
     # A price far older than ARRIVAL_MAX_AGE_SECS must not benchmark the fill.
-    old = datetime(2026, 6, 22, 0, 0, 0, tzinfo=timezone.utc)
+    old = datetime(2026, 6, 22, 0, 0, 0, tzinfo=UTC)
     fill_ts = (old + timedelta(seconds=forseti.ARRIVAL_MAX_AGE_SECS + 10))
     tracker.add_price(_price("BTC-USDT", 100.0, old.isoformat()))
     tracker.add_fill(_fill(side="BUY", fill_price=101.0, slippage_bps=0.0,

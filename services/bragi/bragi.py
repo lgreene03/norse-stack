@@ -22,7 +22,7 @@ import sys
 import threading
 import time
 from collections import defaultdict, deque
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from kafka import KafkaConsumer
 from kafka.errors import KafkaConnectionError

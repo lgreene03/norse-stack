@@ -9,9 +9,8 @@ Covers:
   - sre-resilience-5: consumer-thread liveness for /healthz.
 """
 
-import pytest
-
 import bragi
+import pytest
 
 
 @pytest.fixture

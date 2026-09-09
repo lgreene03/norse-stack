@@ -26,8 +26,8 @@ import threading
 import time
 import uuid
 from collections import defaultdict, deque
-from datetime import datetime, timezone
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from datetime import UTC, datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from kafka import KafkaConsumer
 from kafka.errors import KafkaConnectionError
@@ -232,7 +232,7 @@ class PerformanceTracker:
         self._mc_cache_size = 0
 
         self.equity_curve.append({
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "value": initial_cash,
             "cash": initial_cash,
             "pnl": 0.0,
@@ -323,7 +323,7 @@ class PerformanceTracker:
             # transaction_cost fee.
             slip_bps = float(fill.get("slippage_bps", 0) or 0)
             slip_cost = abs(slip_bps) / 10000.0 * price * qty
-            ts = fill.get("timestamp", datetime.now(timezone.utc).isoformat())
+            ts = fill.get("timestamp", datetime.now(UTC).isoformat())
 
             self.total_fees += fee
             self.total_slippage += slip_cost
@@ -454,7 +454,7 @@ class PerformanceTracker:
                     self.in_drawdown = True
                     self.dd_start_time = (
                         event_dt if event_dt is not None
-                        else datetime.now(timezone.utc)
+                        else datetime.now(UTC)
                     )
                 if dd_pct > self.max_drawdown_pct:
                     self.max_drawdown = dd
@@ -491,7 +491,7 @@ class PerformanceTracker:
         if len(self.pnl_series) < 2:
             return []
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         cutoff_seconds = window_hours * 3600 if window_hours else float("inf")
         recent = []
 
@@ -751,7 +751,7 @@ class PerformanceTracker:
             start = datetime.fromisoformat(
                 self.equity_curve[0]["timestamp"].replace("Z", "+00:00")
             )
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             years = max((now - start).total_seconds() / (365.25 * 86400), 0.001)
         except (ValueError, TypeError):
             return 0.0
@@ -1189,14 +1189,12 @@ class PerformanceTracker:
                 )
             if fills_diverged:
                 reasons.append(
-                    "live fill count off by {} ({:+.1%})".format(
-                        fills_delta, fills_rel)
+                    f"live fill count off by {fills_delta} ({fills_rel:+.1%})"
                 )
             if fee_model_diverged:
                 reasons.append(
                     "live net below backtest while live fees exceed the modelled "
-                    "{:.1f} bps cost — likely a fee/fill-model gap".format(
-                        BACKTEST_TXCOST_BPS)
+                    f"{BACKTEST_TXCOST_BPS:.1f} bps cost — likely a fee/fill-model gap"
                 )
             verdict = "DIVERGENCE: " + "; ".join(reasons)
 
@@ -1281,7 +1279,7 @@ class PerformanceTracker:
                     start = datetime.fromisoformat(
                         self.equity_curve[0]["timestamp"].replace("Z", "+00:00")
                     )
-                    now = datetime.now(timezone.utc)
+                    now = datetime.now(UTC)
                     runtime_hours = (now - start).total_seconds() / 3600
                 except (ValueError, TypeError):
                     runtime_hours = 0
@@ -1292,7 +1290,7 @@ class PerformanceTracker:
             current_dd_secs = 0
             if self.in_drawdown and self.dd_start_time:
                 current_dd_secs = (
-                    datetime.now(timezone.utc) - self.dd_start_time
+                    datetime.now(UTC) - self.dd_start_time
                 ).total_seconds()
 
             # Label the equity-curve valuation basis everywhere it's exposed.
@@ -1511,7 +1509,7 @@ def _make_fills_consumer(consumer_factory=KafkaConsumer):
         FILLS_TOPIC,
         bootstrap_servers=KAFKA_BROKERS,
         # Unique per-process group => no committed offset to resume from.
-        group_id="odin-analytics-{}".format(uuid.uuid4().hex),
+        group_id=f"odin-analytics-{uuid.uuid4().hex}",
         auto_offset_reset="earliest",
         # Never persist an offset; full-topic replay + dedup is restart-safe.
         enable_auto_commit=False,

@@ -26,8 +26,8 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from datetime import UTC, datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import feedparser
 
@@ -126,7 +126,7 @@ class HeadlineStore:
 
     def mark_ollama_ok(self):
         with self.lock:
-            self.ollama_last_ok = datetime.now(timezone.utc).isoformat()
+            self.ollama_last_ok = datetime.now(UTC).isoformat()
             self.ollama_ok_count += 1
 
     def mark_ollama_failure(self):
@@ -437,7 +437,7 @@ def background_poller():
                 else:
                     store.mark_ollama_failure()
 
-                now = datetime.now(timezone.utc)
+                now = datetime.now(UTC)
                 headline = {
                     "title": title,
                     "source": source,

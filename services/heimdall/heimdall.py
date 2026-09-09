@@ -53,12 +53,11 @@ import sys
 import threading
 import time
 from collections import deque
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 import numpy as np
-
 from kafka import KafkaConsumer
 from kafka.errors import KafkaConnectionError
 
@@ -706,7 +705,7 @@ class RegimeTracker:
             or payload.get("timestamp")
         )
         if not isinstance(ts, str):
-            ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         vec = np.array([trend, vol, abs(obi)], dtype=float)
         return ts, vec
 
@@ -835,8 +834,8 @@ class RegimeTracker:
                 return {
                     "trained": False,
                     "reason": (
-                        "insufficient data: need >= {} observations to fit "
-                        "(have {})".format(self.min_obs, len(self.window))
+                        f"insufficient data: need >= {self.min_obs} observations to fit "
+                        f"(have {len(self.window)})"
                     ),
                     "nStates": self.n_states,
                     "nObservations": len(self.window),
@@ -888,8 +887,8 @@ class RegimeTracker:
                 return {
                     "trained": False,
                     "reason": (
-                        "insufficient data: need >= {} observations to fit "
-                        "(have {})".format(self.min_obs, len(self.window))
+                        f"insufficient data: need >= {self.min_obs} observations to fit "
+                        f"(have {len(self.window)})"
                     ),
                     "nStates": self.n_states,
                     "features": list(FEATURE_NAMES),
@@ -1020,7 +1019,7 @@ def _make_features_consumer(consumer_factory=KafkaConsumer):
     return consumer_factory(
         FEATURES_TOPIC,
         bootstrap_servers=KAFKA_BROKERS,
-        group_id="heimdall-regime-{}".format(uuid.uuid4().hex),
+        group_id=f"heimdall-regime-{uuid.uuid4().hex}",
         auto_offset_reset="earliest",
         enable_auto_commit=False,
         consumer_timeout_ms=1000,

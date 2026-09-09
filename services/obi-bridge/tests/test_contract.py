@@ -15,7 +15,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import bridge  # noqa: E402
+import bridge
 
 # ── Canonical documented schema (mirrors docs/CONTRACTS.md features.obi.v1) ──
 
@@ -125,7 +125,7 @@ def test_event_time_is_exchange_window_not_wallclock():
     assert event["windowStart"] == bridge.ms_to_iso(RECORDED_KLINES_5M[0][0])
     assert event["windowEnd"] == expected
     # ingestTime is wall-clock and distinct in field identity from eventTime.
-    assert "ingestTime" in event and event["ingestTime"]
+    assert event.get("ingestTime")
 
 
 def test_provenance_present():

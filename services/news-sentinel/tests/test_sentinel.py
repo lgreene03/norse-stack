@@ -14,7 +14,6 @@ And sre-resilience-5: poller liveness for /readyz.
 
 import sentinel
 
-
 # ---------------------------------------------------------------------------
 # Ollama response parsing returns an explicit ok flag
 # ---------------------------------------------------------------------------

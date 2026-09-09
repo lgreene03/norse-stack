@@ -23,16 +23,15 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timezone
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+from datetime import UTC, datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 import xgboost as xgb
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-
 from kafka import KafkaConsumer
 from kafka.errors import KafkaConnectionError
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -300,7 +299,7 @@ def extract_features(values, event_time_str):
     try:
         ts = datetime.fromisoformat(event_time_str.replace("Z", "+00:00"))
     except (ValueError, TypeError, AttributeError):
-        ts = datetime.now(timezone.utc)
+        ts = datetime.now(UTC)
 
     hour = ts.hour + ts.minute / 60.0
     dow = ts.weekday()
@@ -679,21 +678,20 @@ class ModelManager:
         """
         def label_t(s):
             return _parse_ts(s.get("label_time")) or datetime.min.replace(
-                tzinfo=timezone.utc
+                tzinfo=UTC
             )
 
         def feat_t(s):
             return _parse_ts(s.get("feature_event_time")) or _parse_ts(
                 s.get("fill_time")
-            ) or datetime.min.replace(tzinfo=timezone.utc)
+            ) or datetime.min.replace(tzinfo=UTC)
 
         ordered = sorted(labeled, key=label_t)
         n = len(ordered)
         split = max(1, int(n * (1 - test_frac)))
         if split >= n:
             split = n - 1
-        if split < 1:
-            split = 1
+        split = max(split, 1)
 
         # Enforce: max label_time over train <= min feature_time over test.
         # Move the boundary left until no train label resolves after the
@@ -797,7 +795,7 @@ class ModelManager:
             self.recall = round(float(rec), 4)
             self.f1 = round(float(f1_val), 4)
             self.feature_importance = fi
-            self.trained_at = datetime.now(timezone.utc).isoformat()
+            self.trained_at = datetime.now(UTC).isoformat()
             self.last_trained = self.trained_at
             self.n_train_samples = len(train_samples)
             self.labeled_since_last_train = 0

@@ -16,10 +16,9 @@ Covers:
 
 import os
 
+import huginn_ai
 import numpy as np
 import pytest
-
-import huginn_ai
 
 
 @pytest.fixture(autouse=True)

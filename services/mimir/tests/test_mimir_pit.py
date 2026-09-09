@@ -7,9 +7,8 @@ the no-lookahead semantics are tested in isolation. Each test gets its own
 temp-file SQLite DB so rows never leak between tests.
 """
 
-import pytest
-
 import mimir
+import pytest
 
 
 @pytest.fixture

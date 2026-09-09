@@ -3,9 +3,8 @@
 Run with: python3 -m pytest services/odin/tests/  (kafka is stubbed in conftest)
 """
 
-import pytest
-
 import odin
+import pytest
 
 
 @pytest.fixture

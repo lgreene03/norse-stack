@@ -10,9 +10,8 @@ claim, so it should be actively attacked in CI, not merely asserted in prose.
 Run with: python3 -m pytest services/mimir/tests/  (kafka is stubbed in conftest)
 """
 
-import pytest
-
 import mimir
+import pytest
 
 
 @pytest.fixture

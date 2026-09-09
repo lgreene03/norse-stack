@@ -27,7 +27,7 @@ import sqlite3
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -75,7 +75,7 @@ def handle_signal(signum, frame):
 
 def now_iso():
     """Wall-clock now as an ISO-8601 UTC string (Z-suffixed)."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def normalize_iso(ts):
@@ -96,9 +96,9 @@ def normalize_iso(ts):
     except (ValueError, TypeError):
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     else:
-        dt = dt.astimezone(timezone.utc)
+        dt = dt.astimezone(UTC)
     return dt.isoformat()
 
 
@@ -354,12 +354,9 @@ class FeatureStore:
                 }
                 agg[inst] = a
             a["count"] += 1
-            if ev < a["first_event_time"]:
-                a["first_event_time"] = ev
-            if ev > a["last_event_time"]:
-                a["last_event_time"] = ev
-            if ing > a["last_ingest_time"]:
-                a["last_ingest_time"] = ing
+            a["first_event_time"] = min(a["first_event_time"], ev)
+            a["last_event_time"] = max(a["last_event_time"], ev)
+            a["last_ingest_time"] = max(a["last_ingest_time"], ing)
             lag = self._lag_secs(ev, ing)
             if lag is not None and lag > a["max_ingest_lag_secs"]:
                 a["max_ingest_lag_secs"] = round(lag, 3)
