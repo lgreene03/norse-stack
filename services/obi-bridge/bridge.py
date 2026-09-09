@@ -322,11 +322,12 @@ class RegimeDetector:
             return {"regime": "unknown", "volatility_ann": 0, "hurst_proxy": 0.5,
                     "autocorr_lag1": 0, "regime_confidence": 0}
 
-        returns = []
         p = list(prices)
-        for i in range(1, len(p)):
-            if p[i - 1] > 0 and p[i] > 0:
-                returns.append(math.log(p[i] / p[i - 1]))
+        returns = [
+            math.log(p[i] / p[i - 1])
+            for i in range(1, len(p))
+            if p[i - 1] > 0 and p[i] > 0
+        ]
 
         if len(returns) < 10:
             return {"regime": "unknown", "volatility_ann": 0, "hurst_proxy": 0.5,

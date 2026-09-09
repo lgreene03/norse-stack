@@ -384,9 +384,9 @@ class TCATracker:
     # may carry the flag in several shapes (a string "maker"/"taker", a venue
     # code "M"/"T", or a boolean is_maker / is_buyer_maker), so we normalize
     # defensively rather than assuming one source's convention.
-    _MAKER_TOKENS = {"maker", "m", "added", "add", "post", "passive", "true", "1"}
-    _TAKER_TOKENS = {"taker", "t", "removed", "remove", "aggressive", "active",
-                     "false", "0"}
+    _MAKER_TOKENS = frozenset({"maker", "m", "added", "add", "post", "passive", "true", "1"})
+    _TAKER_TOKENS = frozenset({"taker", "t", "removed", "remove", "aggressive", "active",
+                               "false", "0"})
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -1055,7 +1055,7 @@ def build_capacity_response(tracker, edge_bps=None, instrument=None,
 class ForsetiHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?", 1)[0]
-        if path == "/api/tca" or path == "/":
+        if path in {"/api/tca", "/"}:
             self._json_response(tracker.get_tca())
         elif path == "/api/tca/fills":
             self._json_response(tracker.get_fills(self._limit_param(default=50)))
@@ -1086,7 +1086,7 @@ class ForsetiHandler(BaseHTTPRequestHandler):
                 edge_bps=self._fparam(q, "edgeBps"),
                 instrument=q.get("instrument"),
             ))
-        elif path == "/healthz" or path == "/readyz":
+        elif path in {"/healthz", "/readyz"}:
             ok, age = liveness.status()
             payload = {
                 "status": "ok" if ok else "degraded",
@@ -1206,7 +1206,7 @@ def consume_prices():
     while not shutdown:
         try:
             records = consumer.poll(timeout_ms=1000)
-            for tp, messages in records.items():
+            for messages in records.values():
                 for msg in messages:
                     try:
                         tick = json.loads(msg.value.decode("utf-8"))
@@ -1244,7 +1244,7 @@ def consume_fills():
             # Heartbeat once per poll cycle, whether or not records arrived, so
             # /healthz reflects loop liveness rather than message arrival rate.
             liveness.beat()
-            for tp, messages in records.items():
+            for messages in records.values():
                 for msg in messages:
                     try:
                         fill = json.loads(msg.value.decode("utf-8"))

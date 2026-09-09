@@ -398,7 +398,7 @@ def test_liveness_stale_beat_is_degraded(monkeypatch):
     lv.mark_started()
     # Force a stale beat by shrinking the staleness threshold below the age.
     monkeypatch.setattr(odin, "HEALTH_MAX_STALENESS_SECS", -1.0)
-    ok, age = lv.status()
+    ok, _age = lv.status()
     assert ok is False
 
 

@@ -1078,7 +1078,7 @@ class HuginnAIHandler(BaseHTTPRequestHandler):
         elif path == "/metrics":
             self._text_response(metrics.render_prometheus())
 
-        elif path == "/healthz" or path == "/readyz":
+        elif path in {"/healthz", "/readyz"}:
             ok, detail = liveness.status()
             self._json_response(
                 {
@@ -1176,7 +1176,7 @@ def consume_features():
         try:
             records = consumer.poll(timeout_ms=1000)
             liveness.beat("features")
-            for tp, messages in records.items():
+            for messages in records.values():
                 for msg in messages:
                     event = _decode_or_dlq(
                         msg, dlq_producer, FEATURES_DLQ_TOPIC,
@@ -1221,7 +1221,7 @@ def consume_fills():
         try:
             records = consumer.poll(timeout_ms=1000)
             liveness.beat("fills")
-            for tp, messages in records.items():
+            for messages in records.values():
                 for msg in messages:
                     fill = _decode_or_dlq(
                         msg, dlq_producer, FILLS_DLQ_TOPIC,

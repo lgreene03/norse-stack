@@ -456,7 +456,7 @@ class MimirHandler(BaseHTTPRequestHandler):
             self._json_response(get_store().history(instrument, limit=limit))
         elif path == "/api/sources":
             self._json_response(get_store().sources())
-        elif path == "/healthz" or path == "/readyz":
+        elif path in {"/healthz", "/readyz"}:
             ok, age = liveness.status()
             payload = {
                 "status": "ok" if ok else "degraded",
@@ -533,7 +533,7 @@ def consume_features():
             # Heartbeat once per poll cycle, whether or not records arrived, so
             # /healthz reflects loop liveness rather than message arrival rate.
             liveness.beat()
-            for tp, messages in records.items():
+            for messages in records.values():
                 for msg in messages:
                     # Per-message decode: a bad record is isolated to itself.
                     try:

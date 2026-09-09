@@ -125,6 +125,8 @@ log = logging.getLogger("heimdall")
 shutdown = False
 
 FEATURE_NAMES = ["trend_m5_momentum", "volatility_atr", "abs_obi_imbalance"]
+# Module-level singleton so it is not recomputed in an argument default.
+N_FEATURES = len(FEATURE_NAMES)
 
 
 def handle_signal(signum, frame):
@@ -332,7 +334,7 @@ class GaussianHMM:
         iteration), so a correct EM run yields a non-decreasing sequence.
         """
         X = np.asarray(X, dtype=float)
-        T, D = X.shape
+        _T, D = X.shape
         if rng is None:
             rng = np.random.default_rng()
         if self.means_ is None:
@@ -421,7 +423,7 @@ class GaussianHMM:
         best = None
         best_ll = -np.inf
         best_hist = None
-        for i in range(max(1, n_init)):
+        for _ in range(max(1, n_init)):
             rng = np.random.default_rng(base.integers(2**63 - 1))
             cand = GaussianHMM(self.n_states, self.n_features, self.covar_reg)
             cand._init_params(X, rng)
@@ -445,7 +447,7 @@ class GaussianHMM:
     def predict_proba(self, X):
         """Smoothed state posteriors gamma[t, k] (uses full sequence)."""
         log_emission = self._log_emission(X)
-        log_alpha, loglik = self._forward(log_emission)
+        log_alpha, _loglik = self._forward(log_emission)
         log_beta = self._backward(log_emission)
         log_gamma = log_alpha + log_beta
         log_gamma -= _logsumexp(log_gamma, axis=1)[:, None]
@@ -637,7 +639,7 @@ class RegimeTracker:
 
     def __init__(self, n_states=N_STATES, window_size=WINDOW_SIZE,
                  min_obs=MIN_OBS_TO_FIT, refit_every=REFIT_EVERY,
-                 n_features=len(FEATURE_NAMES), seed=None):
+                 n_features=N_FEATURES, seed=None):
         self.lock = threading.Lock()
         self.n_states = int(n_states)
         self.n_features = int(n_features)
@@ -956,14 +958,14 @@ class HeimdallHandler(BaseHTTPRequestHandler):
         path = parsed.path
         qs = parse_qs(parsed.query)
 
-        if path == "/api/regime" or path == "/":
+        if path in {"/api/regime", "/"}:
             self._json_response(tracker.get_regime())
         elif path == "/api/regime/history":
             limit = self._int_param(qs, "limit", 50, lo=1, hi=5000)
             self._json_response(tracker.get_history(limit=limit))
         elif path == "/api/regime/model":
             self._json_response(tracker.get_model())
-        elif path == "/healthz" or path == "/readyz":
+        elif path in {"/healthz", "/readyz"}:
             ok, age = liveness.status()
             payload = {
                 "status": "ok" if ok else "degraded",
@@ -1071,8 +1073,10 @@ def backfill_from_mimir():
     rows = []
     for inst in instruments:
         try:
-            url = "%s/api/features/history?instrument=%s&limit=%d" % (
-                MIMIR_URL, urllib.parse.quote(inst), MIMIR_BACKFILL_LIMIT)
+            url = (
+                f"{MIMIR_URL}/api/features/history"
+                f"?instrument={urllib.parse.quote(inst)}&limit={MIMIR_BACKFILL_LIMIT}"
+            )
             data = _http_get_json(url)
             batch = data.get("rows") or data.get("features") or []
             rows.extend(r for r in batch if isinstance(r, dict))
@@ -1120,7 +1124,7 @@ def consume_features():
         try:
             records = consumer.poll(timeout_ms=1000)
             liveness.beat()
-            for tp, messages in records.items():
+            for messages in records.values():
                 for msg in messages:
                     try:
                         payload = json.loads(msg.value.decode("utf-8"))

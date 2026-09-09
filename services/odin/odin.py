@@ -835,8 +835,8 @@ class PerformanceTracker:
             return {
                 "available": False,
                 "reason": (
-                    "need >=2 instruments with >=%d returns; have %d"
-                    % (self.PORTFOLIO_MIN_RETURNS, len(usable))
+                    f"need >=2 instruments with >={self.PORTFOLIO_MIN_RETURNS} "
+                    f"returns; have {len(usable)}"
                 ),
             }
 
@@ -936,7 +936,7 @@ class PerformanceTracker:
             "asOf": as_of,
             "basis": (
                 "inverse-volatility, dollar-neutralized, gross-capped 1.0; "
-                "computed from last %d per-instrument round-trip returns" % n_obs
+                f"computed from last {n_obs} per-instrument round-trip returns"
             ),
             "n": n_obs,
         }
@@ -1011,7 +1011,7 @@ class PerformanceTracker:
         # Undiversified VaR (sum of individual VaRs)
         z_95 = 1.645
         z_99 = 2.326
-        undiversified = sum(w * s * z_95 for w, s in zip(weights, stds))
+        undiversified = sum(w * s * z_95 for w, s in zip(weights, stds, strict=True))
         diversified_95 = port_std * z_95
         diversified_99 = port_std * z_99
 
@@ -1413,7 +1413,7 @@ tracker = PerformanceTracker()
 
 class OdinHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == "/api/analytics" or self.path == "/":
+        if self.path in {"/api/analytics", "/"}:
             self._json_response(tracker.get_analytics())
         elif self.path == "/api/equity":
             self._json_response(tracker.get_equity_curve())
@@ -1423,7 +1423,7 @@ class OdinHandler(BaseHTTPRequestHandler):
             self._json_response(tracker.get_reconciliation())
         elif self.path == "/api/portfolio":
             self._json_response(tracker.get_portfolio())
-        elif self.path == "/healthz" or self.path == "/readyz":
+        elif self.path in {"/healthz", "/readyz"}:
             ok, age = liveness.status()
             payload = {
                 "status": "ok" if ok else "degraded",
@@ -1548,7 +1548,7 @@ def consume_fills():
             # Heartbeat once per poll cycle, whether or not records arrived, so
             # /healthz reflects loop liveness rather than message arrival rate.
             liveness.beat()
-            for tp, messages in records.items():
+            for messages in records.values():
                 for msg in messages:
                     # Per-message decode: a bad record is isolated to itself.
                     try:

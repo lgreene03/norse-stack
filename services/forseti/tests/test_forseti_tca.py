@@ -6,6 +6,7 @@ conftest). Tests seed fills DIRECTLY into the tracker — no Kafka, no DB.
 
 import math
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 
 import forseti
 import pytest
@@ -454,7 +455,7 @@ def test_capacity_endpoint_shape_and_crossover(tracker):
     # Curve is monotonically increasing in size.
     curve = inst["curve"]
     assert len(curve) > 2
-    for a, b in zip(curve, curve[1:]):
+    for a, b in pairwise(curve):
         assert b["size"] > a["size"]
         assert b["impactBps"] >= a["impactBps"]
 

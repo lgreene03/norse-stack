@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Contract test for the features.obi.v1 event schema.
 
 Decodes a recorded obi-bridge event built from recorded exchange inputs and
