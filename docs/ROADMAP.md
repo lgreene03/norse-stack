@@ -107,19 +107,67 @@ glossed.
 
 ## Phase P2 — One feature-computation path 🔴
 
-**Goal.** Delete the second implementation. Live and replay must call the *same*
-code to compute `obi`, not two functions that happen to share a name.
+**REFRAMED 2026-09-11 after investigation. The original framing was wrong and is
+recorded here so the mistake is not repeated.**
 
-**Deliverables.**
-- Feature computation extracted into a single library consumed by both the live
-  `obi-bridge` path and the replay path.
-- `vpin` implemented as a genuine volume-bucketed order-flow toxicity measure
-  rather than `|obi|`.
-- `microPrice` implemented as a genuine book-weighted quote
-  (`(bidPx·askQty + askPx·bidQty) / (bidQty + askQty)`) rather than an alias of
-  `vwap`.
+P2 originally said "extract feature computation into a single library consumed by
+both the live `obi-bridge` path and the replay path". That treats `obi-bridge` as
+a legitimate feature producer deserving a library, and would have ended with a
+Python library, a Go library and the existing Java classes kept in step by
+codegen or FFI. The most expensive option available, and it still would not have
+reached "exactly one implementation".
+
+**The real situation: muninn already owns all of this and was never wired up.**
+
+Muninn already ingests Binance `depth20@100ms` book snapshots, already has a
+canonical sequenced `OrderBookSnapshotEvent` on its own topic, already has
+mathematically correct OBI, micro-price and VPIN computers, and already has the
+exact structure P2 wanted to build — one `FeatureEngineRunner` driven by an
+`EventSource` that is either live or replay, where the engine cannot tell which.
+
+`obi-bridge` and `huginn/cmd/fetcher` are two independent reimplementations of a
+feature engine that exists, is tested, and is bypassed. This repo's own
+`docs/ARCHITECTURE_REVIEW.md:43` already says so: "only VwapComputer is wired
+into the live engine loop; OBI, MicroPrice, VPIN computers exist as classes but
+are not dispatched". Meanwhile muninn produces `features.vwap.1m.v1`, which
+**nothing consumes** — every consumer in `docker-compose.yml` is wired to
+`features.obi.v1` from obi-bridge instead.
+
+**Deliverables, in order.**
+1. **muninn** — generalise `WindowManager` and `FeatureEngineRunner` from
+   `TradeEvent` to `MarketEvent`; dispatch over registered `FeatureComputer`s
+   instead of the hardcoded `VwapComputer.compute`; seed `obi`, `vpin` and
+   `micro_price` feature definitions; make `ShadowReplayComparator`
+   definition-driven.
+2. **muninn** — fix `VPINComputer`'s four correctness defects before wiring it:
+   no bucket carryover (overshoot is discarded, biasing VPIN upward and making it
+   depend on trade-size distribution); mutable instance state on a class whose
+   own interface forbids it, not keyed by instrument, so a multi-instrument
+   engine cross-contaminates buckets; `double` arithmetic against muninn's own
+   determinism rule; and a `NaN` return that is not representable in strict JSON
+   and would break huginn's `float64` decode. Use the existing `bucketsFilled`
+   return to carry readiness instead.
+3. **muninn** — move all four computers to `BigDecimal`, matching `VwapComputer`.
+4. **huginn** — delete the feature maths in `cmd/fetcher/aggregate.go`. Keep the
+   bulk fetch and window folding (P1 depends on them) but emit canonical market
+   events rather than computed features.
+5. **norse-stack** — repoint consumers off `features.obi.v1`, retire
+   `compute_obi`, and correct the docs that assert features the live event has
+   never carried.
 
 **Exit criteria.** Grep proves exactly one implementation of each feature.
+
+**Why this is stronger than the original plan.** Replay parity becomes
+*structurally* true rather than test-enforced: one code path, rather than two
+paths proven equal. The test in P3 then guards the wire contract only, not the
+maths.
+
+**Cost to state plainly.** Muninn becomes a hard runtime dependency of the live
+signal path. Today `obi-bridge` is a self-contained Python file needing only a
+broker, and the live stack survives muninn being down. After this it does not.
+That is a real availability regression; the mitigation is that obi-bridge is
+retired as a *computer* while muninn's own Binance adapter (which already exists)
+takes over ingestion.
 
 ---
 
@@ -129,8 +177,29 @@ code to compute `obi`, not two functions that happen to share a name.
 
 **Deliverables.**
 - A parity test that feeds one recorded book-event sequence through the live
-  path and the replay path and asserts **byte-identical** feature output.
-- The test runs in CI on every PR, not on a schedule.
+  path and the replay path and asserts equality **at a declared scale with zero
+  tolerance**.
+
+  *Wording corrected 2026-09-11.* "Byte-identical" is achievable inside muninn
+  (Java live vs Java replay) and is NOT literally achievable across the wire as
+  currently built: muninn emits `BigDecimal`, huginn decodes into
+  `map[string]float64`, and obi-bridge rounds to 6dp. Either declare a scale and
+  assert zero tolerance at it, or make the wire format carry decimal strings.
+  Pick one and write it down — unqualified "byte-identical" is exactly where a
+  JSON float round-trip will break the claim.
+- The test runs in CI on every PR, not on a schedule. Note that **no cross-repo
+  gate currently exists on any PR in any of the five repos**: norse-stack's only
+  cross-repo job (`e2e-smoke`) is schedule-gated AND `continue-on-error: true`.
+  muninn's CI is the only one that already gates PRs on `mvn verify`.
+- Golden fixtures vendored into each repo **with a checksum gate**, so a repo
+  whose copy drifts fails its own CI. Without that, vendored copies diverge
+  silently and both sides pass while measuring different things — precisely the
+  failure mode this roadmap exists to fix.
+- Assert the free invariants too: `microPrice` strictly between best bid and best
+  ask (catches the cross-weighting being written backwards, the classic error),
+  `vpin != |obi|` on a fixture where they genuinely differ, and
+  `microPrice != vwap` on asymmetric top-of-book sizes. The last two are explicit
+  anti-regression guards against today's degeneracies.
 - A deliberate one-sided change to either path must fail it. Prove that by
   breaking it once, observing the failure, and reverting.
 
@@ -240,6 +309,33 @@ Python floor the way x/vuln raised its Go floor).
 
 **Exit criteria.** No unpinned tool gates a build. Each pin has a dependabot
 entry so it cannot rot into permanent staleness.
+
+## B4 — Strategies that are silently dead in live 🔴
+
+Found during the P2 investigation, and it is a live-trading correctness bug, not
+a tidiness issue. `obi-bridge` emits `midPrice` and has never emitted
+`microPrice` or `vwap`. Consequently:
+
+- `huginn/internal/strategy/ema_crossover.go:83-89` falls back from `microPrice`
+  only to `value`, which is never present, so `OnFeature` returns `nil` on
+  **every live event**.
+- `huginn/internal/strategy/vwap_deviation.go:68-75` requires both `vwap` and a
+  price; the live topic carries neither, so it too returns `nil` every time.
+- `huginn/internal/strategy/vpin_breakout.go:77` reads `values["vpin"]`, which
+  the live topic never carries at all, so the VPIN strategy **cannot fire in
+  live** and is fed `|obi|` in backtest.
+
+`ou_reversion.go:243` is unaffected because it tries `midPrice` first.
+
+Three of the six shipped strategies are therefore inert in live. This has the
+same root cause as Track A — two feature producers with different field
+vocabularies and no shared contract — and it is fixed for free by P2. It is
+listed separately because it is a present-tense defect, and because anyone
+reading "6 strategies" in the README should know that half of them cannot
+currently trade.
+
+**Exit criteria.** Every shipped strategy either receives the fields it requires
+in live, or is explicitly documented as backtest-only.
 
 ## B3 — Scheduled-task hygiene 🟡
 
