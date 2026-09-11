@@ -84,7 +84,74 @@ Do not re-derive these; they are measured, not assumed.
 
 ---
 
-## Phase P1 — Historical order-book depth 🟡
+## Phase P1 — Historical order-book depth ⛔ KILL CRITERION FIRED
+
+**Resolved 2026-09-11: the answer is no, and that is a completed phase, not a
+failure.** Full evidence in `huginn/docs/BOOKDEPTH_FINDING.md`
+(huginn PR #30). The loader shipped so the finding is falsifiable by re-running
+rather than taken on trust, but it is deliberately NOT wired into the
+aggregator and emits no features. A test,
+`TestBookDepthSnapshotCarriesNoDerivedFeatures`, fails the build if that output
+ever grows a feature-shaped field — the kill criterion is encoded in CI.
+
+**What the dumps contain:** `timestamp,percentage,depth,notional`, one snapshot
+per ~30s, where `depth` is cumulative base quantity from mid out to a percentage
+band (±0.2%, ±1%, ±2%, ±3%, ±4%, ±5%). No prices. No best bid, no best ask, no
+mid, no per-level volumes.
+
+**Why it cannot rebuild `compute_obi`**, four independent and individually fatal
+reasons:
+
+1. **The bands are ~100x too wide.** Measured against a live 100-level BTCUSDT
+   book at mid 77,361.17, the top 10 levels the live path uses span 0.0024% bid
+   and 0.0015% ask. The narrowest band available is 0.20%. Even 100 levels
+   reaches only 0.02%. Top-10 gave `obi` = −0.3439 from 0.9679/1.9824 while the
+   0.2% band held at least 9.91/12.23 — a different population of orders, not a
+   coarser view of the same one.
+2. **The per-level distribution is irreversibly discarded.** A cumulative band
+   total is a projection; nothing recovers how 813.691 BTC spread across the
+   thousands of ticks it covers.
+3. **Wrong instrument.** The live path reads **spot**
+   (`api.binance.com/api/v3/depth`), and data.binance.vision publishes **no
+   order-book product for spot at all** — spot daily carries only aggTrades,
+   klines and trades.
+4. **Wrong cadence.** 5s live poll against ~30s in the dump.
+
+The schema is not even stable: 2023 to mid-2025 dumps carry only 10 bands with
+no ±0.2%, and render `-5` rather than `-5.00`. That alone would break a
+multi-month backfill.
+
+### What this blocks, and what it does NOT
+
+The P1 investigation concluded "P2 through P5 are blocked". **That is too broad,
+and the correction matters.** The parallel P2 investigation established that
+muninn *already ingests live* `depth20@100ms` book snapshots and already has a
+canonical `OrderBookSnapshotEvent`. The missing thing is **history**, not book
+data as such.
+
+- **P2 is NOT blocked.** Wiring muninn's existing OBI, micro-price and VPIN
+  computers, fixing the VPIN defects, and deleting the duplicate implementations
+  needs no historical depth. It can proceed now.
+- **P3 is NOT blocked.** A live-versus-replay parity test can run on recorded
+  book events that muninn can capture going forward. It does not need months.
+- **P4 IS blocked.** Re-running walk-forward on the real signal needs a
+  multi-month book history that does not exist in any free source.
+- **P5 is already delivered** (the six-month proxy results are published).
+
+### Escalation — a cost and calendar decision, not an engineering one
+
+Two realistic unblocks for P4:
+
+1. **Record live spot L2 forward from now** and wait for enough history to run a
+   walk-forward gate. Free, but the calendar cost is months before P4 can run.
+2. **Buy per-level historical L2 from a vendor.** Immediate, but it costs money
+   and introduces a paid dependency into a project that currently has none.
+
+Until one is chosen, P4 stays blocked. Do not resolve this by substituting a
+coarser proxy and calling it parity — that is precisely the defect Track A
+exists to fix, and the CI test added in P1 now enforces it.
+
+## Phase P1 (original brief, retained for context) 🟡
 
 **Goal.** Obtain real historical L2 depth, so a replay can compute the same
 quantity the live path computes.
