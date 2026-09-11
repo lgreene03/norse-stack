@@ -1,4 +1,14 @@
-# ROADMAP — Book-True Replay Parity
+# ROADMAP
+
+Two tracks run in parallel.
+
+- **Track A — Book-true replay parity.** The novel goal: make the project's
+  headline claim true at the signal level. Phases P1 to P5 below.
+- **Track B — Operational health.** The unglamorous work that keeps Track A
+  honest. A parity test proves nothing if CI is red or the linter is unpinned.
+
+Track B has priority when it is red. A green build is a precondition for
+trusting any result Track A produces, not a separate concern.
 
 Phased delivery. Each phase ends with a working, tested, documented increment,
 and no phase is marked done until it passes the quality gate at the bottom of
@@ -57,6 +67,20 @@ Do not re-derive these; they are measured, not assumed.
   described in `EDGE_VERDICT.md` was itself an artefact of the 24h window.
 - `internal/research/research.go:402` in huginn hardcodes `hitRate: 0`, so
   walk-forward's reported `Hit: 0.0%` is not a measurement. Do not cite it.
+- GitHub Actions scopes caches **by ref**. A branch can read `main`'s caches;
+  `main` cannot read a branch's. Proving a cache-dependent workflow on a feature
+  branch therefore does NOT carry the cache over on merge, and `main` must seed
+  its own. This cost a wrong claim once already.
+- muninn's NVD cache now converges on `main`: a cold run was cancelled at 44 min
+  but still banked 99MB, and the next run restored it and finished in **13.5
+  min**, failing on `failBuildOnCVSS=7` rather than being cancelled. Fast-and-red
+  is the success signature there; slow-and-cancelled is the failure signature.
+- One unexplained observation, left open deliberately: that cold run was
+  cancelled at 44 min with `The operation was canceled` and no timeout message,
+  against a 90-min step and 120-min job budget. Neither limit was reached and no
+  competing run cancelled it. It has not recurred since the cache restores. If a
+  cold run stalls near 44 min again, look at runner-level limits rather than
+  raising timeouts.
 
 ---
 
@@ -171,3 +195,97 @@ Stop and escalate rather than grinding:
   than substituting another proxy and calling it parity.
 - If the same check fails three times in a row, revert and escalate with the
   root cause. Do not keep retrying a failing fix.
+
+---
+
+# Track B — Operational health
+
+Track A produces measurements. Track B is what makes those measurements
+trustworthy. It is sequenced first whenever it is red.
+
+## B1 — muninn CVE backlog 🔴
+
+muninn's `main` is red on its Security workflow, and correctly so. The
+dependency-check scan was down for a month (a cache deadlock, since fixed) and
+on its first working run reported a substantial backlog.
+
+The shape of the problem matters more than the count: several advisories are in
+**shaded** artifacts — `jackson-databind` 2.21.3 inside `parquet-jackson`
+1.17.1, `hive-storage-api` 2.8.1 inside `orc-core` 1.9.8 — where a
+`dependencyManagement` pin does not reach the shaded copy. Those need either an
+upgrade of the parent artifact or a dated, reasoned, scoped suppression.
+
+**Not acceptable as a fix:** relaxing `-DfailBuildOnCVSS=7`. That gate is
+deliberate and the workflow says so.
+
+**Exit criteria.** The scan passes, or every remaining advisory has a written,
+dated justification for why it is suppressed or unreachable.
+
+## B2 — Unpinned tooling sweep 🟡
+
+This stack has been broken three separate times by tools that raised their own
+requirements without warning:
+
+| tool | what happened | blast radius |
+|---|---|---|
+| `ruff` (unpinned) | 0.16.0 broadened its default rule set | norse-stack red 7 weeks, ~48 nightly runs |
+| `govulncheck@latest` | x/vuln 1.8.0 required Go >= 1.26 vs pinned Go 1.25 | huginn CI red, and it MASKED a real CVE fix |
+| `govulncheck@latest` | same | sleipnir, caught pre-emptively before it broke |
+
+Remaining known-unpinned and worth closing: `pip install pytest pytest-cov` in
+norse-stack CI (blocking), `pip install pip-audit` in norse-stack
+(continue-on-error, harmless) and in muninn-py (blocking — though for a scanner,
+surfacing new advisories is the point; the real risk is the tool raising its
+Python floor the way x/vuln raised its Go floor).
+
+**Exit criteria.** No unpinned tool gates a build. Each pin has a dependabot
+entry so it cannot rot into permanent staleness.
+
+## B3 — Scheduled-task hygiene 🟡
+
+Two existing scheduled tasks are not doing their jobs:
+
+- `nightly-roadmap-advance` runs twice daily and bails every time on a
+  "no open PRs" gate that dependabot refills continuously. It cannot self-clear.
+  Either exempt `dependabot/*` or retire it. It also pushes to `main` directly,
+  which is not an autonomy profile worth extending.
+- `merge-dependabot-prs` runs nightly yet left huginn with six open PRs, one
+  carrying a fix for a reachable CVE untouched since 2026-09-03.
+
+**Exit criteria.** Every scheduled task either does useful work or is retired.
+A task that reliably produces nothing is worse than no task, because it
+manufactures the appearance of coverage.
+
+---
+
+# Operating model
+
+## Cadence
+
+`norse-parity-advance` runs weekly (Tuesdays), advances **one** phase per run,
+and exits silently when nothing is actionable. A quiet run is a correct outcome.
+It may merge its own PR, but only on a fully green CI gate — never on a local
+pass alone.
+
+It deliberately **ignores `dependabot/*` PRs** in its in-flight check. Requiring
+zero open PRs is what deadlocked `nightly-roadmap-advance` for months.
+
+## Parallelism
+
+Phases within a track are sequential — P2 cannot start before P1 answers whether
+book depth is even reconstructable. Tracks A and B are independent and run in
+parallel, in different repos, to avoid collisions.
+
+## Definition of done
+
+A phase is done when its exit criteria are met AND the quality gate passes on
+CI, not locally. "It builds" is not done. "The tests I wrote pass" is not done
+if the suite is red elsewhere.
+
+## What counts as success
+
+A **negative result, honestly reported, is a successful outcome.** If P1
+concludes that bookDepth dumps cannot reconstruct the live signal, the roadmap
+ends at P1 and that finding is published. The goal is a trustworthy answer, not
+a flattering one. This is the same discipline `docs/EDGE_VERDICT.md` already
+applies to the strategy itself.
