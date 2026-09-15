@@ -1,4 +1,14 @@
-# ROADMAP — Book-True Replay Parity
+# ROADMAP
+
+Two tracks run in parallel.
+
+- **Track A — Book-true replay parity.** The novel goal: make the project's
+  headline claim true at the signal level. Phases P1 to P5 below.
+- **Track B — Operational health.** The unglamorous work that keeps Track A
+  honest. A parity test proves nothing if CI is red or the linter is unpinned.
+
+Track B has priority when it is red. A green build is a precondition for
+trusting any result Track A produces, not a separate concern.
 
 Phased delivery. Each phase ends with a working, tested, documented increment,
 and no phase is marked done until it passes the quality gate at the bottom of
@@ -57,10 +67,91 @@ Do not re-derive these; they are measured, not assumed.
   described in `EDGE_VERDICT.md` was itself an artefact of the 24h window.
 - `internal/research/research.go:402` in huginn hardcodes `hitRate: 0`, so
   walk-forward's reported `Hit: 0.0%` is not a measurement. Do not cite it.
+- GitHub Actions scopes caches **by ref**. A branch can read `main`'s caches;
+  `main` cannot read a branch's. Proving a cache-dependent workflow on a feature
+  branch therefore does NOT carry the cache over on merge, and `main` must seed
+  its own. This cost a wrong claim once already.
+- muninn's NVD cache now converges on `main`: a cold run was cancelled at 44 min
+  but still banked 99MB, and the next run restored it and finished in **13.5
+  min**, failing on `failBuildOnCVSS=7` rather than being cancelled. Fast-and-red
+  is the success signature there; slow-and-cancelled is the failure signature.
+- One unexplained observation, left open deliberately: that cold run was
+  cancelled at 44 min with `The operation was canceled` and no timeout message,
+  against a 90-min step and 120-min job budget. Neither limit was reached and no
+  competing run cancelled it. It has not recurred since the cache restores. If a
+  cold run stalls near 44 min again, look at runner-level limits rather than
+  raising timeouts.
 
 ---
 
-## Phase P1 — Historical order-book depth 🟡
+## Phase P1 — Historical order-book depth ⛔ KILL CRITERION FIRED
+
+**Resolved 2026-09-11: the answer is no, and that is a completed phase, not a
+failure.** Full evidence in `huginn/docs/BOOKDEPTH_FINDING.md`
+(huginn PR #30). The loader shipped so the finding is falsifiable by re-running
+rather than taken on trust, but it is deliberately NOT wired into the
+aggregator and emits no features. A test,
+`TestBookDepthSnapshotCarriesNoDerivedFeatures`, fails the build if that output
+ever grows a feature-shaped field — the kill criterion is encoded in CI.
+
+**What the dumps contain:** `timestamp,percentage,depth,notional`, one snapshot
+per ~30s, where `depth` is cumulative base quantity from mid out to a percentage
+band (±0.2%, ±1%, ±2%, ±3%, ±4%, ±5%). No prices. No best bid, no best ask, no
+mid, no per-level volumes.
+
+**Why it cannot rebuild `compute_obi`**, four independent and individually fatal
+reasons:
+
+1. **The bands are ~100x too wide.** Measured against a live 100-level BTCUSDT
+   book at mid 77,361.17, the top 10 levels the live path uses span 0.0024% bid
+   and 0.0015% ask. The narrowest band available is 0.20%. Even 100 levels
+   reaches only 0.02%. Top-10 gave `obi` = −0.3439 from 0.9679/1.9824 while the
+   0.2% band held at least 9.91/12.23 — a different population of orders, not a
+   coarser view of the same one.
+2. **The per-level distribution is irreversibly discarded.** A cumulative band
+   total is a projection; nothing recovers how 813.691 BTC spread across the
+   thousands of ticks it covers.
+3. **Wrong instrument.** The live path reads **spot**
+   (`api.binance.com/api/v3/depth`), and data.binance.vision publishes **no
+   order-book product for spot at all** — spot daily carries only aggTrades,
+   klines and trades.
+4. **Wrong cadence.** 5s live poll against ~30s in the dump.
+
+The schema is not even stable: 2023 to mid-2025 dumps carry only 10 bands with
+no ±0.2%, and render `-5` rather than `-5.00`. That alone would break a
+multi-month backfill.
+
+### What this blocks, and what it does NOT
+
+The P1 investigation concluded "P2 through P5 are blocked". **That is too broad,
+and the correction matters.** The parallel P2 investigation established that
+muninn *already ingests live* `depth20@100ms` book snapshots and already has a
+canonical `OrderBookSnapshotEvent`. The missing thing is **history**, not book
+data as such.
+
+- **P2 is NOT blocked.** Wiring muninn's existing OBI, micro-price and VPIN
+  computers, fixing the VPIN defects, and deleting the duplicate implementations
+  needs no historical depth. It can proceed now.
+- **P3 is NOT blocked.** A live-versus-replay parity test can run on recorded
+  book events that muninn can capture going forward. It does not need months.
+- **P4 IS blocked.** Re-running walk-forward on the real signal needs a
+  multi-month book history that does not exist in any free source.
+- **P5 is already delivered** (the six-month proxy results are published).
+
+### Escalation — a cost and calendar decision, not an engineering one
+
+Two realistic unblocks for P4:
+
+1. **Record live spot L2 forward from now** and wait for enough history to run a
+   walk-forward gate. Free, but the calendar cost is months before P4 can run.
+2. **Buy per-level historical L2 from a vendor.** Immediate, but it costs money
+   and introduces a paid dependency into a project that currently has none.
+
+Until one is chosen, P4 stays blocked. Do not resolve this by substituting a
+coarser proxy and calling it parity — that is precisely the defect Track A
+exists to fix, and the CI test added in P1 now enforces it.
+
+## Phase P1 (original brief, retained for context) 🟡
 
 **Goal.** Obtain real historical L2 depth, so a replay can compute the same
 quantity the live path computes.
@@ -83,19 +174,67 @@ glossed.
 
 ## Phase P2 — One feature-computation path 🔴
 
-**Goal.** Delete the second implementation. Live and replay must call the *same*
-code to compute `obi`, not two functions that happen to share a name.
+**REFRAMED 2026-09-11 after investigation. The original framing was wrong and is
+recorded here so the mistake is not repeated.**
 
-**Deliverables.**
-- Feature computation extracted into a single library consumed by both the live
-  `obi-bridge` path and the replay path.
-- `vpin` implemented as a genuine volume-bucketed order-flow toxicity measure
-  rather than `|obi|`.
-- `microPrice` implemented as a genuine book-weighted quote
-  (`(bidPx·askQty + askPx·bidQty) / (bidQty + askQty)`) rather than an alias of
-  `vwap`.
+P2 originally said "extract feature computation into a single library consumed by
+both the live `obi-bridge` path and the replay path". That treats `obi-bridge` as
+a legitimate feature producer deserving a library, and would have ended with a
+Python library, a Go library and the existing Java classes kept in step by
+codegen or FFI. The most expensive option available, and it still would not have
+reached "exactly one implementation".
+
+**The real situation: muninn already owns all of this and was never wired up.**
+
+Muninn already ingests Binance `depth20@100ms` book snapshots, already has a
+canonical sequenced `OrderBookSnapshotEvent` on its own topic, already has
+mathematically correct OBI, micro-price and VPIN computers, and already has the
+exact structure P2 wanted to build — one `FeatureEngineRunner` driven by an
+`EventSource` that is either live or replay, where the engine cannot tell which.
+
+`obi-bridge` and `huginn/cmd/fetcher` are two independent reimplementations of a
+feature engine that exists, is tested, and is bypassed. This repo's own
+`docs/ARCHITECTURE_REVIEW.md:43` already says so: "only VwapComputer is wired
+into the live engine loop; OBI, MicroPrice, VPIN computers exist as classes but
+are not dispatched". Meanwhile muninn produces `features.vwap.1m.v1`, which
+**nothing consumes** — every consumer in `docker-compose.yml` is wired to
+`features.obi.v1` from obi-bridge instead.
+
+**Deliverables, in order.**
+1. **muninn** — generalise `WindowManager` and `FeatureEngineRunner` from
+   `TradeEvent` to `MarketEvent`; dispatch over registered `FeatureComputer`s
+   instead of the hardcoded `VwapComputer.compute`; seed `obi`, `vpin` and
+   `micro_price` feature definitions; make `ShadowReplayComparator`
+   definition-driven.
+2. **muninn** — fix `VPINComputer`'s four correctness defects before wiring it:
+   no bucket carryover (overshoot is discarded, biasing VPIN upward and making it
+   depend on trade-size distribution); mutable instance state on a class whose
+   own interface forbids it, not keyed by instrument, so a multi-instrument
+   engine cross-contaminates buckets; `double` arithmetic against muninn's own
+   determinism rule; and a `NaN` return that is not representable in strict JSON
+   and would break huginn's `float64` decode. Use the existing `bucketsFilled`
+   return to carry readiness instead.
+3. **muninn** — move all four computers to `BigDecimal`, matching `VwapComputer`.
+4. **huginn** — delete the feature maths in `cmd/fetcher/aggregate.go`. Keep the
+   bulk fetch and window folding (P1 depends on them) but emit canonical market
+   events rather than computed features.
+5. **norse-stack** — repoint consumers off `features.obi.v1`, retire
+   `compute_obi`, and correct the docs that assert features the live event has
+   never carried.
 
 **Exit criteria.** Grep proves exactly one implementation of each feature.
+
+**Why this is stronger than the original plan.** Replay parity becomes
+*structurally* true rather than test-enforced: one code path, rather than two
+paths proven equal. The test in P3 then guards the wire contract only, not the
+maths.
+
+**Cost to state plainly.** Muninn becomes a hard runtime dependency of the live
+signal path. Today `obi-bridge` is a self-contained Python file needing only a
+broker, and the live stack survives muninn being down. After this it does not.
+That is a real availability regression; the mitigation is that obi-bridge is
+retired as a *computer* while muninn's own Binance adapter (which already exists)
+takes over ingestion.
 
 ---
 
@@ -105,8 +244,29 @@ code to compute `obi`, not two functions that happen to share a name.
 
 **Deliverables.**
 - A parity test that feeds one recorded book-event sequence through the live
-  path and the replay path and asserts **byte-identical** feature output.
-- The test runs in CI on every PR, not on a schedule.
+  path and the replay path and asserts equality **at a declared scale with zero
+  tolerance**.
+
+  *Wording corrected 2026-09-11.* "Byte-identical" is achievable inside muninn
+  (Java live vs Java replay) and is NOT literally achievable across the wire as
+  currently built: muninn emits `BigDecimal`, huginn decodes into
+  `map[string]float64`, and obi-bridge rounds to 6dp. Either declare a scale and
+  assert zero tolerance at it, or make the wire format carry decimal strings.
+  Pick one and write it down — unqualified "byte-identical" is exactly where a
+  JSON float round-trip will break the claim.
+- The test runs in CI on every PR, not on a schedule. Note that **no cross-repo
+  gate currently exists on any PR in any of the five repos**: norse-stack's only
+  cross-repo job (`e2e-smoke`) is schedule-gated AND `continue-on-error: true`.
+  muninn's CI is the only one that already gates PRs on `mvn verify`.
+- Golden fixtures vendored into each repo **with a checksum gate**, so a repo
+  whose copy drifts fails its own CI. Without that, vendored copies diverge
+  silently and both sides pass while measuring different things — precisely the
+  failure mode this roadmap exists to fix.
+- Assert the free invariants too: `microPrice` strictly between best bid and best
+  ask (catches the cross-weighting being written backwards, the classic error),
+  `vpin != |obi|` on a fixture where they genuinely differ, and
+  `microPrice != vwap` on asymmetric top-of-book sizes. The last two are explicit
+  anti-regression guards against today's degeneracies.
 - A deliberate one-sided change to either path must fail it. Prove that by
   breaking it once, observing the failure, and reverting.
 
@@ -171,3 +331,124 @@ Stop and escalate rather than grinding:
   than substituting another proxy and calling it parity.
 - If the same check fails three times in a row, revert and escalate with the
   root cause. Do not keep retrying a failing fix.
+
+---
+
+# Track B — Operational health
+
+Track A produces measurements. Track B is what makes those measurements
+trustworthy. It is sequenced first whenever it is red.
+
+## B1 — muninn CVE backlog 🔴
+
+muninn's `main` is red on its Security workflow, and correctly so. The
+dependency-check scan was down for a month (a cache deadlock, since fixed) and
+on its first working run reported a substantial backlog.
+
+The shape of the problem matters more than the count: several advisories are in
+**shaded** artifacts — `jackson-databind` 2.21.3 inside `parquet-jackson`
+1.17.1, `hive-storage-api` 2.8.1 inside `orc-core` 1.9.8 — where a
+`dependencyManagement` pin does not reach the shaded copy. Those need either an
+upgrade of the parent artifact or a dated, reasoned, scoped suppression.
+
+**Not acceptable as a fix:** relaxing `-DfailBuildOnCVSS=7`. That gate is
+deliberate and the workflow says so.
+
+**Exit criteria.** The scan passes, or every remaining advisory has a written,
+dated justification for why it is suppressed or unreachable.
+
+## B2 — Unpinned tooling sweep 🟡
+
+This stack has been broken three separate times by tools that raised their own
+requirements without warning:
+
+| tool | what happened | blast radius |
+|---|---|---|
+| `ruff` (unpinned) | 0.16.0 broadened its default rule set | norse-stack red 7 weeks, ~48 nightly runs |
+| `govulncheck@latest` | x/vuln 1.8.0 required Go >= 1.26 vs pinned Go 1.25 | huginn CI red, and it MASKED a real CVE fix |
+| `govulncheck@latest` | same | sleipnir, caught pre-emptively before it broke |
+
+Remaining known-unpinned and worth closing: `pip install pytest pytest-cov` in
+norse-stack CI (blocking), `pip install pip-audit` in norse-stack
+(continue-on-error, harmless) and in muninn-py (blocking — though for a scanner,
+surfacing new advisories is the point; the real risk is the tool raising its
+Python floor the way x/vuln raised its Go floor).
+
+**Exit criteria.** No unpinned tool gates a build. Each pin has a dependabot
+entry so it cannot rot into permanent staleness.
+
+## B4 — Strategies that are silently dead in live 🔴
+
+Found during the P2 investigation, and it is a live-trading correctness bug, not
+a tidiness issue. `obi-bridge` emits `midPrice` and has never emitted
+`microPrice` or `vwap`. Consequently:
+
+- `huginn/internal/strategy/ema_crossover.go:83-89` falls back from `microPrice`
+  only to `value`, which is never present, so `OnFeature` returns `nil` on
+  **every live event**.
+- `huginn/internal/strategy/vwap_deviation.go:68-75` requires both `vwap` and a
+  price; the live topic carries neither, so it too returns `nil` every time.
+- `huginn/internal/strategy/vpin_breakout.go:77` reads `values["vpin"]`, which
+  the live topic never carries at all, so the VPIN strategy **cannot fire in
+  live** and is fed `|obi|` in backtest.
+
+`ou_reversion.go:243` is unaffected because it tries `midPrice` first.
+
+Three of the six shipped strategies are therefore inert in live. This has the
+same root cause as Track A — two feature producers with different field
+vocabularies and no shared contract — and it is fixed for free by P2. It is
+listed separately because it is a present-tense defect, and because anyone
+reading "6 strategies" in the README should know that half of them cannot
+currently trade.
+
+**Exit criteria.** Every shipped strategy either receives the fields it requires
+in live, or is explicitly documented as backtest-only.
+
+## B3 — Scheduled-task hygiene 🟡
+
+Two existing scheduled tasks are not doing their jobs:
+
+- `nightly-roadmap-advance` runs twice daily and bails every time on a
+  "no open PRs" gate that dependabot refills continuously. It cannot self-clear.
+  Either exempt `dependabot/*` or retire it. It also pushes to `main` directly,
+  which is not an autonomy profile worth extending.
+- `merge-dependabot-prs` runs nightly yet left huginn with six open PRs, one
+  carrying a fix for a reachable CVE untouched since 2026-09-03.
+
+**Exit criteria.** Every scheduled task either does useful work or is retired.
+A task that reliably produces nothing is worse than no task, because it
+manufactures the appearance of coverage.
+
+---
+
+# Operating model
+
+## Cadence
+
+`norse-parity-advance` runs weekly (Tuesdays), advances **one** phase per run,
+and exits silently when nothing is actionable. A quiet run is a correct outcome.
+It may merge its own PR, but only on a fully green CI gate — never on a local
+pass alone.
+
+It deliberately **ignores `dependabot/*` PRs** in its in-flight check. Requiring
+zero open PRs is what deadlocked `nightly-roadmap-advance` for months.
+
+## Parallelism
+
+Phases within a track are sequential — P2 cannot start before P1 answers whether
+book depth is even reconstructable. Tracks A and B are independent and run in
+parallel, in different repos, to avoid collisions.
+
+## Definition of done
+
+A phase is done when its exit criteria are met AND the quality gate passes on
+CI, not locally. "It builds" is not done. "The tests I wrote pass" is not done
+if the suite is red elsewhere.
+
+## What counts as success
+
+A **negative result, honestly reported, is a successful outcome.** If P1
+concludes that bookDepth dumps cannot reconstruct the live signal, the roadmap
+ends at P1 and that finding is published. The goal is a trustworthy answer, not
+a flattering one. This is the same discipline `docs/EDGE_VERDICT.md` already
+applies to the strategy itself.
