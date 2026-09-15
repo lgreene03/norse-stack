@@ -224,6 +224,52 @@ are not dispatched". Meanwhile muninn produces `features.vwap.1m.v1`, which
 
 **Exit criteria.** Grep proves exactly one implementation of each feature.
 
+### Status 2026-09-15: muninn half DONE, cross-repo deletion remains
+
+muninn PR #53 merged. All three bypassed computers are now dispatched, rewritten
+as `BigDecimal` pure functions, with VPIN's four correctness defects fixed.
+`WindowManager`/`WindowedBatch` generalised to `MarketEvent`, migration V006 seeds
+the three feature definitions, `ShadowReplayComparator` is definition-driven, and
+ADR-0015 records the design. Verified in CI, not merely locally: 221 unit tests
+and 12 integration tests green, including
+`MicrostructureReplayParityIntegrationTest` which ran 21.44s and asserts live and
+replay produce identical output for all four registered features.
+
+**Two defects were found by doing this work, both now fixed:**
+
+1. `OrderBookSnapshotEvent` was not `Serializable`, which broke checkpointing the
+   moment book events could reach the engine. Latent because they never could.
+2. **A determinism defect in the core guarantee.** Neither `LiveEventSource.poll()`
+   nor `ReplayEventSource.poll()` implemented the k-way merge by event time that
+   `DETERMINISTIC_REPLAY.md` documents; a batch spanning two topics was buffered in
+   Kafka per-partition fetch order, unrelated to event time. `ReplayEventSource`
+   additionally could break its loop on an out-of-range record from one partition
+   before examining an in-range record from another in the same batch. **This was
+   invisible while only one topic was ever subscribed, and P2 exposed it by
+   subscribing to two.** Both now have failing-first tests against a mocked
+   `KafkaConsumer`, confirmed failing on pre-fix code.
+
+The second is worth dwelling on: the project's headline claim is deterministic
+replay, and the gap sat between what the design document said and what the code
+did. Nothing was wrong with the document. Nothing looked wrong with the code.
+
+**Remaining P2 work, in other repos:** huginn must delete the feature maths in
+`cmd/fetcher/aggregate.go` (keep the bulk fetch and window folding, emit canonical
+market events instead), and norse-stack must repoint its consumers off
+`features.obi.v1`, retire `compute_obi`, and correct the docs asserting fields the
+live event has never carried.
+
+### P3 precondition — VPIN state is not checkpointed
+
+Recorded here rather than left in an ADR, because it would otherwise let P3 pass
+while the guarantee underneath it is incomplete. VPIN now carries instrument-keyed
+bucket state that is NOT part of the engine checkpoint, so a replay resuming
+mid-stream would diverge from a continuous run. That is precisely the determinism
+property P3's parity test is meant to assert. **Fix checkpointing before P3 is
+considered done, or P3 must explicitly scope itself to exclude VPIN and say so.**
+Confirmed independent of the integration-test failure above; VPIN is trade-driven
+and behaved correctly throughout.
+
 **Why this is stronger than the original plan.** Replay parity becomes
 *structurally* true rather than test-enforced: one code path, rather than two
 paths proven equal. The test in P3 then guards the wire contract only, not the
