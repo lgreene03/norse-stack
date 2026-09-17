@@ -16,7 +16,7 @@ The live feature event `features.obi.v1` already carries a multi-asset universe
 (BTC/ETH/SOL/XRP/DOGE) and a rich `Values` map:
 
 ```
-obi, midPrice, microPrice, spread,
+obi, midPrice, spread,
 momentum, momentum1m, momentum15m, emaFast, emaSlow, volatility,
 funding, openInterest, fearGreed, mlScore, newsSentiment
 ```

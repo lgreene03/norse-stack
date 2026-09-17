@@ -62,7 +62,9 @@ Two short, specific write-ups of senior-level findings on this stack — real nu
 ### Why this isn't a toy / what's novel
 
 - **Deterministic replay parity.** Muninn's feature engine produces byte-identical output from the same input events, so a backtest and a live run share one computation path — enforced by [`huginn/internal/backtest/parity_test.go`](https://github.com/lgreene03/huginn/blob/main/internal/backtest/parity_test.go) and Muninn's [ADR-0002 event-id determinism](https://github.com/lgreene03/muninn/blob/main/docs/adr/0002-event-id-determinism.md).
-- **Live-orderbook microstructure signals.** Signals are computed from real Binance L2 order books (order-book imbalance, VPIN, micro-price, VWAP) rather than from OHLC candles — see [`services/obi-bridge`](services/obi-bridge) and Muninn's [ADR-0008 multi-exchange adapter framework](https://github.com/lgreene03/muninn/blob/main/docs/adr/0008-multi-exchange-adapter-framework.md).
+- **Live-orderbook microstructure signals.** Order-book imbalance is computed from real Binance L2 order books rather than from OHLC candles — see [`services/obi-bridge`](services/obi-bridge) and Muninn's [ADR-0008 multi-exchange adapter framework](https://github.com/lgreene03/muninn/blob/main/docs/adr/0008-multi-exchange-adapter-framework.md).
+
+  **Corrected 2026-09-17.** This bullet previously claimed the live path computes order-book imbalance, VPIN, micro-price *and* VWAP. It computes one of those four. Muninn holds correct implementations of the other three, but only `VwapComputer` was ever dispatched by its engine loop, and the live topic the stack actually consumes comes from `obi-bridge`, which emits `obi`, `midPrice` and `spread`. Wiring the rest is Phase P2 of [`docs/ROADMAP.md`](docs/ROADMAP.md), where muninn's half is now done.
 - **Walk-forward validation, not in-sample curve-fitting.** Anchored expanding-train / sliding-test validation with explicit multiple-testing warnings — [`huginn/cmd/walkforward`](https://github.com/lgreene03/huginn/blob/main/cmd/walkforward/main.go), [ADR-0007 walk-forward calibration](https://github.com/lgreene03/huginn/blob/main/docs/adr/0007-walk-forward-calibration-workflow.md), and the negative result is published in [docs/RESULTS.md](docs/RESULTS.md).
 - **Honest sim-execution boundary.** Strategy and execution are separate services; Sleipnir runs a sim exchange by default and the boundary is documented as a deliberate decision in [ADR-0002 (stack)](docs/adr/0002-sim-only-execution-boundary.md) and [Huginn ADR-0003 dual-mode executor](https://github.com/lgreene03/huginn/blob/main/docs/adr/0003-dual-mode-paper-live-executor.md).
 
@@ -254,6 +256,8 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 
 ### Strategy Engine (Huginn)
 - 6 strategies + a pluggable alpha framework: OBI Threshold, VPIN Breakout, VWAP Deviation, EMA Crossover, OU Mean-Reversion, Composite
+
+  **Three of the six cannot currently fire in live**, and it is more honest to say so here than to let the count imply otherwise. `obi-bridge` emits `midPrice` and has never emitted `microPrice` or `vwap`, so `ema_crossover` and `vwap_deviation` return nil on every live event, and `vpin_breakout` reads a `vpin` field the live topic does not carry. They work in backtest. This is tracked as B4 in [`docs/ROADMAP.md`](docs/ROADMAP.md) and is fixed for free by Phase P2, since it has the same root cause: two feature producers with different field vocabularies and no shared contract.
 - Regime-aware threshold adaptation using Hurst exponent and autocorrelation
 - Sub-second exit monitoring via real-time price tick consumer
 - Signal-to-decision latency: p50 ~3ms (Prometheus histogram)
