@@ -74,7 +74,7 @@ flowchart LR
 
 A source adapter turns an external feed into a deterministic feature event. The
 live feature event `features.obi.v1` already carries a **multi-asset universe**
-(BTC/ETH/SOL/XRP/DOGE) in a rich `Values` map: `obi`, `midPrice`, `microPrice`,
+(BTC/ETH/SOL/XRP/DOGE) in a rich `Values` map: `obi`, `midPrice`,
 `spread`, `momentum`/`momentum1m`/`momentum15m`, `emaFast`/`emaSlow`,
 `volatility`, plus `funding`, `openInterest`, `fearGreed`, `mlScore`,
 `newsSentiment`.
