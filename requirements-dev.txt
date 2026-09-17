@@ -14,4 +14,4 @@
 # UPGRADING: dependabot (pip ecosystem, see .github/dependabot.yml) opens a PR
 # when a new ruff lands. That PR runs full CI, so a rule-set change shows up as
 # a reviewable red PR instead of a surprise red main.
-ruff==0.16.6
+ruff==0.16.7
