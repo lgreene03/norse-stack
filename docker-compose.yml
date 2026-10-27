@@ -150,7 +150,25 @@ services:
       MUNINN_STORAGE_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       MUNINN_STORAGE_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       MUNINN_INGESTION_BINANCE_ENABLED: "true"
+      MUNINN_INGESTION_OKX_ENABLED: "true"
       MUNINN_INGESTION_COINBASE_ENABLED: "false"
+      # Ingest and RECORD only. Every raw trade and book from both venues goes to
+      # the muninn-raw bucket (the history backtests need), and nothing else.
+      #
+      # The feature side stays off because muninn's OBI feature is named
+      # features.obi.v1, the very topic obi-bridge writes and huginn TRADES on.
+      # One muninn record reached it on 2026-10-27; huginn rejected it only because
+      # muninn writes timestamps as epoch decimals. That topic needs one owner
+      # before muninn computes features here. Features are derived data, so they
+      # can be recomputed later from what the recorder keeps.
+      #
+      # The shadow comparator and the live feature stream are off for the same
+      # reason: both subscribe to features.*, where obi-bridge's records are poison
+      # to muninn's deserialiser.
+      MUNINN_FEATURES_ENGINE_ENABLED: "false"
+      MUNINN_REPLAY_SHADOWCOMPARATOR_ENABLED: "false"
+      MUNINN_STREAMING_ENABLED: "false"
+      MUNINN_RECORDER_ENABLED: "true"
       OTEL_EXPORTER_OTLP_ENDPOINT: tempo:4317
       # Tempo's OTLP gRPC port is plaintext; without this the exporter attempts
       # TLS and spams "first record does not look like a TLS handshake".
