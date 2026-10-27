@@ -62,7 +62,7 @@ groups:
         expr: |
           sum(rate(huginn_fills_rejected_total[5m]))
             /
-          clamp_min(sum(rate(huginn_fills_processed_total[5m])), 1) > 0.2
+          (sum(rate(huginn_fills_processed_total[5m])) > 0) > 0.2
         for: 5m
         labels:
           severity: warning
@@ -76,7 +76,7 @@ groups:
         expr: |
           sum(rate(odin_fills_rejected_total[5m]))
             /
-          clamp_min(sum(rate(odin_fills_processed_total[5m])), 1) > 0.2
+          (sum(rate(odin_fills_processed_total[5m])) > 0) > 0.2
         for: 5m
         labels:
           severity: warning

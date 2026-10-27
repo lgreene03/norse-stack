@@ -1,0 +1,97 @@
+# promtool unit tests for the alert rules, at huginn's real (low) event rates.
+#
+#   docker run --rm -v "$PWD/monitoring:/m" --entrypoint promtool \
+#     prom/prometheus:v2.53.0 test rules /m/tests/rules_test.yml
+#
+# Every case here failed on the previous rules, which guarded each denominator
+# with clamp_min(rate(...), 1). rate() is per second and huginn acts far less
+# than once a second, so the clamp distorted every ratio: the latency SLO
+# alerted critically for five weeks on healthy traffic, and the fill-rejection
+# alerts could not fire even at 100% rejection.
+
+rule_files:
+  - ../alerts/slo.yml
+  - ../alerts/norse-stack.yml
+
+evaluation_interval: 1m
+
+tests:
+  # Healthy: 3 decisions a minute (0.05/s), every one inside the 256 ms bucket.
+  - interval: 1m
+    input_series:
+      - series: 'huginn_signal_to_decision_ms_bucket{le="256"}'
+        values: '0+3x420'
+      - series: 'huginn_signal_to_decision_ms_bucket{le="+Inf"}'
+        values: '0+3x420'
+      - series: 'huginn_signal_to_decision_ms_count'
+        values: '0+3x420'
+    promql_expr_test:
+      - expr: huginn:s2d_latency_bad_ratio_rate5m
+        eval_time: 120m
+        exp_samples:
+          - labels: 'huginn:s2d_latency_bad_ratio_rate5m'
+            value: 0
+    alert_rule_test:
+      - eval_time: 120m
+        alertname: HuginnLatencySLOFastBurn
+        exp_alerts: []
+      - eval_time: 400m
+        alertname: HuginnLatencySLOSlowBurn
+        exp_alerts: []
+
+  # A real burn at the same low rate: every decision is slower than 256 ms.
+  - interval: 1m
+    input_series:
+      - series: 'huginn_signal_to_decision_ms_bucket{le="256"}'
+        values: '0x120'
+      - series: 'huginn_signal_to_decision_ms_bucket{le="+Inf"}'
+        values: '0+3x120'
+      - series: 'huginn_signal_to_decision_ms_count'
+        values: '0+3x120'
+    promql_expr_test:
+      - expr: huginn:s2d_latency_bad_ratio_rate5m
+        eval_time: 90m
+        exp_samples:
+          - labels: 'huginn:s2d_latency_bad_ratio_rate5m'
+            value: 1
+
+  # No traffic at all: no ratio, so no alert, rather than a distorted one.
+  - interval: 1m
+    input_series:
+      - series: 'huginn_signal_to_decision_ms_bucket{le="256"}'
+        values: '0x120'
+      - series: 'huginn_signal_to_decision_ms_count'
+        values: '0x120'
+    promql_expr_test:
+      - expr: huginn:s2d_latency_bad_ratio_rate5m
+        eval_time: 90m
+        exp_samples: []
+
+  # Every fill rejected, at one fill a minute. Must alert.
+  - interval: 1m
+    input_series:
+      - series: 'huginn_fills_processed_total'
+        values: '0+1x60'
+      - series: 'huginn_fills_rejected_total'
+        values: '0+1x60'
+    promql_expr_test:
+      - expr: |
+          sum(rate(huginn_fills_rejected_total[5m]))
+            /
+          (sum(rate(huginn_fills_processed_total[5m])) > 0)
+        eval_time: 30m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+
+  # One rejection in twenty fills (5%), below the 20% threshold. Must not alert.
+  - interval: 1m
+    input_series:
+      - series: 'huginn_fills_processed_total'
+        values: '0+20x60'
+      - series: 'huginn_fills_rejected_total'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: HuginnAiFillsRejectedBurst
+        exp_alerts: []
