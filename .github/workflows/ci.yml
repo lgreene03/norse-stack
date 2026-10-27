@@ -49,6 +49,19 @@ jobs:
           pip install pyyaml
           python scripts/validate-monitoring.py
 
+      # Rule syntax AND behaviour, with the same pinned Prometheus image the stack
+      # runs, so CI evaluates rules exactly as production does. The unit tests use
+      # huginn's real, low event rates: an earlier clamp_min(rate, 1) guard made
+      # the latency SLO alert critically on healthy traffic for five weeks and
+      # made the fill-rejection alerts unable to fire at all, and YAML-level
+      # validation could never have caught either.
+      - name: Check and unit-test alert rules (promtool)
+        run: |
+          docker run --rm -v "$PWD/monitoring:/m" --entrypoint promtool \
+            prom/prometheus:v2.53.0 check rules /m/alerts/slo.yml /m/alerts/norse-stack.yml
+          docker run --rm -v "$PWD/monitoring:/m" --entrypoint promtool \
+            prom/prometheus:v2.53.0 test rules /m/tests/rules_test.yml
+
   secret-scan:
     # Secret scanning across the full repo. gitleaks fails the job on any
     # hard-coded credential so a leaked token can never land on main. This

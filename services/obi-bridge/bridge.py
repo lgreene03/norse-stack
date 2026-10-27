@@ -396,20 +396,29 @@ def ms_to_iso(epoch_ms):
     )
 
 
-def kline_window(klines):
-    """Return (window_start_ms, window_end_ms) from a kline series.
+def kline_window(klines, now_ms=None):
+    """Return (window_start_ms, window_end_ms) over the COMPLETED bars.
 
     Binance klines are arrays where index 0 is the bar open time and index 6
-    is the bar close time, both epoch millis. The most recent bar's close
-    time is the canonical event/window-end time; the first bar's open time is
-    the window start. Returns (None, None) when no usable klines are present.
+    is the bar close time, both epoch millis. The most recent bar Binance
+    returns is the one still open, and its close time is in the future (0 to
+    300 s ahead for 5-minute bars). This used to take that bar's close time as
+    the window end and as the event time, so every event was stamped up to
+    five minutes ahead: measured downstream as a mean signal-to-decision
+    "latency" of -147 s, and enough to blind huginn's staleness watchdog.
+
+    Bars whose close time is after ``now_ms`` (default: now) are excluded.
+    Returns (None, None) when no completed bar is present.
     """
     if not klines:
         return None, None
+    if now_ms is None:
+        now_ms = int(time.time() * 1000)
     try:
-        window_start = int(klines[0][0])
-        window_end = int(klines[-1][6])
-        return window_start, window_end
+        completed = [k for k in klines if int(k[6]) <= now_ms]
+        if not completed:
+            return None, None
+        return int(completed[0][0]), int(completed[-1][6])
     except (IndexError, ValueError, TypeError):
         return None, None
 
@@ -418,18 +427,24 @@ def build_feature_event(instrument, metrics, mom_5m, mom_1m, mom_15m,
                         volatility, volume, fear_greed, funding_rate,
                         oi_change, ml_score, ml_ready, news_sentiment,
                         regime_info=None, window_start_ms=None,
-                        window_end_ms=None, input_event_ids=None):
+                        window_end_ms=None, input_event_ids=None,
+                        observed_at_ms=None):
     ingest = datetime.now(UTC)
     ingest_str = ingest.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    # eventTime / window are stamped from exchange-provided data times so the
-    # event is replay-deterministic and joins cleanly with future labels.
-    # Wall-clock is kept separately as ingestTime. When the exchange window is
-    # unavailable (e.g. empty kline response) fall back to ingest time so the
-    # event still validates, but flag it via ingestTime divergence.
-    if window_end_ms is not None:
-        event_str = ms_to_iso(window_end_ms)
-        epoch_ms = int(window_end_ms)
+    # eventTime and signalTimeMs are when the order book, the core OBI input,
+    # was OBSERVED. It is passed in rather than read from the clock here, so the
+    # event stays a pure function of its inputs and replays deterministically.
+    #
+    # Not the kline window end. The latest kline is still open, so its close
+    # time is in the future. And the last COMPLETED bar's close would be worse
+    # for research than a future stamp: it labels a book observed now as up to
+    # five minutes older than it is, so a backtest joining features to later
+    # returns would act on information before it existed (look-ahead bias).
+    # The window fields describe the kline context; they are not the event time.
+    if observed_at_ms is not None:
+        epoch_ms = int(observed_at_ms)
+        event_str = ms_to_iso(epoch_ms)
     else:
         event_str = ingest_str
         epoch_ms = int(ingest.timestamp() * 1000)
@@ -653,6 +668,8 @@ def main():
             try:
                 # Layer 1: Order book imbalance
                 book = fetch_orderbook(symbol, limit=20)
+                # The moment the book was observed: this event's time.
+                observed_ms = int(time.time() * 1000)
                 metrics = compute_obi(book, BOOK_LEVELS)
 
                 # Layer 2: Multi-timeframe momentum
@@ -691,7 +708,7 @@ def main():
                 # Provenance: exchange data-window from the 5m kline series and
                 # the snapshot ids of the inputs that produced this feature
                 # (orderbook lastUpdateId + kline close time).
-                window_start_ms, window_end_ms = kline_window(klines_5m)
+                window_start_ms, window_end_ms = kline_window(klines_5m, now_ms=observed_ms)
                 input_event_ids = []
                 book_update_id = book.get("lastUpdateId")
                 if book_update_id is not None:
@@ -707,6 +724,7 @@ def main():
                     window_start_ms=window_start_ms,
                     window_end_ms=window_end_ms,
                     input_event_ids=input_event_ids,
+                    observed_at_ms=observed_ms,
                 )
 
                 # Enqueue the event; flush is batched once per poll cycle

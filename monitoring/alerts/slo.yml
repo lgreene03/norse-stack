@@ -32,6 +32,14 @@ groups:
   # The SLI is the ratio of "good" (≤250ms) events to total events, computed
   # over several windows so the burn-rate alerts can compare them. We record
   # the BAD ratio (1 - good) since burn rate is about budget consumed.
+  #
+  # The denominator is guarded with `(... > 0)`, never `clamp_min(..., 1)`.
+  # rate() is per SECOND and huginn decides far less than once a second, so
+  # clamping the total up to 1 shrank the good ratio towards zero and pinned the
+  # bad ratio near 0.94: this SLO alerted critically, falsely, from 2026-09-17
+  # for five weeks. A zero total now yields no series, so no alert, instead of
+  # a distorted ratio. The same guard in norse-stack.yml made the fill-rejection
+  # alerts unable to fire at all. See monitoring/tests/rules_test.yml.
   - name: norse-slo-latency-recording
     rules:
       - record: huginn:s2d_latency_bad_ratio_rate5m
@@ -39,28 +47,28 @@ groups:
           1 - (
             sum(rate(huginn_signal_to_decision_ms_bucket{le="256"}[5m]))
               /
-            clamp_min(sum(rate(huginn_signal_to_decision_ms_count[5m])), 1)
+            (sum(rate(huginn_signal_to_decision_ms_count[5m])) > 0)
           )
       - record: huginn:s2d_latency_bad_ratio_rate30m
         expr: |
           1 - (
             sum(rate(huginn_signal_to_decision_ms_bucket{le="256"}[30m]))
               /
-            clamp_min(sum(rate(huginn_signal_to_decision_ms_count[30m])), 1)
+            (sum(rate(huginn_signal_to_decision_ms_count[30m])) > 0)
           )
       - record: huginn:s2d_latency_bad_ratio_rate1h
         expr: |
           1 - (
             sum(rate(huginn_signal_to_decision_ms_bucket{le="256"}[1h]))
               /
-            clamp_min(sum(rate(huginn_signal_to_decision_ms_count[1h])), 1)
+            (sum(rate(huginn_signal_to_decision_ms_count[1h])) > 0)
           )
       - record: huginn:s2d_latency_bad_ratio_rate6h
         expr: |
           1 - (
             sum(rate(huginn_signal_to_decision_ms_bucket{le="256"}[6h]))
               /
-            clamp_min(sum(rate(huginn_signal_to_decision_ms_count[6h])), 1)
+            (sum(rate(huginn_signal_to_decision_ms_count[6h])) > 0)
           )
 
   # ── Multi-burn-rate alerts: signal→decision latency SLO ─────────────────

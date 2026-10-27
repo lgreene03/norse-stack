@@ -63,6 +63,9 @@ for _i in range(30):
 
 RECORDED_TICKER = {"volume": "1234.5"}
 
+# When the recorded book was observed: 12 s after the last bar closed.
+RECORDED_OBSERVED_MS = RECORDED_KLINES_5M[-1][6] + 12_000
+
 
 def build_recorded_event():
     metrics = bridge.compute_obi(RECORDED_BOOK, 10)
@@ -77,7 +80,7 @@ def build_recorded_event():
         detector.update("BTCUSDT", float(k[4]))
     regime_info = detector.classify("BTCUSDT")
 
-    window_start_ms, window_end_ms = bridge.kline_window(RECORDED_KLINES_5M)
+    window_start_ms, window_end_ms = bridge.kline_window(RECORDED_KLINES_5M, now_ms=RECORDED_OBSERVED_MS)
     input_event_ids = [
         f"orderbook:BTCUSDT:{RECORDED_BOOK['lastUpdateId']}",
         f"kline5m:BTCUSDT:{window_end_ms}",
@@ -91,6 +94,7 @@ def build_recorded_event():
         window_start_ms=window_start_ms,
         window_end_ms=window_end_ms,
         input_event_ids=input_event_ids,
+        observed_at_ms=RECORDED_OBSERVED_MS,
     )
 
 
@@ -112,19 +116,47 @@ def test_no_values_field_loss():
         assert isinstance(v, (int, float)), f"values.{k} is not numeric: {v!r}"
 
 
-def test_event_time_is_exchange_window_not_wallclock():
+def test_event_time_is_when_the_book_was_observed():
+    # Was "exchange window, not wallclock": the latest kline's close time. That
+    # bar is still open, so the stamp was up to five minutes in the future,
+    # which blinded huginn's staleness watchdog and made its latency negative.
     event = json.loads(json.dumps(build_recorded_event()))
-    _, window_end_ms = bridge.kline_window(RECORDED_KLINES_5M)
-    expected = bridge.ms_to_iso(window_end_ms)
-    assert event["eventTime"] == expected, (
-        "eventTime must be stamped from the exchange kline close time "
-        f"({expected}), got {event['eventTime']}"
-    )
-    assert event["signalTimeMs"] == window_end_ms
+    assert event["eventTime"] == bridge.ms_to_iso(RECORDED_OBSERVED_MS)
+    assert event["signalTimeMs"] == RECORDED_OBSERVED_MS
+    # The window still describes the completed kline context.
     assert event["windowStart"] == bridge.ms_to_iso(RECORDED_KLINES_5M[0][0])
-    assert event["windowEnd"] == expected
-    # ingestTime is wall-clock and distinct in field identity from eventTime.
+    assert event["windowEnd"] == bridge.ms_to_iso(RECORDED_KLINES_5M[-1][6])
     assert event.get("ingestTime")
+
+
+def _with_open_bar(observed_ms):
+    """The recorded bars plus the still-open bar Binance actually returns last."""
+    last_close = RECORDED_KLINES_5M[-1][6]
+    open_bar = [last_close + 1, "0", "0", "0", "0", "0", last_close + 300_000, "0", 0, "0", "0", "0"]
+    assert open_bar[6] > observed_ms, "fixture: the open bar must close in the future"
+    return [*RECORDED_KLINES_5M, open_bar]
+
+
+def test_window_excludes_the_still_open_candle():
+    klines = _with_open_bar(RECORDED_OBSERVED_MS)
+    _, window_end_ms = bridge.kline_window(klines, now_ms=RECORDED_OBSERVED_MS)
+    assert window_end_ms == RECORDED_KLINES_5M[-1][6], "the open bar's future close must not be the window end"
+
+
+def test_event_is_never_stamped_in_the_future():
+    klines = _with_open_bar(RECORDED_OBSERVED_MS)
+    window_start_ms, window_end_ms = bridge.kline_window(klines, now_ms=RECORDED_OBSERVED_MS)
+    mom = bridge.compute_momentum(RECORDED_KLINES_5M)
+    event = bridge.build_feature_event(
+        "BTC-USDT", bridge.compute_obi(RECORDED_BOOK, 10), mom, mom, mom,
+        bridge.compute_volatility(RECORDED_KLINES_5M),
+        bridge.compute_volume_context(RECORDED_KLINES_5M, RECORDED_TICKER),
+        55, 0.0001, 0.02, 0.73, True, 0.1, None,
+        window_start_ms=window_start_ms, window_end_ms=window_end_ms,
+        observed_at_ms=RECORDED_OBSERVED_MS,
+    )
+    assert event["signalTimeMs"] <= RECORDED_OBSERVED_MS
+    assert event["windowEnd"] <= event["eventTime"], "window context must not postdate the observation"
 
 
 def test_provenance_present():
