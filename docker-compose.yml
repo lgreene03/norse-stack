@@ -140,7 +140,10 @@ services:
       minio-init:
         condition: service_completed_successfully
     ports:
-      - "8080:8080"
+      # Host side only, for reaching muninn's API from the host. Services in the
+      # stack use muninn:8080 on the compose network, so changing this breaks
+      # nothing inside. Set MUNINN_HOST_PORT when 8080 is taken on the host.
+      - "${MUNINN_HOST_PORT:-8080}:8080"
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-muninn:5432/muninn
       SPRING_DATASOURCE_USERNAME: muninn
