@@ -1,5 +1,12 @@
 # ROADMAP
 
+> **Current iteration (2026-11-03 to 2026-12-15): [NEXT_ITERATION.md](NEXT_ITERATION.md).**
+> Order-book imbalance was tested on recorded books and is real but worth about 1 bp
+> against a 20 bps round trip, so it is retired as an alpha. The iteration's goal is
+> a pre-registered verdict on hours-to-weeks strategies. Where it conflicts with the
+> phases below, it takes precedence; Track A's parity work matters less once the
+> signal it protects is retired.
+
 Two tracks run in parallel.
 
 - **Track A — Book-true replay parity.** The novel goal: make the project's
