@@ -61,9 +61,14 @@ rolls its daily loss window on the wall clock, so in a backtest the 10,000 "dail
 limit is a lifetime cap: that is the unexplained -10,000 in fold 4 of the six-month
 verdict. huginn's PBO is a fold-level proxy, not the combinatorially symmetric
 method the gate names, and its deflated Sharpe is computed per fold and averaged.
-And 23 of the stack's published ports bind to every interface on a machine whose
-firewall is off, exposing both Postgres databases, Grafana and the unauthenticated
-research gateway to the home network.
+And 20 of the stack's 24 published ports bound to every interface, exposing both
+Postgres databases, Grafana and the unauthenticated research gateway to the home
+network. That was fixed on 2026-11-04 ([#28](https://github.com/lgreene03/norse-stack/pull/28)):
+all 22 remaining published ports bind to 127.0.0.1, and CI now rejects any that
+does not.
+
+The detailed, owned and dated goals for this iteration are in
+[ITERATION_GOALS.md](ITERATION_GOALS.md).
 
 ## What the evidence says
 
@@ -235,6 +240,9 @@ account. Repoint the weekly scheduled task `norse-parity-advance` to a read-only
 `norse-iteration-watch` that reports drift, completeness and the monthly decile
 re-run and never touches the gate, ledger or seal. Approve paper short perpetual
 positions for H2, or decline and keep H2 as a filter. Decide who holds the holdout
-key, and state who has already looked at 2026 prices. Turn the macOS firewall on,
-which only you can do. Approve recording ETH, SOL, XRP and DOGE as well as BTC, at
-roughly four times the storage. Approve retiring huginn's unused web app.
+key, and state who has already looked at 2026 prices. Approve recording ETH, SOL,
+XRP and DOGE as well as BTC, at roughly four times the storage. Approve retiring
+huginn's unused web app. Optionally harden the host beyond Norse, which no longer
+needs it: the containers of other projects on this machine that still bind every
+interface are better bound to 127.0.0.1 than shielded by the macOS firewall, which
+by default lets signed software such as Docker Desktop accept connections anyway.
