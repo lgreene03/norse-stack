@@ -1,178 +1,240 @@
 # Next iteration: from working plumbing to a verdict
 
-Set 2026-11-03. Time box: six weeks, ending 2026-12-15.
+Set 2026-11-03. Revised 2026-11-04 after independent reviews by the quant, CTPO,
+technical, security and user interface specialists, whose definitions live in
+[.claude/agents](../.claude/agents). Time box: ending 2026-12-15.
 
 ## The goal
 
 By 2026-12-15 Norse returns a pre-registered, cost-honest verdict on whether any
-strategy that holds for hours to weeks clears the evaluation gate below, on
-2019 to 2025 history and then on a sealed 2026 holdout. If one does, it becomes the
-live paper strategy, with an edge model calibrated from that evaluation rather than
-assumed, and a weekly report comparing paper results against the backtest. If none
-does, the trading claim is retired in writing and Norse is described as what it
-demonstrably is: a multi-venue market-data recording and research platform.
+strategy that holds for hours to weeks clears the evaluation gate below. The
+verdict comes from a harness that cannot be fooled by its own operators: every
+trial is counted in an append-only ledger, every dataset is pinned by hash, and the
+holdout is sealed in code. If a strategy passes, the verdict is published and
+wiring it into paper trading becomes the next milestone; this iteration does not
+bundle the two. If none passes, the trading claim is retired in writing and Norse
+becomes an honest strategy-falsification lab over a two-venue spot order-book
+archive that no free source offers.
 
 Success is the verdict, not a profit figure. A clean, documented "no" is a
-successful iteration; another month of tuning without a pre-registered test is
-not.
+successful iteration.
+
+## What viable means, and how it is measured
+
+Viable means a registered hypothesis becomes a trustworthy verdict cheaply. The
+product metric: every verdict reproduces exactly from a clean checkout, run by an
+independent agent, within five working days of registration. Two guardrails hold
+throughout: zero unledgered trials, and recorder completeness of at least 99.5% of
+minutes per venue.
+
+## The team and decision rights
+
+The quant specialist owns the pre-registration, the hypotheses, the gate's
+statistics and their known-answer tests, the trial budget and the verdict. The
+technical specialist builds the harness, loaders, manifests, ledger and seal
+mechanics, and owns the CI gates. The security specialist owns network exposure,
+secrets, supply chain, data licences, and the integrity of the ledger and the seal.
+The user interface specialist owns every view of results, the honesty rules for how
+strategies are presented, and recording health. The CTPO owns scope, dates, the
+owner's decisions memo, positioning for both outcomes and the weekly review.
+
+Unsealing the holdout needs the quant specialist and the owner. A written review is
+held each Tuesday and a gate review at the end of each milestone. Done means CI
+green on main, an independent reproduction, and documentation in the same pull
+request.
 
 ## Where the product stands
 
-The platform now works end to end, which it did not a month ago. muninn has
-recorded Binance and OKX BTC-USDT trades and 100 ms order books continuously since
-2026-10-27: 25.8 million Binance and 5.1 million OKX events in the first seven
-days, with 100% scrape uptime, 6 and 32 reconnects respectively, and about 270 MB
-a day in the `muninn-raw` bucket. huginn and sleipnir run on supported Go, and
-obi-bridge's timestamps are honest, so the latency SLO now measures something real.
+The platform works end to end, which it did not a month ago. muninn has recorded
+Binance and OKX BTC-USDT trades and 100 ms books continuously since 2026-10-27:
+25.8 million Binance and 5.1 million OKX events in its first seven days, with 100%
+scrape uptime and about 270 MB a day in the `muninn-raw` bucket.
 
-The trading side has produced no evidence at all. huginn has emitted 119 order
-intents in its lifetime and none since it was restarted on 2026-10-27. Its cost
-gate only admits an entry whose expected edge clears the round-trip cost, and the
-edge estimate (a fixed 60 bps per unit of score, never calibrated) never clears
-20 bps when typical composite scores sit around 0.1 to 0.2. That refusal is the
-correct behaviour for a strategy with no edge, and the evidence below says it has
-none. The consequence is that running paper trading longer, as configured, cannot
-teach us anything.
+The trading side has produced no evidence. huginn's last fill was on 2026-06-22, and
+none has occurred inside Kafka's seven-day retention since. The cause is not yet
+confirmed. The cost gate was first blamed, but its suppression counter has never
+been emitted; the more likely block is the composite strategy's one-position-per-
+instrument check, which runs before the cost gate while five positions sit open and
+the strategy has no exit path. The reviews also found three defects that would have
+corrupted this iteration's results had they gone unnoticed. huginn's risk manager
+rolls its daily loss window on the wall clock, so in a backtest the 10,000 "daily"
+limit is a lifetime cap: that is the unexplained -10,000 in fold 4 of the six-month
+verdict. huginn's PBO is a fold-level proxy, not the combinatorially symmetric
+method the gate names, and its deflated Sharpe is computed per fold and averaged.
+And 23 of the stack's published ports bind to every interface on a machine whose
+firewall is off, exposing both Postgres databases, Grafana and the unauthenticated
+research gateway to the home network.
 
 ## What the evidence says
 
-### The live signal, tested on our own books for the first time
+### Order-book imbalance, tested on our own books
 
-Every earlier verdict (see [EDGE_VERDICT.md](EDGE_VERDICT.md)) tested trade-flow
-imbalance on bars, because no order-book history existed. The recorder changed
-that, so on 2026-11-03 the live signal, top-of-book size imbalance, was tested
-directly on three days of recorded books (2026-10-28 to 10-30): 2,583,666 Binance
-snapshots over the top 10 levels and 1,609,001 OKX snapshots over the top 5.
-[scripts/research/obi_decile_test.py](../scripts/research/obi_decile_test.py)
-reproduces it; the full output is in
+The live signal was tested on three days of recorded books (2026-10-28 to 10-30):
+2,583,666 Binance snapshots over the top 10 levels and 1,609,001 OKX snapshots over
+the top 5. [scripts/research/obi_decile_test.py](../scripts/research/obi_decile_test.py)
+reproduces it; the output is in
 [research/obi-decile-2026-10-28-to-30.txt](research/obi-decile-2026-10-28-to-30.txt).
 
-| Binance BTC-USDT, forward mid return | 1 s | 5 s | 60 s | 5 min | 1 h |
-|---|---|---|---|---|---|
-| Top minus bottom decile, entry at observation | 0.66 bps | 1.36 bps | 2.27 bps | not significant | not significant |
-| Same, entry 2 s later (huginn's latency) | 0.18 bps | 0.59 bps | 1.34 bps | not significant | not significant |
-| t statistic of the top decile, non-overlapping samples | 58.7 | 23.3 | 2.2 | -1.0 | 0.5 |
+| Binance BTC-USDT, forward mid return | 1 s | 5 s | 60 s | 5 min and longer |
+|---|---|---|---|---|
+| Top minus bottom decile, entry at observation | 0.66 bps | 1.36 bps | 2.27 bps | unresolved |
+| Same, entry 2 s later (huginn's latency) | 0.18 bps | 0.59 bps | 1.34 bps | unresolved |
+| t statistic of the top decile, non-overlapping samples | 58.7 | 23.3 | 2.2 | too few samples |
 
-The signal is real. Returns rise monotonically across the deciles, the effect is
-overwhelmingly significant at seconds, and OKX reproduces it independently (0.65
-bps at 1 s, 1.36 bps at 60 s). It is also economically worthless to us. The best
-gross move it predicts is about 1 bp, the round trip costs about 20, and huginn's
-2 s decision latency removes 40% (at 60 s) to 75% (at 1 s) of the little there is. This matches the
-literature: a 2026 study of Binance perpetuals found the order-flow effect gone
-within about 10 s and worth about 0.5 bp per trade gross, "roughly one-tenth of a
-single taker fee". Order-book imbalance is retired as an alpha. It may still be
-used to time entries, where it is worth at most about a tick.
+The signal is real at seconds and reproduces on OKX, and it is economically
+worthless to us: about 1 bp at best against a 20 bps round trip, with the 2 s
+latency removing 40% to 75% of it. Two caveats from the quant review: beyond five
+minutes there are only 8 to 10 independent samples and the market's drift
+dominates, so those horizons are unresolved rather than shown to be empty; and the
+decile cut-offs were fitted on the data they test. Neither changes the cost
+arithmetic, which alone retires order-book imbalance as an alpha. It may still time
+entries, where it is worth at most about a tick.
 
-### Costs set the horizon
+### Costs, power and data
 
-At the lowest retail tier a round trip costs 20 bps on Binance (15 with the BNB
-discount) and 16 to 20 bps on OKX, while BTC-USDT's quoted spread is a single tick
-(0.001 bps), so fees, not spread, are the hurdle. Maker orders do not escape it,
-because Binance's entry tier charges makers the same as takers. Kraken (40 / 80
-bps a side since July 2026) and Coinbase Advanced (50 / 90 bps) are useful as data
-sources only. At 45% annualised volatility BTC typically moves about 6 bps in a
-minute and about 48 bps in an hour, so a 20 bps cost is small only for holding
-periods of an hour or more. The published evidence that credibly survives costs
-also sits there: time-series momentum at daily and weekly frequency (Liu and
-Tsyvinski, 2021) and, with weaker evidence, funding, basis and open interest as
-regime and crash indicators.
-
-### Statistical power sets the method
-
-Telling an annualised Sharpe ratio of 1.0 from zero at one-sided 95% confidence
-needs about 141 weeks of out-of-sample returns; a Sharpe of 3 needs about 16
-weeks. Trading more often does not shorten this. No paper-trading run inside one
-iteration can therefore establish a modest edge; only long history can. That
-history exists for free at the horizons that matter: Binance spot klines and
-trades from 2017, and perpetual funding rates from 2019. It does not exist for
-spot order books. data.binance.vision publishes no spot depth, its perpetual
-`bookDepth` bands are about 100 times too coarse for top-of-book work (see
-[huginn's BOOKDEPTH_FINDING.md](https://github.com/lgreene03/huginn/blob/main/docs/BOOKDEPTH_FINDING.md)),
-and Tardis.dev offers only the first day of each month without a key. Recording
-forward was the right choice and continues; the book history it builds serves the
-work after this iteration.
+A retail round trip costs 20 bps on Binance (15 with the BNB discount) and 16 to 20
+on OKX, against a one-tick BTC spread, so fees set the horizon at an hour or more.
+Kraken and Coinbase fees make them data sources only. Telling an annualised Sharpe
+of 1 from zero needs about 141 weeks out of sample, so the verdict must come from
+history, not paper trading. The free history is shorter than first assumed: on
+data.binance.vision, SOL spot begins 2020-08, DOGE spot 2019-07, BTC funding and
+premium index 2020-01 and BTC open interest 2020-09. There is no free source of
+months of spot order books, so recording forward continues.
 
 ## The evaluation gate, fixed before any test runs
 
-A strategy passes only if all of the following hold. They are written down now
-so that no result can move them.
+The pre-registration is signed and tagged `prereg-v1` on 2026-11-07, before any
+trial, and nothing in it moves after a result is seen.
 
-Returns are net of 20 bps per round trip plus the slippage model huginn's executor
-already applies. Development uses walk-forward evaluation on 2019-01-01 to
-2025-12-31. The holdout, 2026-01-01 to 2026-10-31, is sealed: the harness refuses
-to evaluate it until the final run, and it is run once. Every configuration tried
-is recorded in a trial ledger, and the ledger's count is the N in the deflated
-Sharpe ratio. With seven years of development data, keeping the best zero-skill
-backtest at an expected Sharpe of 1 or below limits the budget to about 30 trials
-across the whole iteration (from the minimum backtest length, 2 ln N divided by
-the squared expected maximum Sharpe). The pass mark is a deflated Sharpe ratio
-above 0.95 on walk-forward out-of-sample returns, a probability of backtest
-overfitting below 0.5 by combinatorially symmetric cross-validation over 16
-blocks, and a positive holdout Sharpe inside the walk-forward confidence
-interval. Ten months of holdout can only catch a large failure, not confirm a
-modest success, and this document says so rather than pretending otherwise.
+A trial is any run whose out-of-sample result is viewed, reruns after fixes
+included. Trials are recorded in an append-only, hash-chained ledger in git; N in
+every statistic is read from it; the harness refuses to run on a dirty tree, on
+data absent from a committed manifest, or if the ledger write fails; unledgered
+results do not count, and a broken chain voids the iteration. Costs are 10 bps a
+side plus the executor's slippage model; the harness defaults (14 bps a round trip,
+and 5 plus 2 in the gateway) are aligned to this first.
+
+A strategy passes only if all of the following hold. The deflated Sharpe ratio on
+the joined daily walk-forward out-of-sample returns exceeds 0.95, with N the ledger
+count. The same holds for returns in excess of a volatility-matched, equal-weight
+buy-and-hold of the same universe, because a long-flat trend rule can otherwise
+pass on market exposure alone. The combinatorially symmetric PBO over 16 blocks is
+below 0.5. The Sharpe stays positive with each year removed and with the best 20
+days removed. On the holdout, run once for one candidate, the Sharpe is positive and
+no more than 1.645 standard errors below the walk-forward estimate.
+
+What that means in practice is published with the pre-registration: over about 5.6
+years of daily returns, passing needs a net Sharpe of roughly 1.6 at N = 30, or 1.4
+at N = 10. The holdout, 2026-01-01 to 2026-10-31, is sealed in code: the harness
+refuses events on or after its start unless an unseal names the committed
+pre-registration, and a second unseal fails. It is contaminated by hindsight,
+because everyone has seen 2026 prices, so it can only catch a failure; paper
+trading after the verdict is the first genuinely unseen evidence. Before judging
+any strategy, the gate must pass at most 5% of 1,000 simulated no-skill ledgers at
+N = 30 and detect a planted Sharpe of 1.5. Every result cites its dataset manifest
+hash and commit SHA.
+
+## Hypotheses
+
+**H1, time-series trend.** At each month end the universe is the five largest
+non-stablecoin Binance USDT spot pairs by 30-day volume, delisted pairs included,
+so the coins are not chosen with hindsight. The signal is an equal blend of the
+signs of 20, 60 and 120-day returns; positions are long or flat, sized to 20%
+annualised volatility on a 60-day exponentially weighted estimate, at most 1x per
+coin; rebalancing happens on the 00:00 UTC close, filled at the next 15-minute
+average price, only when the change exceeds 25% of target. Four-hour bars and a
+funding filter are one trial each. Budget: at most 12 trials.
+
+**H2, funding carry.** Long spot and short perpetual on BTC and ETH, entered when
+trailing seven-day funding exceeds twice the round-trip cost spread over 28 days and
+exited below it, developed on 2020-01 onwards. Its return is a published cash flow
+that lasts weeks, so latency does not matter, and it is the hypothesis with the
+best chance of being detectable within these power limits. It needs paper short
+perpetual positions, which is an owner decision; if that is declined, H2 reverts to
+funding as a regime filter on H1. Budget: at most 12 trials. Six further trials are
+held in reserve.
+
+Benchmark runs and random-sign control runs are recorded but can never be selected.
 
 ## Milestones
 
-**M0, by 2026-11-10: close the books on order-book imbalance.** Update
-EDGE_VERDICT.md with the decile test. Remove OBI's weight as an alpha in the live
-composite, keeping it available as an entry-timing input. Decide who owns
-`features.obi.v1`. The recommendation is that muninn publishes its features under
-its own prefix: the signal is no longer worth migrating huginn's consumer for,
-and obi-bridge keeps serving huginn unchanged. Wire an Alertmanager receiver,
-which needs a channel and credentials from the owner.
+**M0, by 2026-11-10: safe, honest, pre-registered.** Security: every published port
+bound to 127.0.0.1, database host ports removed, the research gateway and muninn's
+ingest endpoints closed to the network, `.env*` and `secrets/` ignored, credentials
+passed by file, and the corrected SECURITY.md; re-audit by 11-07. CTPO: the owner's
+decisions memo by 11-06 and the signed pre-registration by 11-07; README, ROADMAP
+and EDGE_VERDICT stop presenting order-book imbalance as an alpha or parity as
+achieved. Technical: the event-time risk fix, proven by a test that reproduces fold
+4 before the fix, and muninn's features moved under a `muninn.features.` prefix
+with a test forbidding unprefixed topics. Interface: no retired or unverified signal
+appears as live anywhere (the console's Alpha Factory, its static verdict banner and
+its lifetime-as-today figures), Grafana's broken queries fixed and a Recording
+Health row added per venue. Alerts: recorder gaps, flush failures and disk join the
+rules, the never-firing NoFillsExecuted is fixed, and the receiver chosen by the
+owner is wired through a credential file. Quant: the cause of huginn's idleness
+confirmed, and fold 4 rerun with limits off.
 
-**M1, by 2026-11-17: build the gate.** Extend huginn's existing walk-forward
-research path with the trial ledger, the deflated Sharpe ratio with that N,
-combinatorially symmetric PBO, a minimum-track-record report and the holdout seal.
-Fix the two known defects first: the hit rate hardcoded to 0.0% at
-research.go:402 and the unexplained -10,000 result in fold 4 of the six-month run.
-The gate passes its own tests before it judges any strategy.
+**M1, by 2026-11-19: the gate.** The trial ledger with adversarial tests (an edited,
+deleted or reordered entry, a dirty tree, unmanifested data, an early or repeated
+unseal, an unauthenticated submission); loaders for klines and funding with
+checksum verification and a committed manifest; true CSCV; the deflated Sharpe on
+joined returns with ledger N; minimum track record length; and the seal. The
+calibration report is due 11-17 and the gate is not used until it passes it. A
+generated GATE_STATUS page and a console gate panel read the ledger, results and
+seal. The date is two days later than first set, and this says so.
 
-**M2, by 2026-12-01: test two hypotheses.** H1 is time-series trend on BTC, ETH,
-SOL, XRP and DOGE, on daily and four-hour bars, volatility-targeted and penalised
-for turnover, using public klines. H2 uses perpetual funding, basis and open
-interest as a regime filter that cuts H1's exposure when positioning is extreme,
-using public funding history (Binance's public funding endpoint needs no key; its
-coverage is to be confirmed at the start of M2). H2 is only evaluated as a
-modification of H1, because crashes are too rare to test a standalone crash
-signal. Both share the 30-trial budget.
+**M2, by 2026-12-01: the trials.** H1 and H2 run inside their budgets, with
+benchmark and control runs, tear sheets generated per hypothesis (net of 20 bps,
+intervals, deflated Sharpe, PBO, minimum track record, cost sensitivity at 15, 20
+and 30 bps), and every input checksum-verified with its licence recorded. The ledger
+is frozen on 12-01.
 
-**M3, by 2026-12-15: the verdict.** If a strategy passes, it is added as an alpha
-through [ADDING_AN_ALPHA.md](ADDING_AN_ALPHA.md), huginn's edge model is replaced
-by the expectation measured in the evaluation, and paper trading starts with a
-weekly report breaking the gap between paper and backtest into fees, spread,
-delay and missed fills. If nothing passes, EDGE_VERDICT.md records the kill and
-the README is rewritten around the platform's data and research value.
+**M3, by 2026-12-15: the verdict.** The single holdout run by 12-08, the verdict
+memo, a security attestation that the chain verifies from a clean clone with
+exactly one unseal, and a generated verdict page. Both README outcomes are drafted
+before the unseal; the matching one is merged.
 
 ## Kill criteria
 
-If H1 and H2 both fail the gate, strategy search stops for this product: no
-re-tuning, no new hypotheses invented after seeing results. If the trial budget
-is exhausted before a pass, that is a fail. If a passing strategy's realised cost
-per trade on paper exceeds the backtest's assumption by more than half over the
-first four weeks, it is suspended pending a cost review. That last threshold is
-this project's own judgement; the literature gives no accepted figure.
+If H1 and H2 both fail, strategy search stops for this product: no re-tuning and no
+hypotheses invented after seeing results. If the gate fails its no-skill
+calibration, no strategy is judged. If the trial budget is exhausted before a pass,
+that is a fail. If the ledger's chain breaks, the iteration is void and restarts
+from pre-registration.
 
-## Out of scope for this iteration
+## Interface rules for the whole iteration
 
-Further microstructure alpha search, which the evidence above closes. New
-execution venues, because Kraken's and Coinbase's fees rule them out. Training
-the served ML model, until a gated alpha exists for it to filter. Live trading of
-any kind. Note also that Binance's public-data terms (CC BY-NC-SA 4.0, clause 4.2)
-prohibit live proprietary trading execution based on that data, so any move to
-live trading would need a different data basis, not only a different risk
-appetite.
+No backtest figure appears without the trials used out of the budget, the deflated
+Sharpe, the PBO, the buy-and-hold benchmark, the cost basis, the data window and the
+generation date beside it. Net returns are the headline. Missing data reads "no
+data", never 0. A status word such as RUNNING is backed by recent events, and stale
+values show their age. Verdicts are generated from data, never typed. Holdout
+figures appear only once it is opened, with the time it was opened. Text is at
+least 12 px with contrast of at least 4.5:1, and pass or fail is shown in words, not
+colour alone.
+
+## Out of scope
+
+Further microstructure alpha search. New execution venues. Training the served ML
+model. Live trading of any kind; note that Binance's public-data terms (CC BY-NC-SA
+4.0, clause 4.2) prohibit live proprietary trading based on that data, so going
+live would need a different data basis, not only a different risk appetite.
 
 ## Keeps running
 
-The recorder keeps writing both venues' trades and books, at about 8 GB a month.
-The decile test is re-run monthly on the growing history, since a signal that is
-worthless at 20 bps today would matter at a lower fee tier.
+The recorder keeps writing both venues at about 8 GB a month, and the decile test
+is re-run monthly with drift-adjusted statistics.
 
 ## Decisions for the owner
 
-Who owns `features.obi.v1` (recommendation above). Where alerts should go. Whether
-the weekly scheduled task `norse-parity-advance` should be repointed at this goal,
-since its parity target matters less once order-book imbalance is retired as an
-alpha.
+The CTPO's memo carries the rationale; the recommendations are these. Keep
+`features.obi.v1` as obi-bridge's, frozen, and move muninn under its own prefix.
+Send critical alerts (recorder gaps, disk, flush failures) to a channel you choose,
+with its credential kept in an untracked file; a private ntfy topic needs no
+account. Repoint the weekly scheduled task `norse-parity-advance` to a read-only
+`norse-iteration-watch` that reports drift, completeness and the monthly decile
+re-run and never touches the gate, ledger or seal. Approve paper short perpetual
+positions for H2, or decline and keep H2 as a filter. Decide who holds the holdout
+key, and state who has already looked at 2026 prices. Turn the macOS firewall on,
+which only you can do. Approve recording ETH, SOL, XRP and DOGE as well as BTC, at
+roughly four times the storage. Approve retiring huginn's unused web app.
