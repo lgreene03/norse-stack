@@ -11,6 +11,13 @@ Thumbs.db
 # Docker volumes
 data/
 
+# Local secrets. docker-compose.yml reads credentials from .env; only the
+# placeholder template .env.example is tracked.
+.env
+.env.*
+!.env.example
+secrets/
+
 # Python (test/coverage artifacts produced by the services CI job)
 __pycache__/
 *.py[cod]
