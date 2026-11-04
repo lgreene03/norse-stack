@@ -21,11 +21,27 @@ demos, and research.
 The trust boundary is **the host machine and its loopback interface.** Everything
 inside the Compose network is treated as a single trusted domain:
 
-- All externally reachable service ports are **bound to `127.0.0.1`** in
-  `docker-compose.yml` (e.g. Redpanda `127.0.0.1:19092`, Redpanda Console
-  `127.0.0.1:8088`, MinIO `127.0.0.1:9002/9003`). They are **not** exposed on
-  the host's public interfaces. An attacker would already need local access to
-  the host to reach them.
+- Every port `docker-compose.yml` publishes is **bound to `127.0.0.1`**, so
+  none is reachable from another machine on the network, and CI's validate job
+  fails any change that publishes a port on another address. Until 2026-11-04
+  this document claimed the same while 20 of the 24 published ports used the
+  short `HOST:CONTAINER` form, which Docker binds to every interface; that
+  exposed both Postgres databases, Grafana, the huginn and sleipnir control
+  planes, muninn's ingest endpoints and the research gateway to the local
+  network.
+- The two Postgres databases publish **no host port at all**; only their own
+  service uses each one. For a shell, use `docker compose exec postgres-huginn
+  psql -U postgres huginn` or `docker compose exec postgres-muninn psql -U
+  muninn muninn`.
+- Loopback binding protects the published ports only. On macOS, also turn on
+  the firewall (System Settings, Network, Firewall), which only the owner can
+  do, so that anything else on the host listening on every interface is not
+  open to the network either.
+- The optional console dev server (`console/serve.py`, port 8090) is not part
+  of the compose stack and currently listens on every interface. It proxies to
+  the loopback services, including research run submission, so it re-exposes
+  them while it runs; run it only on a trusted network until it binds to
+  loopback.
 - Inter-service traffic (HTTP APIs, Kafka, OTLP) stays on the internal Docker
   network and never crosses an untrusted link.
 
@@ -66,8 +82,9 @@ placeholders and MUST be overridden for any non-throwaway use.
 
 ## Secrets handling
 
-- Real secrets live only in an untracked `.env` (gitignored); the repo ships
-  `.env.example` with placeholders.
+- Real secrets live only in an untracked `.env`; the repo ships `.env.example`
+  with placeholders. `.gitignore` excludes `.env`, every other `.env.*` file
+  and `secrets/` (it did not until 2026-11-04).
 - CI runs a **gitleaks** secret-scanning job, and a matching **pre-commit hook**
   (`.pre-commit-config.yaml`) blocks committing hard-coded credentials locally.
 - Python service dependencies are scanned with **pip-audit** in CI

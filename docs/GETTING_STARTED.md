@@ -36,7 +36,7 @@ docker compose up -d --build
 
 First run takes 3-5 minutes (image builds). Subsequent starts take ~30 seconds.
 
-> **Port conflict?** If port 5437 is in use by another project, edit `docker-compose.yml` and change the postgres-muninn port mapping (e.g. `5438:5432`).
+> **Port conflict?** If port 8080 is in use by another project, set `MUNINN_HOST_PORT` (e.g. `MUNINN_HOST_PORT=18080`) in `.env`. Every published port binds to 127.0.0.1 only, and the Postgres databases publish none, so they cannot clash with another project's Postgres.
 
 Once running, verify:
 

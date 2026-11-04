@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security
+- Every port published by docker-compose.yml now binds to 127.0.0.1; 20 of 24 had
+  bound to every interface, exposing the databases, Grafana, the control planes
+  and the research gateway to the local network. The Postgres host ports are
+  removed, CI fails any port published on another address, and `.env`, `.env.*`
+  and `secrets/` are gitignored
+
 ### Added
 - Unified docker-compose.yml booting the full stack (23 containers) plus infrastructure
 - End-to-end smoke test validating the full trade-to-fill pipeline

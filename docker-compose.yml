@@ -10,6 +10,11 @@
 #
 # Requires sibling checkouts: ../muninn, ../huginn, ../sleipnir
 # Run ./scripts/clone-all.sh to set up all repos.
+#
+# Every published port is bound to 127.0.0.1. The short form "HOST:CONTAINER"
+# binds to every interface, which exposed the databases, Grafana, the control
+# planes and the research gateway to the whole local network until 2026-11-04.
+# CI fails any port published without host IP 127.0.0.1 (see ci.yml, validate).
 
 services:
 
@@ -51,8 +56,8 @@ services:
       POSTGRES_DB: muninn
       POSTGRES_USER: muninn
       POSTGRES_PASSWORD: ${MUNINN_DB_PASSWORD:-muninn}
-    ports:
-      - "5437:5432"
+    # No host port: only muninn uses this database, over the compose network.
+    # For a shell: docker compose exec postgres-muninn psql -U muninn muninn
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U muninn"]
       interval: 5s
@@ -68,8 +73,8 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${HUGINN_DB_PASSWORD:-postgres}
       POSTGRES_DB: huginn
-    ports:
-      - "5436:5432"
+    # No host port: only huginn uses this database, over the compose network.
+    # For a shell: docker compose exec postgres-huginn psql -U postgres huginn
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -143,7 +148,7 @@ services:
       # Host side only, for reaching muninn's API from the host. Services in the
       # stack use muninn:8080 on the compose network, so changing this breaks
       # nothing inside. Set MUNINN_HOST_PORT when 8080 is taken on the host.
-      - "${MUNINN_HOST_PORT:-8080}:8080"
+      - "127.0.0.1:${MUNINN_HOST_PORT:-8080}:8080"
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-muninn:5432/muninn
       SPRING_DATASOURCE_USERNAME: muninn
@@ -203,9 +208,9 @@ services:
       postgres-huginn:
         condition: service_healthy
     ports:
-      - "8083:8081"
-      - "8084:8084"
-      - "50051:50051"
+      - "127.0.0.1:8083:8081"
+      - "127.0.0.1:8084:8084"
+      - "127.0.0.1:50051:50051"
     environment:
       KAFKA_BROKERS: redpanda:29092
       KAFKA_TOPICS: features.obi.v1
@@ -290,7 +295,7 @@ services:
       redpanda:
         condition: service_healthy
     ports:
-      - "8085:8080"
+      - "127.0.0.1:8085:8080"
     environment:
       KAFKA_BROKERS: redpanda:29092
       KAFKA_INTENTS_TOPIC: executions.intents.v1
@@ -373,7 +378,7 @@ services:
       redpanda:
         condition: service_healthy
     ports:
-      - "8086:8086"
+      - "127.0.0.1:8086:8086"
     environment:
       KAFKA_BROKERS: redpanda:29092
       FILLS_TOPIC: executions.fills.v1
@@ -401,7 +406,7 @@ services:
       redpanda:
         condition: service_healthy
     ports:
-      - "8087:8087"
+      - "127.0.0.1:8087:8087"
     environment:
       KAFKA_BROKERS: redpanda:29092
       FEATURES_TOPIC: features.obi.v1
@@ -432,7 +437,7 @@ services:
       context: ../huginn
       dockerfile: Dockerfile.research
     ports:
-      - "8094:8094"
+      - "127.0.0.1:8094:8094"
     environment:
       RESEARCH_PORT: "8094"
       RESEARCH_RESULTS_DIR: data/research
@@ -466,7 +471,7 @@ services:
       redpanda:
         condition: service_healthy
     ports:
-      - "8095:8095"
+      - "127.0.0.1:8095:8095"
     environment:
       KAFKA_BROKERS: redpanda:29092
       FEATURES_TOPIC: features.obi.v1
@@ -500,7 +505,7 @@ services:
       redpanda:
         condition: service_healthy
     ports:
-      - "8096:8096"
+      - "127.0.0.1:8096:8096"
     environment:
       KAFKA_BROKERS: redpanda:29092
       FILLS_TOPIC: executions.fills.v1
@@ -534,7 +539,7 @@ services:
       mimir:
         condition: service_started
     ports:
-      - "8097:8097"
+      - "127.0.0.1:8097:8097"
     environment:
       KAFKA_BROKERS: redpanda:29092
       FEATURES_TOPIC: features.obi.v1
@@ -564,7 +569,7 @@ services:
       redpanda:
         condition: service_healthy
     ports:
-      - "8092:8091"
+      - "127.0.0.1:8092:8091"
     environment:
       KAFKA_BROKERS: redpanda:29092
       FEATURES_TOPIC: features.obi.v1
@@ -596,8 +601,8 @@ services:
     image: grafana/tempo:2.5.0
     command: ["-config.file=/etc/tempo.yaml"]
     ports:
-      - "3200:3200"  # Tempo HTTP / query API
-      - "4317:4317"  # OTLP gRPC ingest
+      - "127.0.0.1:3200:3200"  # Tempo HTTP / query API
+      - "127.0.0.1:4317:4317"  # OTLP gRPC ingest
     volumes:
       - ./monitoring/tempo.yaml:/etc/tempo.yaml:ro
     mem_limit: 512m
@@ -606,7 +611,7 @@ services:
   prometheus:
     image: prom/prometheus:v2.53.0
     ports:
-      - "9091:9090"
+      - "127.0.0.1:9091:9090"
     # remote-write-receiver lets Tempo's metrics_generator push service-graph /
     # span metrics here so Grafana's service-graph view has data. The default
     # config-file + scrape flags must be restated when overriding command.
@@ -631,7 +636,7 @@ services:
   alertmanager:
     image: prom/alertmanager:v0.27.0
     ports:
-      - "9093:9093"
+      - "127.0.0.1:9093:9093"
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml
     volumes:
@@ -642,7 +647,7 @@ services:
   grafana:
     image: grafana/grafana:11.1.0
     ports:
-      - "3001:3000"
+      - "127.0.0.1:3001:3000"
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-norse}
@@ -662,7 +667,7 @@ services:
       context: ./services/news-sentinel
       dockerfile: Dockerfile
     ports:
-      - "8089:8089"
+      - "127.0.0.1:8089:8089"
     environment:
       OLLAMA_HOST: "http://host.docker.internal:11434"
       OLLAMA_MODEL: "qwen2.5:14b"

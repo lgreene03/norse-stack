@@ -51,6 +51,9 @@ norse-stack/services/
 
 ## Ports
 
+Every host port binds to 127.0.0.1 only, and CI rejects any that does not. The
+Postgres databases publish no host port; use `docker compose exec`.
+
 | Port  | Service            |
 |-------|--------------------|
 | 8080  | Muninn API         |
@@ -67,8 +70,6 @@ norse-stack/services/
 | 8097  | Heimdall Regime    |
 | 9002  | MinIO API          |
 | 9003  | MinIO Console      |
-| 5437  | PostgreSQL (Muninn)|
-| 5436  | PostgreSQL (Huginn)|
 | 9091  | Prometheus         |
 | 9093  | Alertmanager       |
 | 3001  | Grafana            |

@@ -24,6 +24,35 @@ jobs:
       - name: Validate docker-compose.yml
         run: docker compose config --quiet
 
+      # Every published port must bind to 127.0.0.1. Compose's short form
+      # "HOST:CONTAINER" binds to every interface: until 2026-11-04 that left 20
+      # of 24 ports, including both Postgres databases, Grafana, the control
+      # planes and the unauthenticated research gateway, open to the whole local
+      # network while SECURITY.md said otherwise. Checking the rendered config
+      # covers variable substitution (MUNINN_HOST_PORT) and the GHCR override.
+      - name: Published ports bind to loopback only
+        run: |
+          set -euo pipefail
+          status=0
+          for files in docker-compose.yml docker-compose.yml:docker-compose.ghcr.yml; do
+            config=$(COMPOSE_FILE="$files" docker compose config --format json)
+            total=$(jq '[.services[].ports // [] | .[]] | length' <<<"$config")
+            exposed=$(jq -r '.services | to_entries[] | .key as $svc
+              | (.value.ports // [])[] | select(.host_ip != "127.0.0.1")
+              | "  \($svc): \(.host_ip // "every interface"):\(.published) -> \(.target)"' <<<"$config")
+            if [ "$total" -eq 0 ]; then
+              echo "::error::$files publishes no ports at all; this check is reading the wrong config"
+              status=1
+            elif [ -n "$exposed" ]; then
+              echo "::error::$files publishes ports beyond 127.0.0.1:"
+              echo "$exposed"
+              status=1
+            else
+              echo "$files: all $total published ports bind to 127.0.0.1"
+            fi
+          done
+          exit "$status"
+
       - name: Shellcheck scripts
         run: |
           sudo apt-get install -y shellcheck
