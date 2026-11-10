@@ -45,7 +45,9 @@ phase() { echo -e "\n${CYAN}${BOLD}═══ $1 ═══${NC}"; }
 
 FAILURES=0
 
-# shellcheck disable=SC2317
+# cleanup runs from the EXIT trap below, which shellcheck does not count as a call:
+# SC2317 (older releases) and SC2329 (0.11.0 onwards) both report it as never invoked.
+# shellcheck disable=SC2317,SC2329
 cleanup() {
   if [ "$TEARDOWN" = true ]; then
     info "Tearing down stack..."
