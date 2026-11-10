@@ -209,7 +209,6 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:8083:8081"
-      - "127.0.0.1:8084:8084"
       - "127.0.0.1:50051:50051"
     environment:
       KAFKA_BROKERS: redpanda:29092
