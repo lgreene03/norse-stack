@@ -31,13 +31,13 @@ The weekly review is held on Tuesdays (11-10, 11-17, 11-24, 12-01, 12-08 and
 | G0.7 | Pre-registration signed and tagged `prereg-v1` | Quant | 11-07 | Not started |
 | G0.8 | Cause of huginn's idleness confirmed and instrumented | Quant and technical | 11-10 | Not started |
 | G0.9 | Risk manager on event time; fold 4 explained | Technical | 11-10 | Not started |
-| G0.10 | muninn features under their own prefix | Technical | 11-10 | Not started |
+| G0.10 | muninn features under their own prefix | Technical | 11-10 | Done 11-10 ([muninn#87](https://github.com/lgreene03/muninn/pull/87)) |
 | G0.11 | Documentation stops overclaiming | CTPO | 11-10 | Not started |
 | G0.12 | Console honesty and accessibility patch | Interface | 11-07 | Not started |
 | G0.13 | Grafana repaired, Recording Health added | Interface | 11-10 | Not started |
 | G0.14 | Alerts that reach someone | Security and technical | Deferred | Deferred by owner (D2) |
 | G0.15 | Daily recording gap audit | Technical | 11-10 | Not started |
-| G0.16 | Retire huginn's unused web app | Interface | 11-17 | Not started |
+| G0.16 | Retire huginn's unused web app | Interface | 11-17 | Done 11-10 ([huginn#40](https://github.com/lgreene03/huginn/pull/40), [#34](https://github.com/lgreene03/norse-stack/pull/34), [muninn#88](https://github.com/lgreene03/muninn/pull/88)) |
 | G0.17 | Recordings moved to the external drive | Technical | 11-12 | Not started |
 | G0.18 | Record ETH, SOL, XRP and DOGE on both venues | Technical | 11-17 | Not started |
 | G1.1 | Dataset loaders with checksums and manifests | Technical | 11-14 | Not started |
@@ -366,6 +366,27 @@ paper-versus-backtest shortfall template is ready for the next iteration.
 matching README outcome and this register's final statuses are merged, and the next
 iteration's goal is drafted: paper wiring on a pass, the research-platform positioning
 on a fail.
+
+## Follow-ups from reviews
+
+Findings that independent reviews raised against merged work and did not block it.
+They are owned and visible here rather than lost in pull request threads; the driver
+picks them up after the dated goals, highest severity first, and the CTPO may promote
+one to a goal.
+
+| Severity | Finding | Raised by, on | Owner |
+|---|---|---|---|
+| Medium | Redpanda has no authentication or ACLs, so any client on the compose network can still write to `features.obi.v1`, huginn's trading input. Allow only obi-bridge to write it. | Security, muninn#87 | Security |
+| Medium | muninn's feature archival has no on/off switch, labels every batch `instrument=BTC-USDT` whatever the symbol, and can lose up to a batch on failure. Fix before enabling the engine for any other symbol. | Security, muninn#87 | Technical |
+| Medium | huginn's Helm chart points its HTTP Service port at 8084, where nothing listens; HTTP and metrics share 8081. Needs a template change, since two ports of 8081 would be invalid. | Technical, huginn#40 | Technical |
+| Medium | `TestProp_FlipThroughZero` in huginn's portfolio package is flaky: a 37.21 fee on a 0.029 short drove `AverageCost` negative. Either the generator is unrealistic or the ledger mishandles fees through zero. | Technical, huginn#40 | Quant |
+| Medium | The console server (`console/serve.py`) binds every interface and proxies to huginn's breaker and the research gateway. Already within G0.2. | Security, #28 | Security |
+| Low | `FeatureParquetWriter.buildPartitionPath` puts an unchecked `featureName` from the record into the storage path. | Security, muninn#87 | Technical |
+| Low | muninn's topic-namespace tests watch one form of `send`; add `verifyNoMoreInteractions`, and refuse `features.` with a hard-coded check rather than only the shared prefix constant. | Security, muninn#87 | Technical |
+| Low | `muninn.streaming.topic-pattern`, `muninn.stream.topics` and the consumer group names are unvalidated configuration that could point muninn back at `features.*` or into huginn's consumer group. | Security, muninn#87 | Technical |
+| Low | muninn's live stream pattern also delivers `.replay` and `.DLT` records to clients as if they were live. | Technical and security, muninn#87 | Technical |
+| Low | huginn's `docs/OPERATIONS.md` and `docs/architecture.md` say an empty `HUGINN_API_TOKEN` disables auth; the code refuses with 503. `/api/stream`, `/api/snapshot/history` and the auth in `PUT /api/strategy/config` have no tests. | Technical, huginn#40 | Technical |
+| Low | Stale topic names in norse-stack's `docs/CONTRACTS.md`, `docs/ARCHITECTURE.md`, `docs/RUNBOOK.md` and ADR-0003 (for example `features.vwap.1m.v1` listed with huginn as consumer), and huginn docs saying muninn writes `features.*`. | Technical, muninn#87 | Technical |
 
 ## Capacity and risk
 
