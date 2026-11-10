@@ -38,8 +38,8 @@ The weekly review is held on Tuesdays (11-10, 11-17, 11-24, 12-01, 12-08 and
 | G0.14 | Alerts that reach someone | Security and technical | Deferred | Deferred by owner (D2) |
 | G0.15 | Daily recording gap audit | Technical | 11-10 | Not started |
 | G0.16 | Retire huginn's unused web app | Interface | 11-17 | Done 11-10 ([huginn#40](https://github.com/lgreene03/huginn/pull/40), [#34](https://github.com/lgreene03/norse-stack/pull/34), [muninn#88](https://github.com/lgreene03/muninn/pull/88)) |
-| G0.17 | Recordings moved to the external drive | Technical | 11-12 | Not started |
-| G0.18 | Record ETH, SOL, XRP and DOGE on both venues | Technical | 11-17 | Not started |
+| G0.17 | Recordings moved to the external drive | Technical | 11-12 | In progress: #33 (draft) awaiting security re-review; LEAD-ONLY cut-over, the driver must not merge it or touch MinIO |
+| G0.18 | Record ETH, SOL, XRP and DOGE on both venues | Technical | 11-17 | Code merged (muninn#89); deploy BLOCKED on reconnect and sequence fixes (G0.18b) and the G0.17 cut-over; LEAD-ONLY restart, the driver must not rebuild or restart muninn |
 | G1.1 | Dataset loaders with checksums and manifests | Technical | 11-14 | Not started |
 | G1.2 | Research gateway locked down | Technical | 11-14 | Not started |
 | G1.3 | Gate statistics with known-answer tests | Quant and technical | 11-14 | Not started |
