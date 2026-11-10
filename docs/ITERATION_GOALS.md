@@ -26,17 +26,20 @@ The weekly review is held on Tuesdays (11-10, 11-17, 11-24, 12-01, 12-08 and
 | G0.2 | Exposure follow-ups closed | Security | 11-07 | Not started |
 | G0.3 | Optional host hardening beyond Norse | Owner | Owner's choice | Not started |
 | G0.4 | Credentials passed by file, never on a command line | Security | 11-10 | Not started |
-| G0.5 | Owner decisions memo and decisions log | CTPO | 11-06 | Not started |
+| G0.5 | Owner decisions memo and decisions log | CTPO | 11-06 | Done 11-10 ([DECISIONS.md](DECISIONS.md)) |
 | G0.6 | Data coverage report | Quant | 11-07 | Not started |
 | G0.7 | Pre-registration signed and tagged `prereg-v1` | Quant | 11-07 | Not started |
 | G0.8 | Cause of huginn's idleness confirmed and instrumented | Quant and technical | 11-10 | Not started |
 | G0.9 | Risk manager on event time; fold 4 explained | Technical | 11-10 | Not started |
-| G0.10 | muninn features under their own prefix | Technical | 11-10 | Not started |
+| G0.10 | muninn features under their own prefix | Technical | 11-10 | Done 11-10 ([muninn#87](https://github.com/lgreene03/muninn/pull/87)) |
 | G0.11 | Documentation stops overclaiming | CTPO | 11-10 | Not started |
 | G0.12 | Console honesty and accessibility patch | Interface | 11-07 | Not started |
 | G0.13 | Grafana repaired, Recording Health added | Interface | 11-10 | Not started |
-| G0.14 | Alerts that reach someone | Security and technical | 11-10 | Not started |
+| G0.14 | Alerts that reach someone | Security and technical | Deferred | Deferred by owner (D2) |
 | G0.15 | Daily recording gap audit | Technical | 11-10 | Not started |
+| G0.16 | Retire huginn's unused web app | Interface | 11-17 | Done 11-10 ([huginn#40](https://github.com/lgreene03/huginn/pull/40), [#34](https://github.com/lgreene03/norse-stack/pull/34), [muninn#88](https://github.com/lgreene03/muninn/pull/88)) |
+| G0.17 | Recordings moved to the external drive | Technical | 11-12 | Done 11-10 ([#33](https://github.com/lgreene03/norse-stack/pull/33)); copy verified byte for byte, old volume held until 11-17 |
+| G0.18 | Record ETH, SOL, XRP and DOGE on both venues | Technical | 11-17 | Done 11-10 ([muninn#89](https://github.com/lgreene03/muninn/pull/89), [muninn#90](https://github.com/lgreene03/muninn/pull/90)); five pairs live from 22:10:51Z |
 | G1.1 | Dataset loaders with checksums and manifests | Technical | 11-14 | Not started |
 | G1.2 | Research gateway locked down | Technical | 11-14 | Not started |
 | G1.3 | Gate statistics with known-answer tests | Quant and technical | 11-14 | Not started |
@@ -46,6 +49,7 @@ The weekly review is held on Tuesdays (11-10, 11-17, 11-24, 12-01, 12-08 and
 | G1.7 | Gate calibration on no-skill and planted-edge data | Quant | 11-17 | Not started |
 | G1.8 | Gate status page and console panel | Interface | 11-17 | Not started |
 | G1.9 | Target-position harness shared by backtest and paper | Technical | 11-19 | Not started |
+| G1.10 | Console v2 designed with Claude Design | Interface, with the owner | 11-24 | Not started |
 | G2.1 | Benchmark and control runs | Quant | 11-21 | Not started |
 | G2.2 | H1 trend trials | Quant | 11-26 | Not started |
 | G2.3 | H2 funding carry trials | Quant | 12-01 | Not started |
@@ -183,8 +187,9 @@ that should read 0, and a Recording Health row shows per venue the ingest rate,
 reconnects per day, minutes with no events, recorder flush age and flush failures.
 `scripts/validate-monitoring.py` passes.
 
-**G0.14. Alerts that reach someone.** Owner: security for the receiver, technical for
-the rules. Due 11-10. Depends on G0.4 and G0.5. Done when rules exist, each with a
+**G0.14. Alerts that reach someone.** Deferred by the owner on 2026-11-10 (decision D2:
+the stack is not production). Revisit before any live paper wiring. As originally
+specified: owner: security for the receiver, technical for the rules. Depends on G0.4 and G0.5. Done when rules exist, each with a
 promtool unit test, for a venue silent for five minutes, recorder flush failures,
 object-store write errors, free disk below 15%, and an always-firing watchdog;
 `NoFillsExecuted` either fires correctly or is removed; the receiver chosen by the
@@ -193,6 +198,29 @@ owner is wired through a credential file; and one test alert is seen arriving.
 **G0.15. Daily recording gap audit.** Owner: technical. Due 11-10. Done when a
 scheduled job writes, per venue and day, the minutes covered, the gaps longer than 60
 seconds and the bytes recorded, to a file and a metric that P3 and G0.13 read.
+
+**G0.16. Retire huginn's unused web app.** Owner: interface; technical reviews. Due
+11-17. Decision D6. Done when `huginn/web` and its CI job are removed, no document or
+compose file refers to it, nothing else in huginn depended on it (shown by huginn's full
+CI passing), and its mock-fill route into the real executor is gone with it.
+
+**G0.17. Recordings moved to the external drive.** Owner: technical; security reviews.
+Due 11-12. Decision D5. Done when MinIO's data is a named bind mount whose host path
+comes from `MINIO_DATA_DIR` (default unchanged for other machines), set locally in the
+git-ignored `.env` to a folder on "Mac 4T" alongside `MUNINN_HOST_PORT=18080`; the
+existing recordings were copied, not moved, and verified by object count and total size
+before the switch; the recorder resumed with no gap beyond Kafka's retention; and the
+old anonymous volume is kept untouched for a week before anyone removes it. The
+behaviour when the drive is absent (MinIO fails, the recorder pauses with backoff and
+catches up from Kafka) is documented.
+
+**G0.18. Record ETH, SOL, XRP and DOGE on both venues.** Owner: technical; quant
+reviews. Due 11-17. Depends on G0.17. Done when muninn's Binance adapter subscribes to
+every configured instrument and attributes each message to its own instrument from the
+stream name (today it uses only the first), with a test that interleaved messages for
+two instruments are never mixed; OKX is configured for the same five pairs; the raw
+recorder writes each pair under its own instrument partition; and the gap audit (G0.15)
+covers all ten venue-pair streams.
 
 ## M1, by 2026-11-19: a gate that cannot be fooled
 
@@ -263,6 +291,14 @@ slippage (the 14 bps and 5 plus 2 bps defaults are aligned); the same strategy o
 runs the backtest and paper; and a golden-fixture test shows both emit identical
 orders for the same inputs.
 
+**G1.10. Console v2 designed.** Owner: interface, with the owner present for the
+design sessions. Due 11-24. Decision D6. Done when a Claude Design prototype covers the
+gate status, a tear sheet, the verdict page and recording health, laid out for the data
+the gate actually produces (G1.8's schema), meeting the iteration's interface and
+accessibility rules, and the owner has approved it. Building it is folded into G2.4 and
+G3.6, which then render inside the new console instead of as separate pages; the
+existing console's trading panels are removed once the new one covers what they showed.
+
 ## M2, by 2026-12-01: the trials
 
 **G2.1. Benchmark and control runs.** Owner: quant. Due 11-21. Depends on M1. Done
@@ -331,6 +367,42 @@ matching README outcome and this register's final statuses are merged, and the n
 iteration's goal is drafted: paper wiring on a pass, the research-platform positioning
 on a fail.
 
+## Follow-ups from reviews
+
+Findings that independent reviews raised against merged work and did not block it.
+They are owned and visible here rather than lost in pull request threads; the driver
+picks them up after the dated goals, highest severity first, and the CTPO may promote
+one to a goal.
+
+| Severity | Finding | Raised by, on | Owner |
+|---|---|---|---|
+| Medium | Redpanda has no authentication or ACLs, so any client on the compose network can still write to `features.obi.v1`, huginn's trading input. Allow only obi-bridge to write it. | Security, muninn#87 | Security |
+| Medium | muninn's feature archival has no on/off switch, labels every batch `instrument=BTC-USDT` whatever the symbol, and can lose up to a batch on failure. Fix before enabling the engine for any other symbol. | Security, muninn#87 | Technical |
+| Medium | huginn's Helm chart points its HTTP Service port at 8084, where nothing listens; HTTP and metrics share 8081. Needs a template change, since two ports of 8081 would be invalid. | Technical, huginn#40 | Technical |
+| Medium | `TestProp_FlipThroughZero` in huginn's portfolio package is flaky: a 37.21 fee on a 0.029 short drove `AverageCost` negative. Either the generator is unrealistic or the ledger mishandles fees through zero. | Technical, huginn#40 | Quant |
+| Medium | The console server (`console/serve.py`) binds every interface and proxies to huginn's breaker and the research gateway. Already within G0.2. | Security, #28 | Security |
+| Low | `FeatureParquetWriter.buildPartitionPath` puts an unchecked `featureName` from the record into the storage path. | Security, muninn#87 | Technical |
+| Low | muninn's topic-namespace tests watch one form of `send`; add `verifyNoMoreInteractions`, and refuse `features.` with a hard-coded check rather than only the shared prefix constant. | Security, muninn#87 | Technical |
+| Low | `muninn.streaming.topic-pattern`, `muninn.stream.topics` and the consumer group names are unvalidated configuration that could point muninn back at `features.*` or into huginn's consumer group. | Security, muninn#87 | Technical |
+| Low | muninn's live stream pattern also delivers `.replay` and `.DLT` records to clients as if they were live. | Technical and security, muninn#87 | Technical |
+| Low | huginn's `docs/OPERATIONS.md` and `docs/architecture.md` say an empty `HUGINN_API_TOKEN` disables auth; the code refuses with 503. `/api/stream`, `/api/snapshot/history` and the auth in `PUT /api/strategy/config` have no tests. | Technical, huginn#40 | Technical |
+| Low | Stale topic names in norse-stack's `docs/CONTRACTS.md`, `docs/ARCHITECTURE.md`, `docs/RUNBOOK.md` and ADR-0003 (for example `features.vwap.1m.v1` listed with huginn as consumer), and huginn docs saying muninn writes `features.*`. | Technical, muninn#87 | Technical |
+| Medium | Gap detection cannot see outages: sequence numbers restart at 1 on every muninn restart, messages missed while reconnecting leave no gap, and Binance's `lastUpdateId` is discarded. Record a connection count and `lastUpdateId` (an event schema change). | Quant and technical, muninn#89 and #90 | Technical |
+| Medium | `events.book.snapshot` was never provisioned, so it runs on broker defaults: 7 days and no size cap, about 55 GB on the broker with five pairs. Trades keep only 24 hours, so a longer outage leaves a silent gap. | Technical, #33 | Technical |
+| Medium | Nothing alerts when the recorder is holding or MinIO is down; with folder creation off, a missing drive becomes a silent hold that loses trades after 24 hours. Alerts are deferred (D2), so the gap audit (G0.15) must at least show it. | Security, #33 | Security |
+| Medium | Redpanda's data is an anonymous volume and `make down` (and `smoke.sh --teardown`) run `down -v`, which deletes it. MinIO's live store still uses the default credentials; rotate them with a migration. | Technical and security, #33 | Security |
+| Low | muninn's OKX adapter has no adapter-level reconnect test, and files any spot instrument the socket sends whether subscribed or not (Binance refuses unsubscribed streams). The connected-socket assignment has no generation check after a fast stop and start. | Technical and quant, muninn#90 | Technical |
+| Low | verify-minio-copy.sh accepts the same folder spelt two ways, requires `muninn-raw` to exist but not to hold objects, and does not compare empty directories. Runbook step 8 overstates that `--mount` never creates a source. | Security, #33 | Technical |
+
+**Data boundaries.** From 2026-11-10T22:10:51Z muninn records five pairs on both
+venues. From the same time a refused OKX book consumes a sequence number, and OKX
+sequences are counted per instrument and event type; Binance BTC numbering and the
+content of every BTC event are unchanged. Recordings before 2026-11-10T22:04Z were
+copied byte for byte from the old volume to the external drive (77,326 files,
+2,791,677,446 bytes). The old volume (`ee56a161`, held by the stopped container
+`minio-old-data-keep`) may be removed from 2026-11-17 by running the runbook's last
+step.
+
 ## Capacity and risk
 
 The technical specialist estimates about 21 engineer-days of work against 29 working
@@ -338,3 +410,9 @@ days, so the plan holds with little slack. If it slips, the CTPO cuts in this or
 G2.6, then G0.15's metric (keeping its file), then G2.3, which would leave H1 alone in
 the verdict. The verdict date does not move; a smaller verdict on time beats a larger
 one late.
+
+Status on 2026-11-10: M0 has slipped. The scheduled driver ran six times from
+2026-11-04 but merged nothing, because each run stopped at a permission prompt and
+timed out; the owner's decisions were taken on 11-10 instead of 11-06. The M0 goals
+still open carry their original dates in the table so the slip stays visible; the
+CTPO's review of 11-10 re-plans them.

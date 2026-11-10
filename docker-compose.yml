@@ -90,6 +90,21 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    # The recordings (muninn-raw) live in a host folder, not in Docker's storage.
+    # Until 2026-11-10 /data was an anonymous volume declared by the image, which
+    # `docker compose down -v` deleted (as do `make down` and
+    # `scripts/smoke.sh --teardown`, which run it), and a plain `down` then `up`
+    # orphaned. MINIO_DATA_DIR moves it, for example to an external drive;
+    # the default keeps other machines working with no .env. Set
+    # MINIO_DATA_DIR_CREATE=false with it, so that a missing folder stops MinIO
+    # from starting instead of starting it on a new, empty one. Drive absent and
+    # moving existing data: docs/RUNBOOK.md, section 6.
+    volumes:
+      - type: bind
+        source: ${MINIO_DATA_DIR:-./data/minio}
+        target: /data
+        bind:
+          create_host_path: ${MINIO_DATA_DIR_CREATE:-true}
     ports:
       - "127.0.0.1:9002:9000"
       - "127.0.0.1:9003:9001"
@@ -163,16 +178,17 @@ services:
       # Ingest and RECORD only. Every raw trade and book from both venues goes to
       # the muninn-raw bucket (the history backtests need), and nothing else.
       #
-      # The feature side stays off because muninn's OBI feature is named
-      # features.obi.v1, the very topic obi-bridge writes and huginn TRADES on.
-      # One muninn record reached it on 2026-10-27; huginn rejected it only because
-      # muninn writes timestamps as epoch decimals. That topic needs one owner
-      # before muninn computes features here. Features are derived data, so they
-      # can be recomputed later from what the recorder keeps.
-      #
-      # The shadow comparator and the live feature stream are off for the same
-      # reason: both subscribe to features.*, where obi-bridge's records are poison
-      # to muninn's deserialiser.
+      # The feature side is off because nothing here consumes it yet, not because
+      # it is unsafe. Until 2026-11-10 muninn's OBI feature was named
+      # features.obi.v1, the topic obi-bridge writes and huginn TRADES on, and one
+      # muninn record reached it. Decision D1 gave that topic to obi-bridge and
+      # lgreene03/muninn#87 moved every muninn feature, its comparator, stream and
+      # archival under muninn.features.*, with a publish guard that refuses any
+      # other topic. The engine, comparator and stream may now be enabled without
+      # touching huginn's input; first see the follow-ups in
+      # docs/ITERATION_GOALS.md (archival mislabels non-BTC symbols, and Redpanda
+      # has no ACLs). Features are derived data and can be recomputed from what
+      # the recorder keeps.
       MUNINN_FEATURES_ENGINE_ENABLED: "false"
       MUNINN_REPLAY_SHADOWCOMPARATOR_ENABLED: "false"
       MUNINN_STREAMING_ENABLED: "false"
@@ -209,7 +225,6 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:8083:8081"
-      - "127.0.0.1:8084:8084"
       - "127.0.0.1:50051:50051"
     environment:
       KAFKA_BROKERS: redpanda:29092

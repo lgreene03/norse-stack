@@ -54,9 +54,11 @@ jobs:
           exit "$status"
 
       - name: Shellcheck scripts
+        # PINNED by image tag, not apt. The apt package follows the runner image, so
+        # when it moved to shellcheck 0.11.0 (new check SC2329) this step turned red
+        # with no change in this repository. Bump the tag deliberately.
         run: |
-          sudo apt-get install -y shellcheck
-          shellcheck scripts/*.sh
+          docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.11.0 scripts/*.sh scripts/research/*.sh
 
       - name: Verify scripts are executable
         run: |
