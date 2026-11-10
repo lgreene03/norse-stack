@@ -26,7 +26,7 @@ The weekly review is held on Tuesdays (11-10, 11-17, 11-24, 12-01, 12-08 and
 | G0.2 | Exposure follow-ups closed | Security | 11-07 | Not started |
 | G0.3 | Optional host hardening beyond Norse | Owner | Owner's choice | Not started |
 | G0.4 | Credentials passed by file, never on a command line | Security | 11-10 | Not started |
-| G0.5 | Owner decisions memo and decisions log | CTPO | 11-06 | Not started |
+| G0.5 | Owner decisions memo and decisions log | CTPO | 11-06 | Done 11-10 ([DECISIONS.md](DECISIONS.md)) |
 | G0.6 | Data coverage report | Quant | 11-07 | Not started |
 | G0.7 | Pre-registration signed and tagged `prereg-v1` | Quant | 11-07 | Not started |
 | G0.8 | Cause of huginn's idleness confirmed and instrumented | Quant and technical | 11-10 | Not started |
@@ -35,8 +35,11 @@ The weekly review is held on Tuesdays (11-10, 11-17, 11-24, 12-01, 12-08 and
 | G0.11 | Documentation stops overclaiming | CTPO | 11-10 | Not started |
 | G0.12 | Console honesty and accessibility patch | Interface | 11-07 | Not started |
 | G0.13 | Grafana repaired, Recording Health added | Interface | 11-10 | Not started |
-| G0.14 | Alerts that reach someone | Security and technical | 11-10 | Not started |
+| G0.14 | Alerts that reach someone | Security and technical | Deferred | Deferred by owner (D2) |
 | G0.15 | Daily recording gap audit | Technical | 11-10 | Not started |
+| G0.16 | Retire huginn's unused web app | Interface | 11-17 | Not started |
+| G0.17 | Recordings moved to the external drive | Technical | 11-12 | Not started |
+| G0.18 | Record ETH, SOL, XRP and DOGE on both venues | Technical | 11-17 | Not started |
 | G1.1 | Dataset loaders with checksums and manifests | Technical | 11-14 | Not started |
 | G1.2 | Research gateway locked down | Technical | 11-14 | Not started |
 | G1.3 | Gate statistics with known-answer tests | Quant and technical | 11-14 | Not started |
@@ -46,6 +49,7 @@ The weekly review is held on Tuesdays (11-10, 11-17, 11-24, 12-01, 12-08 and
 | G1.7 | Gate calibration on no-skill and planted-edge data | Quant | 11-17 | Not started |
 | G1.8 | Gate status page and console panel | Interface | 11-17 | Not started |
 | G1.9 | Target-position harness shared by backtest and paper | Technical | 11-19 | Not started |
+| G1.10 | Console v2 designed with Claude Design | Interface, with the owner | 11-24 | Not started |
 | G2.1 | Benchmark and control runs | Quant | 11-21 | Not started |
 | G2.2 | H1 trend trials | Quant | 11-26 | Not started |
 | G2.3 | H2 funding carry trials | Quant | 12-01 | Not started |
@@ -183,8 +187,9 @@ that should read 0, and a Recording Health row shows per venue the ingest rate,
 reconnects per day, minutes with no events, recorder flush age and flush failures.
 `scripts/validate-monitoring.py` passes.
 
-**G0.14. Alerts that reach someone.** Owner: security for the receiver, technical for
-the rules. Due 11-10. Depends on G0.4 and G0.5. Done when rules exist, each with a
+**G0.14. Alerts that reach someone.** Deferred by the owner on 2026-11-10 (decision D2:
+the stack is not production). Revisit before any live paper wiring. As originally
+specified: owner: security for the receiver, technical for the rules. Depends on G0.4 and G0.5. Done when rules exist, each with a
 promtool unit test, for a venue silent for five minutes, recorder flush failures,
 object-store write errors, free disk below 15%, and an always-firing watchdog;
 `NoFillsExecuted` either fires correctly or is removed; the receiver chosen by the
@@ -193,6 +198,29 @@ owner is wired through a credential file; and one test alert is seen arriving.
 **G0.15. Daily recording gap audit.** Owner: technical. Due 11-10. Done when a
 scheduled job writes, per venue and day, the minutes covered, the gaps longer than 60
 seconds and the bytes recorded, to a file and a metric that P3 and G0.13 read.
+
+**G0.16. Retire huginn's unused web app.** Owner: interface; technical reviews. Due
+11-17. Decision D6. Done when `huginn/web` and its CI job are removed, no document or
+compose file refers to it, nothing else in huginn depended on it (shown by huginn's full
+CI passing), and its mock-fill route into the real executor is gone with it.
+
+**G0.17. Recordings moved to the external drive.** Owner: technical; security reviews.
+Due 11-12. Decision D5. Done when MinIO's data is a named bind mount whose host path
+comes from `MINIO_DATA_DIR` (default unchanged for other machines), set locally in the
+git-ignored `.env` to a folder on "Mac 4T" alongside `MUNINN_HOST_PORT=18080`; the
+existing recordings were copied, not moved, and verified by object count and total size
+before the switch; the recorder resumed with no gap beyond Kafka's retention; and the
+old anonymous volume is kept untouched for a week before anyone removes it. The
+behaviour when the drive is absent (MinIO fails, the recorder pauses with backoff and
+catches up from Kafka) is documented.
+
+**G0.18. Record ETH, SOL, XRP and DOGE on both venues.** Owner: technical; quant
+reviews. Due 11-17. Depends on G0.17. Done when muninn's Binance adapter subscribes to
+every configured instrument and attributes each message to its own instrument from the
+stream name (today it uses only the first), with a test that interleaved messages for
+two instruments are never mixed; OKX is configured for the same five pairs; the raw
+recorder writes each pair under its own instrument partition; and the gap audit (G0.15)
+covers all ten venue-pair streams.
 
 ## M1, by 2026-11-19: a gate that cannot be fooled
 
@@ -262,6 +290,14 @@ with per-instrument positions, exits and a rebalance band, at 10 bps a side plus
 slippage (the 14 bps and 5 plus 2 bps defaults are aligned); the same strategy object
 runs the backtest and paper; and a golden-fixture test shows both emit identical
 orders for the same inputs.
+
+**G1.10. Console v2 designed.** Owner: interface, with the owner present for the
+design sessions. Due 11-24. Decision D6. Done when a Claude Design prototype covers the
+gate status, a tear sheet, the verdict page and recording health, laid out for the data
+the gate actually produces (G1.8's schema), meeting the iteration's interface and
+accessibility rules, and the owner has approved it. Building it is folded into G2.4 and
+G3.6, which then render inside the new console instead of as separate pages; the
+existing console's trading panels are removed once the new one covers what they showed.
 
 ## M2, by 2026-12-01: the trials
 
@@ -338,3 +374,9 @@ days, so the plan holds with little slack. If it slips, the CTPO cuts in this or
 G2.6, then G0.15's metric (keeping its file), then G2.3, which would leave H1 alone in
 the verdict. The verdict date does not move; a smaller verdict on time beats a larger
 one late.
+
+Status on 2026-11-10: M0 has slipped. The scheduled driver ran six times from
+2026-11-04 but merged nothing, because each run stopped at a permission prompt and
+timed out; the owner's decisions were taken on 11-10 instead of 11-06. The M0 goals
+still open carry their original dates in the table so the slip stays visible; the
+CTPO's review of 11-10 re-plans them.
