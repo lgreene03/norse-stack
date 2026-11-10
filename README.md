@@ -234,7 +234,6 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 |------|---------|-----|
 | 8080 | Muninn API | http://localhost:8080 |
 | 8083 | Huginn API | http://localhost:8083/api/snapshot |
-| 8084 | Huginn Dashboard | http://localhost:8084 |
 | 8085 | Sleipnir API | http://localhost:8085/healthz |
 | 8086 | Odin Analytics | http://localhost:8086/api/analytics |
 | 8087 | Bragi Explainer | http://localhost:8087/api/decisions |
