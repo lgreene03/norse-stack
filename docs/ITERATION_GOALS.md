@@ -38,8 +38,8 @@ The weekly review is held on Tuesdays (11-10, 11-17, 11-24, 12-01, 12-08 and
 | G0.14 | Alerts that reach someone | Security and technical | Deferred | Deferred by owner (D2) |
 | G0.15 | Daily recording gap audit | Technical | 11-10 | Not started |
 | G0.16 | Retire huginn's unused web app | Interface | 11-17 | Done 11-10 ([huginn#40](https://github.com/lgreene03/huginn/pull/40), [#34](https://github.com/lgreene03/norse-stack/pull/34), [muninn#88](https://github.com/lgreene03/muninn/pull/88)) |
-| G0.17 | Recordings moved to the external drive | Technical | 11-12 | In progress: #33 (draft) awaiting security re-review; LEAD-ONLY cut-over, the driver must not merge it or touch MinIO |
-| G0.18 | Record ETH, SOL, XRP and DOGE on both venues | Technical | 11-17 | Code merged (muninn#89); deploy BLOCKED on reconnect and sequence fixes (G0.18b) and the G0.17 cut-over; LEAD-ONLY restart, the driver must not rebuild or restart muninn |
+| G0.17 | Recordings moved to the external drive | Technical | 11-12 | Done 11-10 ([#33](https://github.com/lgreene03/norse-stack/pull/33)); copy verified byte for byte, old volume held until 11-17 |
+| G0.18 | Record ETH, SOL, XRP and DOGE on both venues | Technical | 11-17 | Done 11-10 ([muninn#89](https://github.com/lgreene03/muninn/pull/89), [muninn#90](https://github.com/lgreene03/muninn/pull/90)); five pairs live from 22:10:51Z |
 | G1.1 | Dataset loaders with checksums and manifests | Technical | 11-14 | Not started |
 | G1.2 | Research gateway locked down | Technical | 11-14 | Not started |
 | G1.3 | Gate statistics with known-answer tests | Quant and technical | 11-14 | Not started |
@@ -387,6 +387,21 @@ one to a goal.
 | Low | muninn's live stream pattern also delivers `.replay` and `.DLT` records to clients as if they were live. | Technical and security, muninn#87 | Technical |
 | Low | huginn's `docs/OPERATIONS.md` and `docs/architecture.md` say an empty `HUGINN_API_TOKEN` disables auth; the code refuses with 503. `/api/stream`, `/api/snapshot/history` and the auth in `PUT /api/strategy/config` have no tests. | Technical, huginn#40 | Technical |
 | Low | Stale topic names in norse-stack's `docs/CONTRACTS.md`, `docs/ARCHITECTURE.md`, `docs/RUNBOOK.md` and ADR-0003 (for example `features.vwap.1m.v1` listed with huginn as consumer), and huginn docs saying muninn writes `features.*`. | Technical, muninn#87 | Technical |
+| Medium | Gap detection cannot see outages: sequence numbers restart at 1 on every muninn restart, messages missed while reconnecting leave no gap, and Binance's `lastUpdateId` is discarded. Record a connection count and `lastUpdateId` (an event schema change). | Quant and technical, muninn#89 and #90 | Technical |
+| Medium | `events.book.snapshot` was never provisioned, so it runs on broker defaults: 7 days and no size cap, about 55 GB on the broker with five pairs. Trades keep only 24 hours, so a longer outage leaves a silent gap. | Technical, #33 | Technical |
+| Medium | Nothing alerts when the recorder is holding or MinIO is down; with folder creation off, a missing drive becomes a silent hold that loses trades after 24 hours. Alerts are deferred (D2), so the gap audit (G0.15) must at least show it. | Security, #33 | Security |
+| Medium | Redpanda's data is an anonymous volume and `make down` (and `smoke.sh --teardown`) run `down -v`, which deletes it. MinIO's live store still uses the default credentials; rotate them with a migration. | Technical and security, #33 | Security |
+| Low | muninn's OKX adapter has no adapter-level reconnect test, and files any spot instrument the socket sends whether subscribed or not (Binance refuses unsubscribed streams). The connected-socket assignment has no generation check after a fast stop and start. | Technical and quant, muninn#90 | Technical |
+| Low | verify-minio-copy.sh accepts the same folder spelt two ways, requires `muninn-raw` to exist but not to hold objects, and does not compare empty directories. Runbook step 8 overstates that `--mount` never creates a source. | Security, #33 | Technical |
+
+**Data boundaries.** From 2026-11-10T22:10:51Z muninn records five pairs on both
+venues. From the same time a refused OKX book consumes a sequence number, and OKX
+sequences are counted per instrument and event type; Binance BTC numbering and the
+content of every BTC event are unchanged. Recordings before 2026-11-10T22:04Z were
+copied byte for byte from the old volume to the external drive (77,326 files,
+2,791,677,446 bytes). The old volume (`ee56a161`, held by the stopped container
+`minio-old-data-keep`) may be removed from 2026-11-17 by running the runbook's last
+step.
 
 ## Capacity and risk
 
