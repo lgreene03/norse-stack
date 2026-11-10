@@ -64,6 +64,7 @@ externals:
 # ── Core services ──────────────────────────────────────────────────────────
 # Each entry renders one Deployment + one Service. metricsPort/metricsPath feed
 # the Prometheus scrape annotations and the NetworkPolicy scrape-allow rule.
+# huginn is the exception: its metrics share service.httpPort (see below).
 
 huginn:
   enabled: true
@@ -74,11 +75,15 @@ huginn:
   service:
     type: ClusterIP
     grpcPort: 50051
-    httpPort: 8084
+    # huginn serves its HTTP API AND /metrics from one listener, so this single
+    # port carries both; there is deliberately no separate huginn.metricsPort.
+    # The chart passes it to huginn as SERVER_PORT, so changing it here moves
+    # the real listener, the Service, the probes and the scrape annotation
+    # together.
+    httpPort: 8081
   # Strategy engine consumes features and persists strategy state. It is a
   # SINGLETON by default: replicas>1 requires the shared-dedup guarantee
   # (see docs/SCALING.md) because each replica would otherwise double-trade.
-  metricsPort: 8081
   metricsPath: /metrics
   env:
     KAFKA_TOPICS: features.obi.v1
