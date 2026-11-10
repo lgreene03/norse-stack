@@ -217,6 +217,10 @@ docker compose down       # stop containers, keep data
 docker compose down -v    # stop containers AND delete all data volumes
 ```
 
+The raw recordings are not in a volume: they are in the host folder
+`MINIO_DATA_DIR` (default `./data/minio`), which `down -v` leaves alone. Delete
+that folder to wipe them. See [RUNBOOK.md](RUNBOOK.md), section 6.
+
 ---
 
 ## What each service does
