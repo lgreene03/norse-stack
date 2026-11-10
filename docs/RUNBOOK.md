@@ -15,7 +15,8 @@ design), see [SECURITY.md](SECURITY.md).
 |------|-------|
 | Boot the stack | `docker compose up -d --build` |
 | Tear down (keep data) | `docker compose down` |
-| Tear down (wipe volumes) | `docker compose down -v` |
+| Tear down (wipe volumes) | `docker compose down -v` (keeps the recordings in `MINIO_DATA_DIR`, §6) |
+| Where the recordings are | `MINIO_DATA_DIR`, default `./data/minio` (§6) |
 | End-to-end smoke test | `./scripts/smoke.sh --teardown` |
 | Provision Kafka topics | `./scripts/provision-topics.sh` |
 | Grafana | http://localhost:3001 (board: **Norse Stack — Trading Pipeline**) |
@@ -161,7 +162,259 @@ Topics and their retention (per `docs/CONTRACTS.md`):
 
 ---
 
-## 6. Escalation / deeper docs
+## 6. Recordings on disk: MinIO's data folder
+
+MinIO holds every raw trade and book snapshot that muninn's recorder keeps
+(bucket `muninn-raw`), with `muninn-checkpoints` and `muninn-warehouse`. This is
+the history no backtest can get back once Kafka has expired it. MinIO's `/data` is
+a bind mount of the host folder named by `MINIO_DATA_DIR`, by default
+`./data/minio` inside this checkout, which git ignores.
+
+Until 2026-11-10 `/data` was an anonymous volume declared by the MinIO image.
+Three commands run `docker compose down -v` and so deleted it, with every
+recording in it: `docker compose down -v` itself, `make down`, and
+`./scripts/smoke.sh --teardown`. A plain `down` followed by `up` left it orphaned
+behind a new, empty one. None of them touches the folder now; to wipe the
+recordings, stop MinIO and delete the folder yourself. Redpanda's data, which
+holds the Kafka backlog the recorder catches up from, is still an anonymous
+volume, so those three commands still delete that.
+
+On the owner's Mac the git-ignored `.env` holds exactly these three lines and
+nothing else:
+
+```bash
+MINIO_DATA_DIR="/Volumes/Mac 4T/norse/minio"
+MINIO_DATA_DIR_CREATE=false
+MUNINN_HOST_PORT=18080
+```
+
+Write those lines by hand. Never create `.env` by copying `.env.example`: its
+placeholder credentials would replace the defaults the running stack was set up
+with. MinIO would get a new root user, which muninn also signs in with, and the
+Postgres passwords, which only take effect when a database is first created,
+would no longer match the existing databases, so muninn and huginn could not log
+in. On 2026-11-10 the live stack ran with no `.env` at all, on the compose
+defaults, with `MUNINN_HOST_PORT=18080` taken from the shell. Rotating those
+default credentials is a separate follow-up.
+
+`MINIO_DATA_DIR_CREATE=false` makes Docker refuse to start MinIO when the folder
+does not exist, instead of creating it empty. Always set it with
+`MINIO_DATA_DIR`: without it a mistyped path, or a folder renamed on the drive,
+starts MinIO on a new, empty store, `minio-init` recreates the buckets, and the
+recorder quietly writes the next recordings there instead of alongside the old
+ones.
+
+Two properties of the drive matter. Docker Desktop must share the folder;
+`/Volumes` is in its default file sharing list (Settings, Resources, File
+sharing). And the drive is APFS, which is case-insensitive by default, unlike the
+ext4 inside Docker's VM: two object keys differing only in case would become one
+file. muninn's keys do not do that today, and the copy check in §6.2 would show it
+as a mismatch if they did.
+
+### 6.1 When the drive is absent
+
+Checked on 2026-11-10 with Docker Desktop (engine 29.1.3, Compose 2.40.3) on
+throwaway containers, not on the live stack, except where marked.
+
+- **MinIO cannot start.** With `MINIO_DATA_DIR_CREATE=false` Docker refuses the
+  mount (`bind source path does not exist`), and it does so at every start,
+  including a restart of a container that was created while the folder was
+  there. Without that setting Docker still fails when the whole drive is absent
+  (`mkdir /host_mnt/Volumes/...: permission denied`, because `/Volumes` belongs
+  to root), but not when only the folder is missing.
+- **`docker compose up` stops at MinIO.** `minio-init` waits for a healthy MinIO
+  and muninn waits for `minio-init`, so an `up` that has to create or recreate
+  muninn leaves it stopped. muninn is the ingester as well as the recorder: while
+  it is stopped nothing reaches Kafka, and that time is lost for good. A muninn
+  container that is already running is left alone. After a restart of Docker
+  itself, the restart policy starts muninn without waiting for MinIO, because
+  Docker's restart policy does not read `depends_on` (expected, not tested).
+- **While MinIO is unavailable, the recorder holds and retries.** muninn's
+  `RawEventRecorder` keeps its buffer, pauses its Kafka partitions, and retries
+  the flush indefinitely with exponential backoff from 500 ms up to `max-backoff`
+  (30 s). It commits Kafka offsets only after every object in a flush is stored,
+  so nothing is skipped. Ingestion carries on into Kafka meanwhile. Once MinIO is
+  back the recorder stores the backlog and logs "Object storage recovered,
+  recording resumed".
+- **Catching up works only within Kafka retention.** On the live stack on
+  2026-11-10, `events.trade` keeps 24 hours (set by
+  `scripts/provision-topics.sh`) and `events.book.snapshot` keeps 7 days (the
+  broker default; the provisioning script does not set it). An outage longer than
+  24 hours loses trades: the recorder's committed offset falls off the log,
+  `auto.offset.reset=earliest` resumes at the oldest record left, and the span in
+  between is a gap that only the daily recording gap audit (G0.15) will show.
+- **If the drive goes while MinIO runs,** its reads and writes fail and the
+  recorder holds as above. When the drive is back, restart MinIO alone with
+  `docker compose restart --no-deps minio` rather than trusting the old mount to
+  reattach (that it does not reattach by itself is expected, not tested). If
+  MinIO is not running at all, for example because the drive was absent when
+  Docker started, start it with `docker compose up -d --no-deps minio`. Use
+  `--no-deps` with either: on a throwaway project with the same dependency chain
+  (minio, minio-init, muninn), neither `restart --no-deps minio` nor
+  `up -d --no-deps minio` restarted or recreated the muninn stand-in.
+- **On the owner's Mac, Docker Desktop's own disk image is on the same drive**
+  (`/Volumes/Mac 4T/Docker/DockerDesktop/Docker.raw`, seen on the live machine on
+  2026-11-10). With the drive absent Docker Desktop cannot run any container,
+  muninn included, so nothing is ingested and Kafka has nothing to replay. Hold
+  and catch up applies only where Docker runs without the drive.
+
+To see the recorder holding, read muninn's `/actuator/prometheus`:
+`muninn_recorder_last_flush_age_seconds` climbs without bound while storage fails
+(normally it stays under `max-buffer-age`, 60 s), and
+`muninn_recorder_flush_failures_total` and `muninn_recorder_buffered_records`
+rise.
+
+### 6.2 Moving existing recordings: copy, verify, switch
+
+Copy, never move. Verify before switching. Keep the old volume untouched for a
+week. MinIO must be stopped for the copy and the check, because a running MinIO
+changes its files as they are read. muninn keeps running throughout, so the stop
+costs no data as long as the switch is done well inside the 24 hours of trade
+retention. On 2026-11-10 the store held 74,508 objects (2.6 GiB) in 77,102 files.
+
+The order is chosen so that an early `docker compose up` fails loudly instead of
+starting MinIO empty. `.env` names the final folder before this change is
+pulled, but the copy goes into a staging folder that is renamed to the final
+name only at the switch. Until then the final folder does not exist and creation
+is disabled, so any `up` that tries to recreate MinIO on the new mount is refused
+(`bind source path does not exist`) and the running MinIO stays on the old
+volume. Checked on a throwaway project with the same dependency chain: the
+refused recreate left the old container running on its old mount, and the muninn
+stand-in was not restarted.
+
+Run every step from the norse-stack checkout that runs the stack, in one shell,
+with the drive mounted.
+
+1. **Before pulling this change**, name the old volume, the staging folder and the
+   final folder. `OLD` is read from the running container, never typed, and the
+   second command confirms it names a volume that exists; if it prints an error,
+   stop.
+
+   ```bash
+   OLD=$(docker inspect norse-stack-minio-1 --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}')
+   docker volume inspect --format '{{.Name}}' "$OLD"
+   STAGING="/Volumes/Mac 4T/norse/minio.staging"
+   FINAL="/Volumes/Mac 4T/norse/minio"
+   ```
+
+2. Keep the old volume in use, so that no prune can delete it once MinIO stops
+   using it. A container that is created but never started does that. If the
+   first command already prints the same name as `$OLD`, the holder exists (it
+   was created on 2026-11-10) and the second is not needed:
+
+   ```bash
+   docker container inspect minio-old-data-keep --format '{{range .Mounts}}{{.Name}}{{end}}'
+   docker create --name minio-old-data-keep -v "$OLD":/data:ro alpine:3.21@sha256:c3f8e73fdb79deaebaa2037150150191b9dcbfba68b4a46d70103204c53f4709 true
+   ```
+
+   `docker container prune` and `docker system prune` remove the holder, so run
+   neither for the week the old volume is kept.
+
+3. Write `.env` with exactly the three lines at the start of this section, by
+   hand, not from `.env.example`. The compose file before this change does not
+   read the first two, and the third matches the running stack.
+
+4. Create the empty staging folder, and check that the final folder does not
+   exist yet (`ls -A` prints nothing; `ls -d` must fail with "No such file or
+   directory"):
+
+   ```bash
+   mkdir -p "$STAGING"
+   ls -A "$STAGING"
+   ls -d "$FINAL"
+   ```
+
+5. Pull this change into the checkout. From here until step 10, an `up` that
+   touches MinIO is refused, as described above; run none anyway.
+
+6. Take a reading of the live store for the record. The credentials expand inside
+   the container, never on the host's command line:
+
+   ```bash
+   docker compose exec minio sh -c 'MC_HOST_n="http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@localhost:9000" mc du --depth 2 n/'
+   ```
+
+7. Stop MinIO, and nothing else. Do not use `down`, and do not stop muninn:
+
+   ```bash
+   docker compose stop minio
+   ```
+
+   The recorder now logs "Could not record raw events; holding them and
+   retrying". That is expected.
+
+8. Copy into the staging folder, reading the old volume read-only. `--mount`, unlike
+   `-v`, never creates a missing source:
+
+   ```bash
+   docker run --rm --network none \
+     --mount "type=volume,source=$OLD,target=/from,readonly" \
+     --mount "type=bind,source=$STAGING,target=/to" \
+     alpine:3.21@sha256:c3f8e73fdb79deaebaa2037150150191b9dcbfba68b4a46d70103204c53f4709 cp -a /from/. /to/
+   ```
+
+9. Verify:
+
+   ```bash
+   ./scripts/verify-minio-copy.sh "$OLD" "$STAGING"
+   ```
+
+   The script checks that both sides exist before mounting either, refuses a side
+   with no files or no `muninn-raw` bucket (exit 2, `REFUSED`), prints the objects
+   in each bucket, the file count and the total bytes for each side, and compares
+   every file byte for byte in both directions, with file names passed
+   NUL-delimited. Go on only when it exits 0 and prints `VERIFIED`. The object
+   counts should also match step 6's reading, plus whatever the recorder stored
+   between steps 6 and 7. On `MISMATCH` (exit 1) or `REFUSED`, nothing has changed
+   yet: run `docker compose start minio` to resume on the old volume, empty
+   `$STAGING`, and find out why.
+
+10. Switch. Rename the staging folder to the final name, then recreate MinIO alone:
+
+    ```bash
+    mv "$STAGING" "$FINAL"
+    docker compose up -d --no-deps minio
+    docker inspect norse-stack-minio-1 --format '{{json .Mounts}}'
+    ```
+
+    The rename is on the same drive, so the verified files are not copied again.
+    The mount must now be `"Type":"bind"` with the final folder as its source.
+    Repeat step 6: every bucket holds at least what step 9 counted. Then confirm
+    the recorder has caught up: its log says "Object storage recovered, recording
+    resumed" (`docker compose logs --since 15m muninn`), and
+    `muninn_recorder_last_flush_age_seconds` is back under 60.
+
+11. After a week without trouble, remove the holder and then the old volume:
+
+    ```bash
+    docker rm minio-old-data-keep
+    docker volume rm "$OLD"
+    ```
+
+    Until then the old volume is the fall back. It cannot be mounted through
+    `MINIO_DATA_DIR`, which takes a folder, so falling back means stopping MinIO,
+    copying the old volume into a new empty folder and verifying it (steps 7 to
+    9), then pointing `MINIO_DATA_DIR` at that folder. Anything recorded after the
+    switch exists only in the final folder.
+
+Rehearsed on 2026-11-10, never on the live store, with throwaway MinIOs of the
+same release, throwaway volumes, and folders on the Mac's internal APFS disk
+shared with Docker the same way as the drive. A copy made as in step 8 verified,
+and a MinIO started on it listed the same objects and accepted new writes. A
+Compose recreate from an anonymous volume to this bind mount kept the old volume
+intact, and the holder container stopped it being listed as dangling, which is
+what `docker volume prune` removes. With the new compose file in place and the
+final folder missing, `docker compose start minio` (step 9's roll back) restarted
+the stopped old container on its anonymous volume. After the security review the check in step 9
+was re-run: it refused (exit 2) a missing source volume and a missing copy folder
+without creating either, an empty source, an empty copy, a copy with no
+`muninn-raw` and a relative path; it printed `MISMATCH` (exit 1) for one copied
+file changed without changing its size, whose name contained a newline; and it
+printed `VERIFIED` (exit 0) for a good copy of 105 files.
+
+---
+
+## 7. Escalation / deeper docs
 
 - Architecture & known limitations: `docs/ARCHITECTURE_REVIEW.md`
 - Topic contracts & retention: `docs/CONTRACTS.md`

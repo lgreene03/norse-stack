@@ -90,6 +90,21 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    # The recordings (muninn-raw) live in a host folder, not in Docker's storage.
+    # Until 2026-11-10 /data was an anonymous volume declared by the image, which
+    # `docker compose down -v` deleted (as do `make down` and
+    # `scripts/smoke.sh --teardown`, which run it), and a plain `down` then `up`
+    # orphaned. MINIO_DATA_DIR moves it, for example to an external drive;
+    # the default keeps other machines working with no .env. Set
+    # MINIO_DATA_DIR_CREATE=false with it, so that a missing folder stops MinIO
+    # from starting instead of starting it on a new, empty one. Drive absent and
+    # moving existing data: docs/RUNBOOK.md, section 6.
+    volumes:
+      - type: bind
+        source: ${MINIO_DATA_DIR:-./data/minio}
+        target: /data
+        bind:
+          create_host_path: ${MINIO_DATA_DIR_CREATE:-true}
     ports:
       - "127.0.0.1:9002:9000"
       - "127.0.0.1:9003:9001"
