@@ -14,3 +14,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+
+  # recording-audit pins its base image by digest; this keeps the pin from rotting.
+  - package-ecosystem: docker
+    directory: /services/recording-audit
+    schedule:
+      interval: weekly

@@ -2,7 +2,7 @@
 
 ## What Is norse-stack
 
-Meta-repository and entry point for the Norse Stack — a distributed quantitative trading infrastructure that boots as 23 containers (`docker compose config --services | wc -l`) via one-command `make bootstrap`. This repo provides the unified docker-compose, console, monitoring stack, end-to-end smoke test, and architecture documentation. The core engines (muninn, huginn, sleipnir) live in their own sibling repos, but this repo is **not** purely orchestration: the analytics, ML, research, and bridge services under `services/` are application code built directly from here.
+Meta-repository and entry point for the Norse Stack, a distributed quantitative trading infrastructure that boots as 24 containers (`docker compose config --services | wc -l`) via one-command `make bootstrap`. This repo provides the unified docker-compose, console, monitoring stack, end-to-end smoke test, and architecture documentation. The core engines (muninn, huginn, sleipnir) live in their own sibling repos, but this repo is **not** purely orchestration: the analytics, ML, research, and bridge services under `services/` are application code built directly from here.
 
 ## Commands
 
@@ -47,6 +47,7 @@ norse-stack/services/
   forseti/         ← execution TCA + market impact / capacity (port 8096)
   heimdall/        ← market-regime detector (Gaussian HMM) (port 8097)
   news-sentinel/   ← LLM news-sentiment feed (port 8089)
+  recording-audit/ ← daily recording gap audit, G0.15 (port 8098)
 ```
 
 ## Ports
@@ -68,6 +69,7 @@ Postgres databases publish no host port; use `docker compose exec`.
 | 8095  | Mimir Feature Store|
 | 8096  | Forseti TCA        |
 | 8097  | Heimdall Regime    |
+| 8098  | Recording Audit    |
 | 9002  | MinIO API          |
 | 9003  | MinIO Console      |
 | 9091  | Prometheus         |
