@@ -184,6 +184,10 @@ Each step is idempotent: files already mirrored and verified are not fetched aga
 * Nothing here writes to the trial ledger (G1.5) or refuses a dirty tree; the
   harness does that. The loader's manifest hash is what the ledger will cite.
 * The unseal is G1.6's. Until it exists the holdout files sit in the mirror, pinned by
-  their own manifest, and cannot be returned by the loader.
+  their own manifest, and cannot be returned by the loader. They are plain files,
+  though, and other functions in this package (`ArchiveStore.read`,
+  `manifest.read_series_file`, `coverage.read_rows`) return their rows; what that means
+  for the seal, and what G1.5, G1.6 and G1.2 must test, is in
+  [ledger-threat-model.md](ledger-threat-model.md).
 * A monthly archive file is published once a month has closed; the tools never use
   the archive's daily files for development or holdout data.
