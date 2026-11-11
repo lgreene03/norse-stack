@@ -29,14 +29,14 @@ The weekly review is held on Tuesdays (11-10, 11-17, 11-24, 12-01, 12-08 and
 | G0.5 | Owner decisions memo and decisions log | CTPO | 11-06 | Done 11-10 ([DECISIONS.md](DECISIONS.md)) |
 | G0.6 | Data coverage report | Quant | 11-07 | Not started |
 | G0.7 | Pre-registration signed and tagged `prereg-v1` | Quant | 11-07 | Not started |
-| G0.8 | Cause of huginn's idleness confirmed and instrumented | Quant and technical | 11-10 | Not started |
-| G0.9 | Risk manager on event time; fold 4 explained | Technical | 11-10 | Not started |
+| G0.8 | Cause of huginn's idleness confirmed and instrumented | Quant and technical | 11-10 | Done 11-11 ([huginn#43](https://github.com/lgreene03/huginn/pull/43), [#41](https://github.com/lgreene03/norse-stack/pull/41)); what to do with the stuck composite is decision D9 |
+| G0.9 | Risk manager on event time; fold 4 explained | Technical | 11-10 | Done 11-11 ([huginn#44](https://github.com/lgreene03/huginn/pull/44), [#40](https://github.com/lgreene03/norse-stack/pull/40)) |
 | G0.10 | muninn features under their own prefix | Technical | 11-10 | Done 11-10 ([muninn#87](https://github.com/lgreene03/muninn/pull/87)) |
 | G0.11 | Documentation stops overclaiming | CTPO | 11-10 | Not started |
 | G0.12 | Console honesty and accessibility patch | Interface | 11-07 | Not started |
 | G0.13 | Grafana repaired, Recording Health added | Interface | 11-10 | Not started |
 | G0.14 | Alerts that reach someone | Security and technical | Deferred | Deferred by owner (D2) |
-| G0.15 | Daily recording gap audit | Technical | 11-10 | Not started |
+| G0.15 | Daily recording gap audit | Technical | 11-10 | Done 11-11 ([#39](https://github.com/lgreene03/norse-stack/pull/39)); with the data heartbeat of decision D8 ([#44](https://github.com/lgreene03/norse-stack/pull/44), [#45](https://github.com/lgreene03/norse-stack/pull/45)) |
 | G0.16 | Retire huginn's unused web app | Interface | 11-17 | Done 11-10 ([huginn#40](https://github.com/lgreene03/huginn/pull/40), [#34](https://github.com/lgreene03/norse-stack/pull/34), [muninn#88](https://github.com/lgreene03/muninn/pull/88)) |
 | G0.17 | Recordings moved to the external drive | Technical | 11-12 | Done 11-10 ([#33](https://github.com/lgreene03/norse-stack/pull/33)); copy verified byte for byte, old volume held until 11-17 |
 | G0.18 | Record ETH, SOL, XRP and DOGE on both venues | Technical | 11-17 | Done 11-10 ([muninn#89](https://github.com/lgreene03/muninn/pull/89), [muninn#90](https://github.com/lgreene03/muninn/pull/90)); five pairs live from 22:10:51Z |
@@ -378,8 +378,8 @@ one to a goal.
 |---|---|---|---|
 | Medium | Redpanda has no authentication or ACLs, so any client on the compose network can still write to `features.obi.v1`, huginn's trading input. Allow only obi-bridge to write it. | Security, muninn#87 | Security |
 | Medium | muninn's feature archival has no on/off switch, labels every batch `instrument=BTC-USDT` whatever the symbol, and can lose up to a batch on failure. Fix before enabling the engine for any other symbol. | Security, muninn#87 | Technical |
-| Medium | huginn's Helm chart points its HTTP Service port at 8084, where nothing listens; HTTP and metrics share 8081. Needs a template change, since two ports of 8081 would be invalid. | Technical, huginn#40 | Technical |
-| Medium | `TestProp_FlipThroughZero` in huginn's portfolio package is flaky: a 37.21 fee on a 0.029 short drove `AverageCost` negative. Either the generator is unrealistic or the ledger mishandles fees through zero. | Technical, huginn#40 | Quant |
+| Resolved | huginn's Helm chart pointed its HTTP Service port at 8084, where nothing listens. Fixed 11-11 in [#35](https://github.com/lgreene03/norse-stack/pull/35). | Technical, huginn#40 | Technical |
+| Resolved | `TestProp_FlipThroughZero` was flaky. Fixed 11-11 in [huginn#42](https://github.com/lgreene03/huginn/pull/42): the cause was unrealistic test fees, not the ledger. | Technical, huginn#40 | Quant |
 | Medium | The console server (`console/serve.py`) binds every interface and proxies to huginn's breaker and the research gateway. Already within G0.2. | Security, #28 | Security |
 | Low | `FeatureParquetWriter.buildPartitionPath` puts an unchecked `featureName` from the record into the storage path. | Security, muninn#87 | Technical |
 | Low | muninn's topic-namespace tests watch one form of `send`; add `verifyNoMoreInteractions`, and refuse `features.` with a hard-coded check rather than only the shared prefix constant. | Security, muninn#87 | Technical |
@@ -389,10 +389,24 @@ one to a goal.
 | Low | Stale topic names in norse-stack's `docs/CONTRACTS.md`, `docs/ARCHITECTURE.md`, `docs/RUNBOOK.md` and ADR-0003 (for example `features.vwap.1m.v1` listed with huginn as consumer), and huginn docs saying muninn writes `features.*`. | Technical, muninn#87 | Technical |
 | Medium | Gap detection cannot see outages: sequence numbers restart at 1 on every muninn restart, messages missed while reconnecting leave no gap, and Binance's `lastUpdateId` is discarded. Record a connection count and `lastUpdateId` (an event schema change). | Quant and technical, muninn#89 and #90 | Technical |
 | Medium | `events.book.snapshot` was never provisioned, so it runs on broker defaults: 7 days and no size cap, about 55 GB on the broker with five pairs. Trades keep only 24 hours, so a longer outage leaves a silent gap. | Technical, #33 | Technical |
-| Medium | Nothing alerts when the recorder is holding or MinIO is down; with folder creation off, a missing drive becomes a silent hold that loses trades after 24 hours. Alerts are deferred (D2), so the gap audit (G0.15) must at least show it. | Security, #33 | Security |
+| Low | Partly resolved 11-11: the data heartbeat (decision D8, [#44](https://github.com/lgreene03/norse-stack/pull/44), [#45](https://github.com/lgreene03/norse-stack/pull/45)) now notifies the owner on this Mac within 15 minutes when a stream stops or the drive is missing, and the gap audit (G0.15) records it. What remains is full alerting (G0.14), still deferred by D2. | Security, #33 | Security |
 | Medium | Redpanda's data is an anonymous volume and `make down` (and `smoke.sh --teardown`) run `down -v`, which deletes it. MinIO's live store still uses the default credentials; rotate them with a migration. | Technical and security, #33 | Security |
 | Low | muninn's OKX adapter has no adapter-level reconnect test, and files any spot instrument the socket sends whether subscribed or not (Binance refuses unsubscribed streams). The connected-socket assignment has no generation check after a fast stop and start. | Technical and quant, muninn#90 | Technical |
 | Low | verify-minio-copy.sh accepts the same folder spelt two ways, requires `muninn-raw` to exist but not to hold objects, and does not compare empty directories. Runbook step 8 overstates that `--mount` never creates a source. | Security, #33 | Technical |
+| Medium | The recorder runs on the owner's Mac, so it records only while the Mac is on. The Mac was off from about 2026-11-08T18:45Z until it booted at 2026-11-10T20:42Z (pmset), leaving 50 hours unrecorded: coverage 78.1% on 11-08, 0% on 11-09, 13.4% on 11-10. Prometheus has no data for the window either, so nothing in the stack failed. P3 (99.5% of minutes) needs the Mac left on, or an always-on recorder. | Technical, G0.15 audit | CTPO |
+| Medium | huginn's live composite strategy has no exit path, so the five longs it opened on 2026-06-22 block every entry for ever. What to do is decision D9. | Quant, huginn#43 | Quant |
+| Medium | The composite measures each alpha's IC against the next event's price whatever its instrument, and all five coins share one stream, so the console's rolling IC is mostly cross-coin price ratios. Hide it under G0.12 until it is computed per instrument. | Quant, huginn#43 | Interface |
+| Medium | The six-month figures capped by the wall-clock risk bug are still cited in `README.md` (lines 28 and 285), `docs/ROADMAP.md` (68) and `docs/RESULTS.md` (243 to 274, 310). Correct under G0.11; RESULTS.md feeds odin's reconciliation and the tear-sheet script. | Technical, huginn#44 | CTPO |
+| Medium | huginn's risk manager keeps one market volatility value across all instruments; per-instrument needs the instrument passed into `OnFeatureSeen`. Matters live now that five instruments trade. | Technical, huginn#44 | Technical |
+| Medium | With event time, four unselected in-sample replays trip the 20% drawdown breaker, which halts for the rest of the replay and flattens that configuration's in-sample Sharpe. Decide the breaker's behaviour in replays before the G1.9 harness selects on in-sample results. | Technical, huginn#44 | Quant |
+| Medium | The MinIO image can no longer be pulled anonymously (quay.io returns 401); the live stack runs only because the image is cached, so it must not be pruned. CI's contract test now uses SeaweedFS. Ties to replacing MinIO. | Technical, #39 | Technical |
+| Medium | `TestListRunsNewestFirst` in huginn's `cmd/research` is flaky: it returns while a submitted run is still writing to its temp folder ("TempDir RemoveAll cleanup: directory not empty"). | Technical, huginn#38 | Technical |
+| Low | Both venues went silent at once for 148 to 225 seconds from 2026-11-11T03:10Z with no restart and no sleep; cause unconfirmed. Binance fell to 99.375% for the day, below P3. | Technical, G0.15 audit | Technical |
+| Low | `docker-compose.yml` says the composite uses the cost gate (`COST_HURDLE_K=1.0`); it does not, since `cmd/huginn/main.go` attaches the gate only to the `obi` strategy. | Quant, huginn#43 | Technical |
+| Low | The recording audit reads MinIO with the root credentials from `.env`; give it a read-only user scoped to `muninn-raw` under G0.4. | Technical, #39 | Security |
+| Low | `docs/risk-model.md` shows the position limit default as disabled (it is 500,000), documents a volatility formula the code does not use and lists a `volatility_scale_factor` setting that does not exist. EDGE_VERDICT and RESULTS still say the `Hit` line is hardcoded; huginn#33 computes it. | Technical, huginn#44 | Technical |
+| Low | huginn's Dockerfile pins the amd64 alpine image but builds an arm64 binary, and Docker's `desktop` credential helper hangs on this Mac, so builds need a config without it. | Technical, huginn#43 | Technical |
+| Low | `.pre-commit-config.yaml`'s ruff must stay in step with `requirements-dev.txt` but dependabot only bumps the latter; #30 realigned them at 0.17.3 by hand. Add a check or a dependabot pre-commit entry. | Technical, #30 | Technical |
 
 **Data boundaries.** From 2026-11-10T22:10:51Z muninn records five pairs on both
 venues. From the same time a refused OKX book consumes a sequence number, and OKX
@@ -416,3 +430,11 @@ Status on 2026-11-10: M0 has slipped. The scheduled driver ran six times from
 timed out; the owner's decisions were taken on 11-10 instead of 11-06. The M0 goals
 still open carry their original dates in the table so the slip stays visible; the
 CTPO's review of 11-10 re-plans them.
+
+Status on 2026-11-11: G0.8, G0.9 and G0.15 are done, worked from the lead session
+rather than by the driver. The driver is enabled and fires on schedule, but its runs
+still stop at the first permission prompt (the last run's transcript ends "interrupted
+... for tool use"); a task's permission mode can only be set by the owner in the app,
+so until then the lead session carries the work. G0.6 and G1.1 are in progress. The
+six-month re-run under G0.9 still shows no out-of-sample edge for the retired strategy
+(0 of 4 folds), with fold 4 corrected from -10,001.72 to -2,495.70.
