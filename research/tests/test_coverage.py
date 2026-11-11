@@ -109,13 +109,16 @@ def test_candidate_specs_cover_h1_candidates_and_h2_perpetuals(tmp_path):
     store = ArchiveStore(tmp_path)
     name = coverage.FUNDING_ROOT.strip("/").replace("/", "__") + ".json"
     (tmp_path / LISTINGS_DIR).mkdir()
-    prefixes = [coverage.FUNDING_ROOT + s + "/" for s in ("BTCUSDT", "ETHUSDT", "SOLUSDT")]
+    perps = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "1000PEPEUSDT")
+    prefixes = [coverage.FUNDING_ROOT + s + "/" for s in perps]
     record = {"prefix": coverage.FUNDING_ROOT, "listed_at": "x", "objects": []}
     record["prefixes"] = prefixes
     (tmp_path / LISTINGS_DIR / name).write_text(json.dumps(record))
-    universe = {"development_candidates": ["BTCUSDT", "SOLUSDT", "LUNAUSDT"]}
+    universe = {"development_candidates": ["BTCUSDT", "SOLUSDT", "LUNAUSDT", "PEPEUSDT"]}
     universe["holdout_only_candidates"] = []
     names = {s.name for s in coverage.candidate_specs(store, universe)}
+    # Spot PEPEUSDT's perpetual trades as a multiple: 1000PEPEUSDT.
+    assert "um/fundingRate/1000PEPEUSDT" in names and "um/fundingRate/PEPEUSDT" not in names
     assert "spot/klines/LUNAUSDT/15m" in names
     assert "um/fundingRate/LUNAUSDT" not in names  # no perpetual listed
     assert "um/fundingRate/SOLUSDT" in names and "um/premiumIndexKlines/SOLUSDT/4h" in names

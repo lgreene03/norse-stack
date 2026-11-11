@@ -10,6 +10,8 @@ Format traps handled here, each with a test:
   symbol's funding interval can change (8 hours to 4 or 1), so funding gaps are judged
   against the interval each row declares, within a tolerance.
 * A few files repeat a row exactly; ``collapse_repeats`` keeps one and reports it.
+* A few bars sit off the interval grid; ``split_off_grid`` sets them aside and
+  reports them, so the slots they occupy count as a gap rather than a shifted bar.
 """
 
 from __future__ import annotations
@@ -269,6 +271,20 @@ def collapse_repeats(rows: list, source: str = "") -> tuple[list, list[int]]:
             continue
         kept.append(row)
     return kept, repeated
+
+
+def split_off_grid(rows: list, step_ms: int) -> tuple[list, list[int]]:
+    """Separate bars whose open time is off the UTC interval grid.
+
+    After Binance's outage of 2018-02-08 the archive's 15-minute bars for every pair
+    then trading restarted 8 minutes 16.09 seconds off the grid for 81 bars, and
+    ONTUSDT's four-hour bars sat two hours off it for 9 bars in June 2018. Such a bar
+    cannot be put on the grid without inventing its boundaries, so it is set aside
+    and reported; the grid slots it would have filled then show as a gap.
+    """
+    on_grid = [r for r in rows if r[0] % step_ms == 0]
+    off_grid = [r[0] for r in rows if r[0] % step_ms]
+    return on_grid, off_grid
 
 
 def bar_gaps(open_times: Sequence[int], step_ms: int, source: str = "") -> list[Gap]:

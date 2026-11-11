@@ -9,7 +9,7 @@ Three steps, each idempotent, all reading only public data:
               15-minute klines, and where a USDT-margined perpetual exists, funding and
               premium index (and, for H2's BTC and ETH, perpetual klines).
 ``report``    measures every mirrored series (first and last bar, missing months,
-              gaps, rows) and writes research/coverage/coverage.json.
+              gaps, rows) and writes research/coverage/series-coverage.json.
 
 Only timestamps, row counts and volume ranks are computed. No return, signal or
 price statistic is, because pre-registration (G0.7) has not been signed.
@@ -38,6 +38,7 @@ from .formats import (
     parse_funding,
     parse_klines,
     read_csv_member,
+    split_off_grid,
 )
 from .periods import (
     DEVELOPMENT,
@@ -64,7 +65,8 @@ from .universe import (
 RESEARCH_DIR = Path(__file__).resolve().parent.parent
 COVERAGE_DIR = RESEARCH_DIR / "coverage"
 UNIVERSE_FILE = COVERAGE_DIR / "universe-candidates.json"
-COVERAGE_FILE = COVERAGE_DIR / "coverage.json"
+# Not coverage.json: .gitignore keeps that name for pytest-cov's report.
+COVERAGE_FILE = COVERAGE_DIR / "series-coverage.json"
 
 SPOT_KLINES_ROOT = "data/spot/monthly/klines/"
 FUNDING_ROOT = "data/futures/um/monthly/fundingRate/"
@@ -225,6 +227,19 @@ def run_universe(store: ArchiveStore, log: Log) -> dict:
     return result
 
 
+def perpetual_for(symbol: str, perps: set[str]) -> str | None:
+    """The USDT-margined perpetual of a spot pair, if one is listed.
+
+    Low-priced coins trade as a multiple on futures: spot PEPEUSDT, SHIBUSDT,
+    FLOKIUSDT and LUNCUSDT are the perpetuals 1000PEPEUSDT and so on. Their funding
+    rates are directly comparable; their prices are the multiple times spot.
+    """
+    if symbol in perps:
+        return symbol
+    multiples = [p for p in perps if p.endswith(symbol) and p[: -len(symbol)].isdigit()]
+    return multiples[0] if len(multiples) == 1 else None
+
+
 def candidate_specs(store: ArchiveStore, universe: dict) -> list[DatasetSpec]:
     """Every series G1.1 loads: the H1 candidates' and H2's, perpetuals where listed."""
     symbols = sorted(
@@ -236,12 +251,13 @@ def candidate_specs(store: ArchiveStore, universe: dict) -> list[DatasetSpec]:
     specs = []
     for symbol in symbols:
         specs.extend(DatasetSpec("spot", "klines", symbol, i) for i in BAR_INTERVALS)
-        if symbol in perps:
+        perp = perpetual_for(symbol, perps)
+        if perp:
             # Four-hour premium index only: daily bars follow exactly from it (first
             # open, highest high, lowest low, last close), so a second series would
             # double the requests for nothing.
-            specs.append(DatasetSpec("um", "fundingRate", symbol))
-            specs.append(DatasetSpec("um", "premiumIndexKlines", symbol, "4h"))
+            specs.append(DatasetSpec("um", "fundingRate", perp))
+            specs.append(DatasetSpec("um", "premiumIndexKlines", perp, "4h"))
         if symbol in H2_SYMBOLS:
             specs.extend(
                 DatasetSpec("um", "premiumIndexKlines", symbol, i) for i in ("1d", "15m")
@@ -284,10 +300,13 @@ def measure(store: ArchiveStore, spec: DatasetSpec) -> dict:
         if not rows:
             record[period] = None
             continue
+        off_grid: list[int] = []
+        if spec.is_bars:
+            on_grid, off_grid = split_off_grid(rows, spec.step_ms)
+            gaps = bar_gaps([r[0] for r in on_grid], spec.step_ms, spec.name)
+        else:
+            gaps = funding_gaps(rows, spec.name)
         times = [r[0] for r in rows]
-        gaps = (
-            bar_gaps(times, spec.step_ms, spec.name) if spec.is_bars else funding_gaps(rows, spec.name)
-        )
         record[period] = {
             "files": len(months),
             "rows": len(rows),
@@ -297,6 +316,8 @@ def measure(store: ArchiveStore, spec: DatasetSpec) -> dict:
             "missing_rows": sum(g.missing for g in gaps),
             "gap_list": [_gap_record(g) for g in gaps[:50]],
             "repeated_rows": [iso_time(t) for t in repeats],
+            "off_grid_rows": len(off_grid),
+            "off_grid_span": [iso_time(off_grid[0]), iso_time(off_grid[-1])] if off_grid else None,
         }
         if not spec.is_bars:
             record[period]["intervals_hours"] = sorted({r.interval_hours for r in rows})

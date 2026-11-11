@@ -11,6 +11,7 @@ from norse_research.formats import (
     parse_funding,
     parse_klines,
     read_csv_member,
+    split_off_grid,
     to_ms,
 )
 
@@ -82,6 +83,17 @@ def test_exact_repeats_collapse_and_are_reported_but_conflicts_raise():
     conflict = parse_klines(kline_line(T0) + "\n" + kline_line(T0).replace("15.0", "16.0"), "t")
     with pytest.raises(DataIntegrityError, match="different rows"):
         collapse_repeats(conflict, "t")
+
+
+def test_off_grid_bars_are_set_aside_and_leave_a_gap():
+    # As after the 2018-02-08 outage: bars restart 8 min 16.09 s off the 15-minute grid.
+    step = INTERVAL_MS["15m"]
+    shift = 496_090
+    times = [T0, T0 + step, T0 + 5 * step + shift, T0 + 6 * step + shift, T0 + 8 * step]
+    rows = parse_klines("\n".join(kline_line(t, t + step - 1) for t in times), "t")
+    on_grid, off_grid = split_off_grid(rows, step)
+    assert off_grid == [T0 + 5 * step + shift, T0 + 6 * step + shift]
+    assert bar_gaps([r.open_time for r in on_grid], step) == [Gap(T0 + step, T0 + 8 * step, 6)]
 
 
 def test_funding_gaps_tolerate_jitter_and_interval_changes():
