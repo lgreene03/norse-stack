@@ -2,7 +2,7 @@ Norse Stack deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.
 
 Core services rendered:
 {{- if .Values.huginn.enabled }}
-  - huginn   (strategy engine)   metrics: :{{ .Values.huginn.metricsPort }}{{ .Values.huginn.metricsPath }}
+  - huginn   (strategy engine)   metrics: :{{ .Values.huginn.service.httpPort }}{{ .Values.huginn.metricsPath }} (same port as its HTTP API)
 {{- end }}
 {{- if .Values.sleipnir.enabled }}
   - sleipnir (execution gateway) metrics: :{{ .Values.sleipnir.metricsPort }}{{ .Values.sleipnir.metricsPath }}
@@ -27,8 +27,9 @@ External infrastructure is NOT managed by this chart. Point these at real infra:
   - MinIO/S3      : {{ .Values.externals.minio.endpoint }}
   - Tempo (OTLP)  : {{ .Values.externals.tempo.endpoint }}
 
-Port-forward a service to inspect it locally, e.g.:
-  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "norse-stack.fullname" . }}-huginn 8081:{{ .Values.huginn.metricsPort }}
+Port-forward a service to inspect it locally, e.g. huginn, whose HTTP API and
+{{ .Values.huginn.metricsPath }} then both answer on localhost:8081:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "norse-stack.fullname" . }}-huginn 8081:{{ .Values.huginn.service.httpPort }}
 
 See deploy/helm/README.md for kind/minikube install steps and docs/SCALING.md
 before raising any replicaCount above 1.

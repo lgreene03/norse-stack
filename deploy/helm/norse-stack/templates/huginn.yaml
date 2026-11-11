@@ -1,6 +1,15 @@
 {{- if .Values.huginn.enabled -}}
 {{- $svc := .Values.huginn -}}
 {{- $name := printf "%s-huginn" (include "norse-stack.fullname" .) -}}
+{{- /*
+  huginn serves its HTTP API and /metrics from one listener (SERVER_PORT), so
+  this chart exposes exactly one port for both, driven by service.httpPort.
+  A leftover huginn.metricsPort override that disagrees would leave Prometheus
+  scraping a port nothing listens on, so fail the render rather than drift.
+*/ -}}
+{{- if and (hasKey $svc "metricsPort") (ne (int $svc.metricsPort) (int $svc.service.httpPort)) -}}
+{{- fail (printf "huginn.metricsPort (%v) is no longer used: huginn serves /metrics on huginn.service.httpPort (%v). Remove huginn.metricsPort or set huginn.service.httpPort instead." $svc.metricsPort $svc.service.httpPort) -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,7 +29,7 @@ spec:
         {{- include "norse-stack.selectorLabels" (dict "ctx" . "component" "huginn") | nindent 8 }}
       annotations:
         prometheus.io/scrape: "true"
-        prometheus.io/port: {{ $svc.metricsPort | quote }}
+        prometheus.io/port: {{ $svc.service.httpPort | quote }}
         prometheus.io/path: {{ $svc.metricsPath | quote }}
     spec:
       {{- with .Values.global.imagePullSecrets }}
@@ -43,11 +52,13 @@ spec:
           ports:
             - name: grpc
               containerPort: {{ $svc.service.grpcPort }}
+            # One listener serves the HTTP API and /metrics.
             - name: http
               containerPort: {{ $svc.service.httpPort }}
-            - name: metrics
-              containerPort: {{ $svc.metricsPort }}
           env:
+            # Bind huginn to the port the chart exposes, so the two cannot drift.
+            - name: SERVER_PORT
+              value: {{ $svc.service.httpPort | quote }}
             - name: KAFKA_BROKERS
               value: {{ .Values.externals.kafka.brokers | quote }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
@@ -59,12 +70,12 @@ spec:
           readinessProbe:
             httpGet:
               path: {{ $svc.metricsPath }}
-              port: metrics
+              port: http
             initialDelaySeconds: 10
             periodSeconds: 10
           livenessProbe:
             tcpSocket:
-              port: metrics
+              port: http
             initialDelaySeconds: 15
             periodSeconds: 20
           resources:
@@ -85,10 +96,8 @@ spec:
     - name: grpc
       port: {{ $svc.service.grpcPort }}
       targetPort: grpc
+    # HTTP API and /metrics share this one port.
     - name: http
       port: {{ $svc.service.httpPort }}
       targetPort: http
-    - name: metrics
-      port: {{ $svc.metricsPort }}
-      targetPort: metrics
 {{- end }}
