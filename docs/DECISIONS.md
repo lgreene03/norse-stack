@@ -55,3 +55,36 @@ display numbers that do not exist yet. New goals G0.16 and G1.10.
 
 **D7. The weekly task `norse-parity-advance`.** No decision needed: the task no longer
 exists. The scheduled task `norse-iteration-driver` replaces it.
+
+## 2026-11-11
+
+**D8. A data heartbeat, as a narrow exception to D2.** Decided by the owner on
+2026-11-11: notify the owner when recorded data stops arriving, without building full
+alerting. Built as a launchd agent on this Mac (`scripts/data-heartbeat.sh`, label
+`io.github.lgreene03.norse.data-heartbeat`) that checks every 15 minutes that the drive
+is mounted and that each of the twenty streams has written in the last 15 minutes, and
+shows a macOS notification only when that state changes. Nothing leaves the machine.
+Remove it with `make heartbeat-uninstall`. G0.14 stays deferred.
+
+**D9. What to do with huginn's stuck composite strategy.** Open; the owner decides.
+G0.8 found that the live composite opened one long in each of its five instruments on
+2026-06-22 and has no exit path, so its one-position-per-instrument check refuses every
+entry since. The options are to leave it idle, to clear its stored positions (it
+trades again and sticks again the same way), or to give it exits. Recommendation:
+leave it idle. It trades the retired order-book signal, so un-sticking it only produces
+more paper results from a strategy already judged to have no edge, and G1.9's
+target-position harness, with explicit exits, is what will run H1 and H2.
+
+**D10. A non-crypto asset class after the verdict.** Open; for the owner after
+2026-12-15. Research on 2026-11-11 found no reason to leave crypto before the verdict:
+it is the only market with free, keyless, full-depth history, and H1 and H2 run on it.
+It also found that H2 cannot be traded by a UK retail client (the FCA ban on crypto
+derivatives for retail remains, though crypto ETNs were opened to retail on 2025-10-08)
+and that funding carry was attractive on only about 8% of days in 2025. The cheapest
+path to something the owner could trade is a daily cross-asset trend study on futures
+or UCITS ETFs, the best-documented edge at that horizon (net Sharpe about 0.76 over a
+century, mixed since 2020). Its data costs about $270 a year (Norgate futures) and
+needs an account, so it would mean relaxing the no-paid-feeds rule for that one
+source. Live intraday or order-book equities data is not recommended: it is paid, and
+the retired order-book signal showed that short-horizon edges do not survive retail
+costs. Free daily FX reference rates can be added at any time.
