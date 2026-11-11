@@ -298,6 +298,27 @@
           </div>
         </div>
       </div>
+
+      <!-- order intents: why huginn is or is not trading (G0.8) -->
+      <div style="margin-top:14px;background:#070d17;border:1px solid #16233a;border-radius:10px;padding:12px 14px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+          <span style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:10.5px;color:#7787a0;font-weight:600;letter-spacing:.06em">ORDER INTENTS · WHY NOT TRADING</span>
+            <span data-nc="intent-status" style="font-size:9.5px;font-weight:700;letter-spacing:.06em;color:#f3b13c;background:#1c1606;border:1px solid #43381a;padding:2px 7px;border-radius:4px">IDLE</span>
+          </span>
+          <span style="font-size:10.5px;color:#6b7c95;font-family:'JetBrains Mono',monospace">last order intent: <span data-nc="last-intent" style="color:#dbe4f0">none since huginn started at 2026-11-10 20:47:26Z</span></span>
+        </div>
+        <div data-nc="blocked-lead" style="font-size:11.5px;color:#c4d0e0;margin-bottom:10px">Leading refusal since 2026-11-10 20:47:26Z: position_open, 378 entries (instrument already holds its one position).</div>
+        <div data-nc="blocked-reasons" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px">
+          <div style="background:#0a111e;border:1px solid #14202f;border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:4px"><span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.04em;font-family:'JetBrains Mono',monospace">below_threshold</span><span style="font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:600;color:#dbe4f0;line-height:1">312</span><span style="font-size:9.5px;color:#4f5e75">signal inside the entry band</span></div>
+          <div style="background:#0a111e;border:1px solid #43381a;border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:4px"><span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.04em;font-family:'JetBrains Mono',monospace">position_open</span><span style="font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:600;color:#f3b13c;line-height:1">378</span><span style="font-size:9.5px;color:#4f5e75">instrument already holds its one position</span></div>
+          <div style="background:#0a111e;border:1px solid #14202f;border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:4px"><span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.04em;font-family:'JetBrains Mono',monospace">max_position</span><span style="font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:600;color:#4f5e75;line-height:1">0</span><span style="font-size:9.5px;color:#4f5e75">net-position cap reached</span></div>
+          <div style="background:#0a111e;border:1px solid #14202f;border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:4px"><span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.04em;font-family:'JetBrains Mono',monospace">zero_size</span><span style="font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:600;color:#4f5e75;line-height:1">0</span><span style="font-size:9.5px;color:#4f5e75">order size not positive</span></div>
+          <div style="background:#0a111e;border:1px solid #14202f;border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:4px"><span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.04em;font-family:'JetBrains Mono',monospace">cost_hurdle</span><span style="font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:600;color:#4f5e75;line-height:1">0</span><span style="font-size:9.5px;color:#4f5e75">edge below round-trip cost</span></div>
+          <div style="background:#0a111e;border:1px solid #14202f;border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:4px"><span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.04em;font-family:'JetBrains Mono',monospace">risk_rejected</span><span style="font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:600;color:#4f5e75;line-height:1">0</span><span style="font-size:9.5px;color:#4f5e75">risk manager refused the fill</span></div>
+        </div>
+        <div style="font-size:9.5px;color:#4f5e75;margin-top:8px">huginn_entries_blocked_total counts each entry once, by the first gate that stopped it, since huginn last started; below_threshold means the signal never became a candidate. IDLE means no order intent since start, or none in the last hour.</div>
+      </div>
     </section>
 
     <!-- ============ (3) ALPHA PLATFORM ============ -->

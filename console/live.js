@@ -5,7 +5,8 @@
  * response:
  *
  *   /api/snapshot   → huginn  live trading (equity strip, positions, fills)
- *   /api/metrics    → huginn  composite score, alpha contributions, suppressed
+ *   /api/metrics    → huginn  composite score, alpha contributions, suppressed,
+ *                             blocked entries by reason, last order intent
  *   /api/alphas     → huginn  alpha rows (weight / contribution / confidence / IC)
  *   /api/portfolio  → odin    target weights / factor exposure / risk donut
  *   /api/validation → huginn  walk-forward folds / PBO / deflated Sharpe
@@ -78,6 +79,14 @@
         { fold: 4, train: '2026-05-18T01:01 → 2026-05-18T20:12', test: '2026-05-18T20:12 → 2026-05-19T01:00', isPnL: -219.9, oosPnL: -65.4 }
       ],
       oosFoldsProfitable: '0/4', totalOOSPnL: -146.1, pbo: 1.0, deflatedSharpe: null
+    },
+    // Idleness (G0.8): an idle huginn whose entries are all refused because
+    // every instrument already holds its one position.
+    idle: {
+      exported: true,
+      blocked: { below_threshold: 312, position_open: 378, max_position: 0, zero_size: 0, cost_hurdle: 0, risk_rejected: 0 },
+      lastIntent: 0,
+      processStart: 1794343646
     },
     services: [
       { name: 'muninn', status: 'up' }, { name: 'huginn', status: 'up' },
@@ -269,7 +278,8 @@
     }
 
     var data = { live: null, alpha: null, portfolio: null, validation: null, services: null,
-                 research: null, features: null, tca: null, regime: null, impact: null };
+                 research: null, features: null, tca: null, regime: null, impact: null,
+                 idle: null };
     var sources = new Set();
 
     // shared metrics text (huginn /api/metrics)
@@ -337,12 +347,22 @@
       var samples = parseMetrics(text);
       var sup = 0, supFound = false, score = null;
       var contrib = {};
+      // Idleness (G0.8): blocked entries by reason, the last order intent time
+      // and huginn's start time. `exported` stays false on a huginn image that
+      // predates the counter, so the panel says so instead of showing zeros.
+      var idle = { exported: false, blocked: {}, lastIntent: null, processStart: null };
       for (var i = 0; i < samples.length; i++) {
         var s = samples[i];
         if (s.name === 'huginn_orders_cost_suppressed_total') { sup += s.value; supFound = true; }
         if (s.name === 'huginn_composite_score') { score = s.value; }
         if (s.name === 'huginn_alpha_contribution' && s.labels.alpha) { contrib[s.labels.alpha] = s.value; }
+        if (s.name === 'huginn_entries_blocked_total' && s.labels.reason) {
+          idle.blocked[s.labels.reason] = s.value; idle.exported = true;
+        }
+        if (s.name === 'huginn_last_order_intent_timestamp_seconds') { idle.lastIntent = s.value; }
+        if (s.name === 'process_start_time_seconds') { idle.processStart = s.value; }
       }
+      data.idle = idle;
       // Always surface the count when /metrics is reachable: a strategy that
       // doesn't emit the counter (e.g. composite) legitimately has 0 suppressed,
       // which is more honest than a dangling dash. supFound only gates nothing
@@ -1204,9 +1224,104 @@
     return '<div style="padding:16px 14px;text-align:center;color:#4f5e75;font-size:11.5px;font-style:italic">' + esc(msg) + '</div>';
   }
 
+  // ====================================================================
+  // Idleness (G0.8): why huginn is not trading. Reads
+  // huginn_entries_blocked_total{reason}, huginn_last_order_intent_timestamp_seconds
+  // and process_start_time_seconds from /api/metrics. Counters reset when
+  // huginn restarts, so every figure is "since huginn started".
+  // ====================================================================
+  // Gate order, as huginn applies them; below_threshold is "no candidate",
+  // every other reason is a candidate entry that was refused.
+  var BLOCK_REASONS = [
+    { key: 'below_threshold', desc: 'signal inside the entry band' },
+    { key: 'position_open', desc: 'instrument already holds its one position' },
+    { key: 'max_position', desc: 'net-position cap reached' },
+    { key: 'zero_size', desc: 'order size not positive' },
+    { key: 'cost_hurdle', desc: 'edge below round-trip cost' },
+    { key: 'risk_rejected', desc: 'risk manager refused the fill' }
+  ];
+  // A last intent older than this also counts as IDLE.
+  var IDLE_AFTER_SECS = 3600;
+
+  function fmtUtc(secs) {
+    var d = new Date(secs * 1000);
+    if (isNaN(d.getTime())) return DASH;
+    return d.toISOString().replace('T', ' ').slice(0, 19) + 'Z';
+  }
+  function fmtAge(secs) {
+    if (!isNum(secs) || secs < 0) return DASH;
+    if (secs < 172800) return fmtLag(secs);
+    return nf(secs / 86400, 0) + 'd';
+  }
+  function setPill(key, label, color, bg, border) {
+    var el = $(key);
+    if (!el) return;
+    el.textContent = label;
+    el.style.color = color; el.style.background = bg; el.style.borderColor = border;
+  }
+
+  function applyIdle(I) {
+    var reasonsEl = $('blocked-reasons');
+    if (!I || !I.exported) {
+      setPill('intent-status', 'UNKNOWN', C.dim, '#11192a', '#22324a');
+      setText('last-intent', DASH);
+      setText('blocked-lead', I
+        ? 'huginn does not export huginn_entries_blocked_total: its image predates goal G0.8.'
+        : 'connecting to huginn…');
+      if (reasonsEl) reasonsEl.innerHTML = '';
+      return;
+    }
+
+    var started = isNum(I.processStart) && I.processStart > 0 ? fmtUtc(I.processStart) : null;
+    var now = Date.now() / 1000;
+    var idle;
+    if (!isNum(I.lastIntent) || I.lastIntent <= 0) {
+      idle = true;
+      setText('last-intent', 'none since huginn started' + (started ? ' at ' + started : ''));
+    } else {
+      var age = now - I.lastIntent;
+      idle = age > IDLE_AFTER_SECS;
+      setText('last-intent', fmtUtc(I.lastIntent) + ' (' + fmtAge(age) + ' ago)');
+    }
+    if (idle) setPill('intent-status', 'IDLE', C.amber, '#1c1606', '#43381a');
+    else setPill('intent-status', 'ACTIVE', C.green, '#0c1f1a', '#1d4a3c');
+
+    // Leading refusal: the largest count among the refusal reasons.
+    var lead = null;
+    BLOCK_REASONS.forEach(function (r) {
+      if (r.key === 'below_threshold') return;
+      var n = I.blocked[r.key] || 0;
+      if (n > 0 && (!lead || n > lead.n)) lead = { key: r.key, desc: r.desc, n: n };
+    });
+    var since = started ? ' since ' + started : ' since huginn started';
+    var below = I.blocked.below_threshold || 0;
+    if (lead) {
+      setText('blocked-lead', 'Leading refusal' + since + ': ' + lead.key + ', ' + nf(lead.n, 0) +
+        ' entries (' + lead.desc + ').');
+    } else if (below > 0) {
+      setText('blocked-lead', 'No entry refused' + since + ': the signal has not cleared the entry band.');
+    } else {
+      setText('blocked-lead', 'No entry evaluated' + since + '.');
+    }
+
+    if (reasonsEl) {
+      reasonsEl.innerHTML = BLOCK_REASONS.map(function (r) {
+        var n = I.blocked[r.key];
+        var has = isNum(n);
+        var isLead = lead && lead.key === r.key;
+        var color = !has ? C.dim : (isLead ? C.amber : (n > 0 ? '#dbe4f0' : '#4f5e75'));
+        return '<div style="background:#0a111e;border:1px solid ' + (isLead ? '#43381a' : '#14202f') + ';border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:4px">' +
+          '<span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.04em;font-family:\'JetBrains Mono\',monospace">' + esc(r.key) + '</span>' +
+          '<span style="font-family:\'JetBrains Mono\',monospace;font-size:16px;font-weight:600;color:' + color + ';line-height:1">' + (has ? nf(n, 0) : DASH) + '</span>' +
+          '<span style="font-size:9.5px;color:#4f5e75">' + esc(r.desc) + '</span></div>';
+      }).join('');
+    }
+  }
+
   function apply(res) {
     var d = res.data || {};
     applyLive(d.live);
+    applyIdle(d.idle);
     applyAlpha(d.alpha);
     applyPortfolio(d.portfolio);
     applyValidation(d.validation);
