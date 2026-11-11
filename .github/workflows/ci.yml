@@ -134,6 +134,8 @@ jobs:
             has_tests: "true"
           - service: news-sentinel
             has_tests: "true"
+          - service: recording-audit
+            has_tests: "true"
     steps:
       - uses: actions/checkout@v7
 
@@ -185,6 +187,42 @@ jobs:
       - name: Lint (ruff)
         working-directory: services/${{ matrix.service }}
         run: ruff check .
+
+      # recording-audit only: its S3 client is tested against a real S3 server, not
+      # only against a fake. MinIO's images can no longer be pulled anonymously
+      # (quay.io answers 401), so this is SeaweedFS, as in muninn's own integration
+      # tests; the live MinIO is read by the service itself. Throwaway, with a random
+      # secret written to a config file and handed to the test as credential files,
+      # never on a command line (G0.4). RECORDING_AUDIT_REQUIRE_S3_CONTRACT makes
+      # the contract test fail, not skip, if this step stops providing a server.
+      - name: Start a throwaway S3 server for the contract test
+        if: matrix.service == 'recording-audit'
+        run: |
+          set -euo pipefail
+          creds="$RUNNER_TEMP/s3-contract"
+          mkdir -p "$creds"
+          printf 'contract-test\n' > "$creds/access"
+          openssl rand -hex 24 > "$creds/secret"
+          echo "::add-mask::$(cat "$creds/secret")"
+          printf '{"identities":[{"name":"contract","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","List","Tagging","Write"]}]}\n' \
+            "$(cat "$creds/access")" "$(cat "$creds/secret")" > "$creds/s3.json"
+          docker run -d --name s3-contract -p 127.0.0.1:9000:9000 \
+            -v "$creds/s3.json:/etc/seaweedfs/s3.json:ro" \
+            chrislusf/seaweedfs:3.97 server -dir=/data -ip.bind=0.0.0.0 -s3 -s3.port=9000 \
+            -s3.config=/etc/seaweedfs/s3.json -master.volumeSizeLimitMB=64 -volume.max=0
+          for _ in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:9000/status >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:9000/status >/dev/null
+          {
+            echo "RECORDING_AUDIT_TEST_S3_ENDPOINT=http://127.0.0.1:9000"
+            echo "RECORDING_AUDIT_REQUIRE_S3_CONTRACT=1"
+            echo "S3_ACCESS_KEY_FILE=$creds/access"
+            echo "S3_SECRET_KEY_FILE=$creds/secret"
+          } >> "$GITHUB_ENV"
 
       - name: Test (pytest + coverage)
         if: matrix.has_tests == 'true'

@@ -17,6 +17,7 @@ design), see [SECURITY.md](SECURITY.md).
 | Tear down (keep data) | `docker compose down` |
 | Tear down (wipe volumes) | `docker compose down -v` (keeps the recordings in `MINIO_DATA_DIR`, §6) |
 | Where the recordings are | `MINIO_DATA_DIR`, default `./data/minio` (§6) |
+| Recording gap audit | `RECORDING_AUDIT_DIR`, default `./data/recording-audit`; metrics on http://127.0.0.1:8098/metrics (§6.3) |
 | End-to-end smoke test | `./scripts/smoke.sh --teardown` |
 | Provision Kafka topics | `./scripts/provision-topics.sh` |
 | Grafana | http://localhost:3001 (board: **Norse Stack — Trading Pipeline**) |
@@ -411,6 +412,84 @@ without creating either, an empty source, an empty copy, a copy with no
 `muninn-raw` and a relative path; it printed `MISMATCH` (exit 1) for one copied
 file changed without changing its size, whose name contained a newline; and it
 printed `VERIFIED` (exit 0) for a good copy of 105 files.
+
+### 6.3 Recording gap audit (G0.15)
+
+The `recording-audit` service measures what the recorder actually kept. For each
+venue and UTC day it records the minutes covered, the gaps longer than 60 seconds
+and the bytes recorded, to a file and to Prometheus. It works from the event
+timestamps inside the stored objects (`eventTime` on every line), never from file
+or object times: a recorder that held and then caught up writes old events with new
+file times, and a muninn that was down writes nothing at all. It only reads the
+store, through MinIO's S3 API.
+
+Every 15 minutes it audits today so far, then every earlier day back to 2026-10-27,
+when recording began, that has no complete report yet, newest first. A day becomes
+complete ten minutes after it ends (`AUDIT_FINALISE_DELAY_SECONDS`), which gives the
+last events time to arrive, and its report is never rewritten after that. Today's
+window stops two minutes short of now, rounded down to the minute
+(`AUDIT_SETTLE_SECONDS`), so the recorder's once a minute flush is never mistaken
+for a gap.
+
+**The files** are in `RECORDING_AUDIT_DIR` on the host, by default
+`./data/recording-audit` in the checkout that runs the stack (ignored by git):
+
+- `YYYY-MM-DD.json`, one per UTC day: per venue and per stream, the minutes covered,
+  every gap with its start, end and length, bytes, records and objects. `complete`
+  says whether the day is final, and the definitions are repeated in the file.
+- `daily.csv`: one row per day and venue, which is what P3 is measured from, with
+  `coverage_pct` and `p3_met` (coverage of at least 99.5%).
+
+**The metrics** are at http://127.0.0.1:8098/metrics, scraped by Prometheus as job
+`recording-audit`. Every per-day series carries `day="today"` or `day="yesterday"`;
+the date itself is not a label, so the series stay bounded, and
+`recording_audit_day_start_timestamp_seconds` says which day each one is.
+
+| Metric | Labels | Meaning |
+|--------|--------|---------|
+| `recording_audit_venue_minutes_covered` | venue, day | Minutes with a trade and a book event from the venue (P3) |
+| `recording_audit_venue_coverage_ratio` | venue, day | The same over the minutes audited; P3 needs at least 0.995 |
+| `recording_audit_venue_minutes_covered_all_streams` | venue, day | Minutes in which all ten of the venue's streams recorded |
+| `recording_audit_venue_gaps` | venue, day | Silences longer than 60 s in which the venue recorded nothing |
+| `recording_audit_venue_longest_gap_seconds` | venue, day | The longest of those inside the day |
+| `recording_audit_venue_recorded_bytes` | venue, day | Stored bytes filed under the day |
+| `recording_audit_venue_unreadable_objects` | venue, day | Objects that would not decompress |
+| `recording_audit_stream_minutes_covered`, `_gaps`, `_longest_gap_seconds`, `_recorded_bytes`, `_records` | venue, event_type (`trade` or `book`), instrument, day | The same per stream |
+| `recording_audit_window_minutes`, `recording_audit_report_complete` | day | Minutes audited so far (1440 once complete); 1 when final |
+| `recording_audit_last_success_timestamp_seconds`, `recording_audit_runs_total{result}`, `recording_audit_last_run_duration_seconds`, `recording_audit_objects_read_total` | | Whether the audit itself is running |
+
+**Definitions.** A stream is one event type (trades or book snapshots) from one venue
+for one instrument: two venues, five pairs and two event types make twenty. A
+stream's minutes covered are the UTC minutes holding at least one of its events. A
+venue's minutes covered follow P3: minutes with at least one trade and at least one
+book event from that venue, on any instrument. A gap is a silence longer than 60
+seconds between consecutive events, clipped to the day; one that crosses midnight is
+listed on both days, and `silence_seconds` gives its whole length. A venue gap is a
+silence in which the venue recorded nothing on any stream. Bytes recorded are the
+stored (gzip) sizes of the objects filed under the day. Objects are filed by Kafka
+arrival hour, not event hour, so a day's audit also reads the hour either side of it.
+
+**Reading it.** Book snapshots arrive several times a second, so a gap on a book
+stream, and any venue gap, means the recorder or the venue connection stopped. A
+trade stream on a quiet pair can show short gaps that are only a quiet market.
+
+**Operating it.**
+
+```bash
+docker compose up -d --no-deps recording-audit   # start or update it alone
+docker compose logs --tail=20 recording-audit    # one line per day audited
+curl -s http://127.0.0.1:8098/metrics | grep venue_minutes_covered
+cat data/recording-audit/daily.csv
+```
+
+When MinIO cannot be reached the run fails, `recording_audit_runs_total{result="failure"}`
+rises, `recording_audit_last_success_timestamp_seconds` stops moving, and the next run
+tries again; the service has no `depends_on`, so it starts even when MinIO cannot. To
+audit a day again, delete its JSON file and the next run rebuilds it with its CSV
+rows. It reads the store with the same credentials MinIO and muninn take from `.env`,
+passed through the environment, never on a command line. A read-only user scoped to
+`muninn-raw` would be better (G0.4); mount its keys as files and set
+`S3_ACCESS_KEY_FILE` and `S3_SECRET_KEY_FILE`, which take precedence.
 
 ---
 

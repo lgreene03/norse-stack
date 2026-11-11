@@ -210,7 +210,7 @@ engine services' `build:` for `image: ghcr.io/lgreene03/<svc>:${TAG:-latest}`.
 back to Path A (build from source). Pin a tag with
 `HUGINN_TAG=… SLEIPNIR_TAG=… MUNINN_TAG=…`.
 
-Either path starts all 23 containers. No exchange credentials needed — Sleipnir runs in simulated mode, Obi-Bridge connects to Binance's public (unauthenticated) WebSocket streams.
+Either path starts all 24 containers. No exchange credentials needed: Sleipnir runs in simulated mode, Obi-Bridge connects to Binance's public (unauthenticated) WebSocket streams.
 
 ### Run the end-to-end smoke test
 
@@ -244,6 +244,7 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 | 8095 | Mimir Feature Store | http://localhost:8095/api/features |
 | 8096 | Forseti TCA / Impact | http://localhost:8096/api/tca · http://localhost:8096/api/impact |
 | 8097 | Heimdall Regime | http://localhost:8097/api/regime |
+| 8098 | Recording Audit (G0.15) | http://localhost:8098/metrics |
 | 9091 | Prometheus | http://localhost:9091 |
 | 9093 | Alertmanager | http://localhost:9093 |
 | 3001 | Grafana | http://localhost:3001 (admin/norse) |

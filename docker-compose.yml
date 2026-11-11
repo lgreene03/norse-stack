@@ -608,6 +608,55 @@ services:
 
   # ── Observability ─────────────────────────────────────────────────────
 
+  # Daily recording gap audit (G0.15). Reads what muninn's recorder stored in
+  # muninn-raw and measures, per venue and UTC day, the minutes covered, the gaps
+  # longer than 60 s and the bytes recorded, from the event timestamps inside the
+  # objects. Writes one JSON report per day and daily.csv to RECORDING_AUDIT_DIR,
+  # and serves the same numbers as Prometheus metrics. Read-only on the store.
+  # No depends_on, on purpose: with MinIO down the audit must still run and say
+  # so (recording_audit_runs_total{result="failure"}), not fail to start.
+  # docs/RUNBOOK.md, section 6.3.
+  recording-audit:
+    build:
+      context: ./services/recording-audit
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:8098:8098"
+    environment:
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: muninn-raw
+      # The credentials MinIO and muninn take from .env, through the environment and
+      # never on a command line (G0.4). To use a separate read-only user scoped to
+      # muninn-raw, mount files and set S3_ACCESS_KEY_FILE and S3_SECRET_KEY_FILE,
+      # which take precedence.
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      AUDIT_PORT: "8098"
+      AUDIT_REPORT_DIR: /reports
+      AUDIT_INTERVAL_SECONDS: "900"
+      # Recording began on 2026-10-27. Keep a complete report for every day since,
+      # and refill any that go missing (newest first, after today's).
+      AUDIT_EARLIEST_DAY: "2026-10-27"
+      AUDIT_BACKFILL_DAYS: "366"
+    volumes:
+      - ${RECORDING_AUDIT_DIR:-./data/recording-audit}:/reports
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8098/healthz',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    mem_limit: 256m
+    cpus: "1.0"
+    pids_limit: 128
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+
   # Distributed tracing collector. Huginn → Sleipnir spans propagate via W3C
   # TraceContext on Kafka headers and land here over OTLP/gRPC (port 4317).
   # Services only export when OTEL_EXPORTER_OTLP_ENDPOINT is set (see below);

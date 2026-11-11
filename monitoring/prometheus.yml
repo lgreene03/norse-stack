@@ -42,3 +42,12 @@ scrape_configs:
     static_configs:
       - targets: ['muninn:8080']
     metrics_path: /actuator/prometheus
+
+  # Daily recording gap audit (G0.15): minutes covered, gaps and bytes per venue
+  # and stream, for today so far and yesterday. Recomputed every 15 minutes, so
+  # a 60 s scrape is plenty.
+  - job_name: 'recording-audit'
+    scrape_interval: 60s
+    static_configs:
+      - targets: ['recording-audit:8098']
+    metrics_path: /metrics
