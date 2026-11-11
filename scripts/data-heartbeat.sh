@@ -272,12 +272,11 @@ check() {
   return 1
 }
 
+# With sed, not ${s//&/...}: from bash 5.2 an unquoted & in that replacement
+# stands for the match (patsub_replacement), so < would become <lt; there while
+# bash 3.2 gives &lt;. CI caught exactly that.
 xml_escape() {
-  local s=$1
-  s=${s//&/&amp;}
-  s=${s//</&lt;}
-  s=${s//>/&gt;}
-  printf '%s' "$s"
+  printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
 }
 
 sed_escape() {
