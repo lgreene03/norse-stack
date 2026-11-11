@@ -50,7 +50,7 @@ def test_measure_reports_span_missing_months_gaps_and_the_period_split(tmp_path)
         if month == "2025-12":
             times = times[:10] + times[12:]  # two missing days
         if month == "2026-01":
-            times = times[:9] + [times[9]] + times[9:]  # one row published twice
+            times = [*times[:9], times[9], *times[9:]]  # one row published twice
         put(store, spec, month, times)
     write_listing(store, spec, months)
 
