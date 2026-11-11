@@ -39,7 +39,7 @@ stream that has stopped entirely still shows, with no minutes covered.
 python3 -m pytest services/recording-audit/tests -q
 ```
 
-`tests/test_s3_contract.py` runs against a real MinIO when
+`tests/test_s3_contract.py` runs against a real S3 server when
 `RECORDING_AUDIT_TEST_S3_ENDPOINT` and credential files are set, as CI does with a
-throwaway MinIO; locally it skips. Never point it at the live store, which it would
-write to.
+throwaway SeaweedFS (MinIO's images can no longer be pulled anonymously); locally it
+skips. Never point it at the live store, which it would write to.

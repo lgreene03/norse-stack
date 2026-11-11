@@ -1,6 +1,7 @@
-"""Contract test: the S3 client and the audit against a real MinIO.
+"""Contract test: the S3 client and the audit against a real S3 server.
 
-CI starts a throwaway MinIO of the release docker-compose.yml runs and sets
+CI starts a throwaway SeaweedFS (MinIO's images can no longer be pulled anonymously;
+muninn's integration tests made the same move) and sets
 RECORDING_AUDIT_TEST_S3_ENDPOINT, with credentials passed by file
 (S3_ACCESS_KEY_FILE, S3_SECRET_KEY_FILE). It also sets
 RECORDING_AUDIT_REQUIRE_S3_CONTRACT=1, which turns a missing endpoint into a failure,
@@ -27,8 +28,8 @@ AFTER_DAY = dt.datetime(2026, 11, 12, 0, 30, tzinfo=dt.UTC)
 def client():
     if not ENDPOINT:
         if REQUIRED:
-            pytest.fail("RECORDING_AUDIT_REQUIRE_S3_CONTRACT=1 but no test MinIO endpoint is set")
-        pytest.skip("no test MinIO: set RECORDING_AUDIT_TEST_S3_ENDPOINT to run")
+            pytest.fail("RECORDING_AUDIT_REQUIRE_S3_CONTRACT=1 but no test S3 endpoint is set")
+        pytest.skip("no test S3 server: set RECORDING_AUDIT_TEST_S3_ENDPOINT to run")
     c = S3Client(ENDPOINT, f"contract-{uuid.uuid4().hex[:12]}", load_credentials(os.environ))
     c.create_bucket()
     return c

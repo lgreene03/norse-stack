@@ -2,9 +2,9 @@
 
 Standard library only. The audit needs two calls, ListObjectsV2 and GetObject, and a
 dependency the size of boto3 for those two would be most of the image and most of
-the supply chain to audit. The signer is checked against the worked example in the
-AWS documentation (tests/test_s3client.py) and, in CI, against a real MinIO of the
-release the stack runs (tests/test_s3_contract.py).
+the supply chain to audit. The signer is checked against the worked examples in the
+AWS documentation (tests/test_s3client.py) and, in CI, against a real S3 server
+(tests/test_s3_contract.py).
 
 Credentials are read from files (``S3_ACCESS_KEY_FILE``, ``S3_SECRET_KEY_FILE``) or,
 failing that, from the environment (``S3_ACCESS_KEY``, ``S3_SECRET_KEY``), never
