@@ -507,6 +507,16 @@ and checks two things:
    snapshots) has an object written in the last 15 minutes. The recorder flushes at
    least once a minute, so a healthy stream is never close.
 
+It never lists a folder on the drive. macOS does not let a launchd job read the
+contents of a folder on an external drive without a privacy grant (Removable
+Volumes), though it may read a folder's metadata. The first install on 2026-11-11
+used `ls` and `find`, was refused (`kTCCServiceSystemPolicyRemovableVolumes` for
+`/bin/bash`, in the unified log), and reported every stream as unreadable. So each
+check names the current and previous UTC hour partitions of each stream from the
+clock and reads only their modification times: MinIO keeps every object as a new
+folder inside its arrival-hour partition, so that time is when the newest object was
+stored. No privacy setting needs changing.
+
 It shows a notification only when the state changes: from OK to FAILING, naming the
 failing streams or the missing drive, and from FAILING back to OK. A first run that
 finds everything OK shows nothing, and a check that is still failing stays quiet. If
@@ -551,9 +561,10 @@ rm ~/.local/bin/norse-data-heartbeat ~/.local/state/norse/data-heartbeat.*
 **When no notification appears.** macOS shows these notifications as coming from
 Script Editor, so they appear only if System Settings, Notifications, Script Editor
 allows them. `./scripts/data-heartbeat.sh test-notification` shows one on demand. If
-every stream is reported as `unreadable`, macOS is refusing the script access to the
-external drive; whether to allow it, under Privacy and Security, is the owner's
-decision.
+it reports the drive missing while "Mac 4T" is mounted, a future macOS may have
+started refusing metadata reads too; the unified log will name the service
+(`log show --last 1h --predicate 'subsystem == "com.apple.TCC"'`), and whether to
+grant it is the owner's decision.
 
 ---
 

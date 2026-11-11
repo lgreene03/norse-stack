@@ -10,7 +10,8 @@
 #      which on the owner's Mac means the external drive is mounted;
 #   2. that each of the twenty streams (Binance and OKX; BTC, ETH, SOL, XRP and
 #      DOGE against USDT; trades and book snapshots) has an object written in the
-#      last 15 minutes. The recorder flushes at least once a minute.
+#      last 15 minutes. The recorder flushes at least once a minute. Only folder
+#      times are read, never folder contents (see stream_problem).
 #
 # It notifies only when the overall state changes: OK to FAILING, naming the failing
 # streams or the missing drive, and FAILING to OK. Its state and a short log live
@@ -126,44 +127,42 @@ notify() {
     "$title" "$message" "$sound" >/dev/null
 }
 
-# Prints nothing when the stream has an object newer than MAX_AGE minutes, and
-# otherwise why not. Always succeeds. Only the two newest hour folders of the two
-# newest days are searched: objects are filed by arrival hour, so anything written
-# in the last 15 minutes is there.
+# GNU (CI) and BSD (macOS) date and stat take different options; pick once.
+if [ "$(date -u -d @0 +%Y 2>/dev/null)" = 1970 ]; then
+  hour_partition() { date -u -d "@$1" +'year=%Y/month=%m/day=%d/hour=%H'; }
+else
+  hour_partition() { date -u -r "$1" +'year=%Y/month=%m/day=%d/hour=%H'; }
+fi
+if stat -c %Y / >/dev/null 2>&1; then
+  mtime() { stat -c %Y "$1"; }
+else
+  mtime() { stat -f %m "$1"; }
+fi
+
+# Prints nothing when the stream has stored an object in the last MAX_AGE minutes,
+# and otherwise why not. Always succeeds.
+#
+# It never lists a folder on the drive. macOS does not let a launchd job read the
+# contents of a folder on an external drive without a privacy grant (Removable
+# Volumes, for /bin/bash), but it does let it read a folder's metadata. MinIO keeps
+# each object as a new folder inside its arrival-hour partition, so that hour
+# folder's modification time is when its newest object was stored. The current and
+# previous UTC hour partitions are named from the clock and only their times read.
 stream_problem() {
-  local dir=$1 day hour found
-  local hours=()
+  local dir=$1 now=$2 when path stamp
   if [ ! -d "$dir" ]; then
     echo "no folder"
     return 0
   fi
-  if ! ls "$dir" >/dev/null 2>&1; then
-    echo "unreadable"
-    return 0
-  fi
-  set -- "$dir"/year=*/month=*/day=*
-  if [ ! -e "$1" ]; then
-    echo "no objects"
-    return 0
-  fi
-  if [ "$#" -gt 2 ]; then shift $(($# - 2)); fi
-  for day in "$@"; do
-    for hour in "$day"/hour=*; do
-      if [ -e "$hour" ]; then hours+=("$hour"); fi
-    done
+  for when in "$now" "$((now - 3600))"; do
+    path="$dir/$(hour_partition "$when")"
+    if [ -d "$path" ] && stamp=$(mtime "$path" 2>/dev/null); then
+      if [ $((now - stamp)) -le $((MAX_AGE * 60)) ]; then
+        return 0
+      fi
+    fi
   done
-  if [ "${#hours[@]}" -eq 0 ]; then
-    echo "no objects"
-    return 0
-  fi
-  if [ "${#hours[@]}" -gt 2 ]; then
-    hours=("${hours[@]:$((${#hours[@]} - 2))}")
-  fi
-  if found=$(find "${hours[@]}" -name xl.meta -mmin "-$MAX_AGE" -print -quit 2>/dev/null); then
-    if [ -z "$found" ]; then echo "nothing new for $MAX_AGE min"; fi
-  elif [ -z "$found" ]; then
-    echo "unreadable"
-  fi
+  echo "nothing new for $MAX_AGE min"
   return 0
 }
 
@@ -185,7 +184,8 @@ check() {
 
   local state detail title="" message="" sound=""
   local failing=() reasons=()
-  local total=0 unreadable=0 et src inst problem kind label shown
+  local total=0 et src inst problem kind label shown now
+  now=$(date +%s)
   if [ ! -d "$data_dir" ]; then
     state=FAILING
     detail="recordings folder not found: $data_dir"
@@ -198,12 +198,11 @@ check() {
       for src in $SOURCES; do
         for inst in $INSTRUMENTS; do
           total=$((total + 1))
-          problem=$(stream_problem "$data_dir/$BUCKET/$et/source=$src/instrument=$inst")
+          problem=$(stream_problem "$data_dir/$BUCKET/$et/source=$src/instrument=$inst" "$now")
           if [ -n "$problem" ]; then
             label="${src%%.*} $kind $inst"
             failing+=("$label")
             reasons+=("$label ($problem)")
-            if [ "$problem" = unreadable ]; then unreadable=$((unreadable + 1)); fi
           fi
         done
       done
@@ -216,10 +215,7 @@ check() {
       detail="${#failing[@]} of $total streams: $(printf '%s, ' "${reasons[@]}")"
       detail=${detail%, }
       title="Norse: recording stopped"
-      if [ "$unreadable" -eq "$total" ]; then
-        title="Norse: heartbeat cannot read the recordings"
-        message="$data_dir exists but cannot be read; macOS may be blocking access. See RUNBOOK 6.4."
-      elif [ "${#failing[@]}" -eq "$total" ]; then
+      if [ "${#failing[@]}" -eq "$total" ]; then
         message="No new data for $MAX_AGE min on any of the $total streams. Is muninn or MinIO down?"
       else
         shown=$(printf '%s, ' "${failing[@]:0:4}")

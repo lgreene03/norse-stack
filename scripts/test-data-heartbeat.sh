@@ -16,6 +16,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# The fixtures live in the current and previous UTC hour partitions. Do not start
+# in the last few seconds of an hour, so the hour cannot turn between building a
+# fixture and checking it.
+while [ "$(date -u +%M%S)" -ge 5955 ]; do sleep 1; done
+
+if [ "$(date -u -d @0 +%Y 2>/dev/null)" = 1970 ]; then
+  hour_partition() { date -u -d "@$1" +'year=%Y/month=%m/day=%d/hour=%H'; }
+else
+  hour_partition() { date -u -r "$1" +'year=%Y/month=%m/day=%d/hour=%H'; }
+fi
+
 # A space in the path, as on the owner's drive ("Mac 4T").
 drive="$work/Mac 4T"
 data="$drive/norse/minio"
@@ -52,15 +63,18 @@ streams() {
   done
 }
 
-# put STREAM DAY HOUR [old]: one object as MinIO keeps it, a folder holding xl.meta.
+# put STREAM [HOURS_AGO]: store one object now, as MinIO keeps it (a new folder
+# holding xl.meta), in the partition of the hour HOURS_AGO hours back (default 0).
 put() {
-  local object="$1/year=2026/month=11/day=$2/hour=$3/part-p0-$RANDOM$RANDOM.jsonl.gz"
+  local when object
+  when=$(($(date +%s) - ${2:-0} * 3600))
+  object="$1/$(hour_partition "$when")/part-p0-$RANDOM$RANDOM.jsonl.gz"
   mkdir -p "$object"
   : >"$object/xl.meta"
-  if [ "${4:-}" = old ]; then touch -t 202001010000 "$object/xl.meta"; fi
 }
 
-age() { find "$1" -name xl.meta -exec touch -t 202001010000 {} +; }
+# Make a stream's hour folders look as if nothing has been stored for years.
+age() { find "$1" -type d -name 'hour=*' -exec touch -t 202001010000 {} +; }
 
 # HEARTBEAT_SHELL=/bin/bash on a Mac runs it under bash 3.2, as launchd does.
 shell=${HEARTBEAT_SHELL:-bash}
@@ -78,8 +92,9 @@ doge="$data/muninn-raw/events.book.snapshot/source=okx.spot.v1/instrument=DOGE-U
 
 echo "# all twenty streams fresh"
 while IFS= read -r s; do
-  put "$s" 10 23 old
-  put "$s" 11 00
+  put "$s" 2
+  age "$s"
+  put "$s"
 done < <(streams)
 run_check
 expect "exits 0" [ "$status" -eq 0 ]
@@ -103,26 +118,47 @@ expect "no second notification" [ "$(shown)" -eq 1 ]
 expect "keeps the time it started failing" [ "$(since)" = "$first_since" ]
 
 echo "# it resumes"
-put "$doge" 11 00
+put "$doge"
 run_check
 expect "exits 0" [ "$status" -eq 0 ]
 expect "one resumed notification" [ "$(shown)" -eq 2 ]
 expect "says resumed" grep -q "Norse: recording resumed" "$notes"
 
-echo "# across midnight only the newest hours count"
+echo "# the previous hour's folder counts, an older one does not"
 while IFS= read -r s; do
   age "$s"
-  put "$s" 12 00
+  put "$s" 1
 done < <(streams)
 run_check
-expect "fresh objects in the new day are found" [ "$status" -eq 0 ]
+expect "a fresh object filed under the previous hour is enough" [ "$status" -eq 0 ]
+age "$doge"
+put "$doge" 2
+run_check
+expect "one filed two hours back is not looked at" [ "$status" -eq 1 ]
+put "$doge"
+run_check
+
+echo "# it never lists a folder on the drive"
+# macOS lets a launchd job read a folder's metadata on an external drive but not
+# its contents (Removable Volumes). Folders that can be crossed but not listed
+# (mode 311) stand in for that. The first version used ls and find and failed here.
+if [ "$(id -u)" -eq 0 ]; then
+  echo "note: running as root, which can list any folder; this case is not exercised"
+else
+  find "$data" -depth -type d >"$work/folders"
+  while IFS= read -r d; do chmod 311 "$d"; done <"$work/folders"
+  run_check
+  expect "every stream is still seen as fresh" [ "$status" -eq 0 ]
+  expect "and the output says so" grep -q "all 20 streams" "$work/out"
+  while IFS= read -r d; do chmod 755 "$d"; done <"$work/folders"
+fi
 
 echo "# everything stops"
 while IFS= read -r s; do age "$s"; done < <(streams)
 run_check
 expect "exits 1" [ "$status" -eq 1 ]
 expect "says all streams" grep -q "any of the 20 streams" "$notes"
-while IFS= read -r s; do put "$s" 12 00; done < <(streams)
+while IFS= read -r s; do put "$s"; done < <(streams)
 run_check
 expect "recovers" [ "$status" -eq 0 ]
 
@@ -135,7 +171,7 @@ expect "notifies once" [ "$(shown)" -eq $((before + 1)) ]
 expect "says the drive is missing" grep -q "recordings drive missing" "$notes"
 expect "names the folder" grep -q "Mac 4T/norse/minio is not there" "$notes"
 mv "$work/unmounted" "$drive"
-while IFS= read -r s; do put "$s" 12 00; done < <(streams)
+while IFS= read -r s; do put "$s"; done < <(streams)
 run_check
 expect "recovers when it is back" [ "$status" -eq 0 ]
 
@@ -151,21 +187,18 @@ before=$(shown)
 run_check
 expect "the next run notifies" [ "$(shown)" -eq $((before + 1)) ]
 expect "and records FAILING" [ "$(state)" = FAILING ]
-put "$doge" 12 00
+put "$doge"
 run_check
 
-echo "# an unreadable stream folder"
-if [ "$(id -u)" -eq 0 ]; then
-  echo "note: running as root, which reads any folder; permission case not exercised"
-else
-  chmod 000 "$doge"
-  run_check
-  expect "exits 1" [ "$status" -eq 1 ]
-  expect "reports it as unreadable" grep -q "okx book DOGE-USDT (unreadable)" "$work/out"
-  chmod 755 "$doge"
-  run_check
-  expect "recovers" [ "$status" -eq 0 ]
-fi
+echo "# a stream with no folder at all"
+mv "$doge" "$work/doge-away"
+run_check
+expect "exits 1" [ "$status" -eq 1 ]
+expect "reports the missing folder" grep -q "okx book DOGE-USDT (no folder)" "$work/out"
+mv "$work/doge-away" "$doge"
+put "$doge"
+run_check
+expect "recovers" [ "$status" -eq 0 ]
 
 echo "# .env forms"
 mkdir -p "$work/other"
