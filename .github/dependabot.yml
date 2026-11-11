@@ -20,3 +20,9 @@ updates:
     directory: /services/recording-audit
     schedule:
       interval: weekly
+
+  # research/'s pinned test runner (requirements-test.txt).
+  - package-ecosystem: pip
+    directory: /research
+    schedule:
+      interval: weekly

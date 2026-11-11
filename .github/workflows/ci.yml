@@ -290,6 +290,32 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
+  research:
+    # Research code for the iteration's gate (research/), starting with the data
+    # coverage tooling (G0.6). Standard library only at runtime, so the only
+    # installs are the pinned lint and test tools. The tests never touch the network.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt -r research/requirements-test.txt
+
+      - name: Lint (ruff)
+        working-directory: research
+        run: ruff check .
+
+      - name: Test (pytest)
+        working-directory: research
+        run: python -m pytest tests/ -q
+
   e2e-smoke:
     # Gated: only on the nightly schedule or an explicit manual dispatch.
     # Registry pulls and multi-repo builds are flaky in CI, so failure here does
