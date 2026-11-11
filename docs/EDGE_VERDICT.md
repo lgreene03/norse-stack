@@ -241,3 +241,111 @@ go run ./cmd/walkforward --data data/btc_6mo.jsonl --config configs/default.yaml
 
 See also [RESULTS.md](RESULTS.md) for the full-sample numbers and the
 cost-sweep frontier.
+
+## Why huginn has not traded since 2026-06-22 (G0.8, 2026-11-11)
+
+**Cause, confirmed with high confidence:** the live `composite` strategy holds
+one long in each of its five instruments, opened on 2026-06-22, and has no way
+to close them. Its one-position-per-instrument throttle
+(`internal/strategy/composite.go`, the check straight after the entry
+threshold) refuses every later entry on those instruments, in either
+direction, so huginn has made no order intent since 14:48 UTC that day (its
+last fill is stamped 14:48:45).
+This is not a verdict on the signal; the strategy is retired as an alpha. It
+is the reason the paper trader is silent.
+
+**It is not the cost gate.** `COST_HURDLE_K=1.0` is set for huginn in
+`docker-compose.yml`, but `cmd/huginn/main.go` attaches the hurdle only when
+the strategy is `obi`, so the composite runs with no cost gate at all and
+`huginn_orders_cost_suppressed_total` cannot move. The earlier claim that the
+cost gate had blocked trades since 10-27 was wrong.
+
+### Evidence
+
+All of it was gathered read-only (`SELECT` only, under
+`default_transaction_read_only`) on 2026-11-11, before any change.
+
+1. **The open positions.** The `strategy_state` row `composite` in
+   postgres-huginn holds five positions of 0.001, all buys: ETH-USDT entered
+   at 14:39:59, BTC-USDT at 14:44:59, SOL-USDT, XRP-USDT and DOGE-USDT at
+   14:49:59 (event time, UTC, 2026-06-22), net position 0.005. The `obi` row
+   was last written at 14:38:59 that day, so the stack switched from `obi` to
+   `composite` at that point and the composite filled its five slots within
+   ten minutes.
+2. **The last fills.** `trade_fills` has 119 rows, from 2026-06-21 14:26 to
+   2026-06-22 14:48:45 UTC. The last five are exactly those five buys
+   (14:39:29 to 14:48:45). There is nothing after them.
+3. **The last intents.** The high watermarks of `executions.intents.v1` sum
+   to 119 (41 + 40 + 38): one intent per fill over the topic's whole life,
+   none after 2026-06-22. (`trade_orders` is empty; nothing writes to it.)
+4. **The signal is not what stops it.** Prometheus keeps 15 days (its oldest
+   `huginn_composite_score` sample is from 2026-10-26). Sampled every five
+   minutes, the score sat outside the 0.05 entry band in 2,329 of the 3,869
+   samples it holds (822 above +0.05, 1,507 below -0.05). Yet
+   `huginn_orders_generated_total`, `huginn_orders_cost_suppressed_total` and
+   `huginn_orders_rejected_total` have no series at all in that window, which
+   for these counters means they never incremented, and
+   `huginn_risk_halt_active` never left 0. Candidate entries existed;
+   something before the order stage refused all of them.
+5. **The code.** `CompositeStrategy.OnFeature` only ever adds to its
+   positions map. It has no stop-loss, take-profit, time exit or
+   flatten-on-opposite-signal (the `obi` strategy has the first three), and
+   the throttle tests whether a position exists, not its side, so even a sell
+   signal against an open long is refused. The map is persisted every five
+   seconds and restored at boot, so no restart has cleared it.
+6. **Reproduced.** huginn's `TestCompositeBlocked_LiveStateRefusesEveryEntry`
+   restores that exact state row into the shipped composite (threshold 0.05,
+   order size 0.001). Every entry, buy and sell, on all five instruments is
+   refused as `position_open`, while an instrument it does not hold still
+   trades, which pins the refusal on the open positions rather than on the
+   signal or the caps.
+7. **Live, after redeploying huginn with the new metrics** (huginn `8cc7b91`,
+   container recreated at 00:46:15 UTC on 2026-11-11, no other service
+   touched): by 00:54:31 UTC huginn had consumed 30 feature events and
+   `huginn_entries_blocked_total` read `position_open` 23,
+   `below_threshold` 7 and 0 for every other reason, accounting for all 30.
+   Every event whose score cleared the band was refused by the throttle, no
+   order was generated, and `huginn_last_order_intent_timestamp_seconds`
+   stayed 0.
+
+### Instrumentation
+
+[huginn#43](https://github.com/lgreene03/huginn/pull/43) adds two metrics.
+`huginn_entries_blocked_total{reason}` counts each entry stopped before it
+became an order intent, by the first gate that stopped it, over a closed
+label set created at zero on start, in gate order: `below_threshold` (no
+candidate), `position_open`, `max_position`, `zero_size` and `cost_hurdle`
+inside the composite, then `risk_rejected` in the executor.
+`huginn_last_order_intent_timestamp_seconds` is the Unix time of the last
+intent published to the gateway (live) or past the risk check (paper); 0
+means none since the process started. The console's Live Trading section
+shows both under "Order intents · why not trading", with an IDLE label when
+there has been no intent since huginn started or none in the last hour.
+
+What the instrumentation cannot tell you. Both reset when huginn restarts, so
+the console and the gauge speak for the current process only; the date of
+the last intent before that (2026-06-22) comes from the journal, as above.
+Only the composite records strategy-level reasons; switching back to `obi`
+would leave them at zero. At the executor, `risk_rejected` cannot tell an
+entry from an exit, which matters only for strategies that emit exits.
+
+### Not changed here
+
+The composite still has no exit path, so huginn will stay idle until someone
+decides what it should do: clear the `composite` state row so it can enter
+again (and then hold five new positions for ever), give the composite exits,
+or stop running it. That is a strategy decision for the owner, not part of
+this goal. Found in passing, recorded so they are not lost:
+
+- **Cost gate wiring (medium, high confidence).** The compose comment says
+  the composite reuses the cost hurdle; it does not (see above).
+- **Alpha IC on the console (medium, high confidence).** The composite pairs
+  each event's contributions with the next event's mid regardless of
+  instrument, and five instruments share one stream, so most of the
+  "forward returns" behind the rolling IC (momentum near 0.75 today) are
+  ratios between different coins' prices. The IC is not a measurement.
+- **Daily-loss window (low, high confidence).** The `_risk` state still has
+  `day_start` 2026-06-22, because the window rolls only inside the risk
+  check, which no order has reached since. It rolls correctly on the next
+  check; it is a symptom of the silence, not a cause. G0.9 owns the risk
+  manager's clock.
