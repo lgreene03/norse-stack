@@ -18,6 +18,7 @@ design), see [SECURITY.md](SECURITY.md).
 | Tear down (wipe volumes) | `docker compose down -v` (keeps the recordings in `MINIO_DATA_DIR`, §6) |
 | Where the recordings are | `MINIO_DATA_DIR`, default `./data/minio` (§6) |
 | Recording gap audit | `RECORDING_AUDIT_DIR`, default `./data/recording-audit`; metrics on http://127.0.0.1:8098/metrics (§6.3) |
+| Notification when recording stops | `make heartbeat-install` / `make heartbeat-uninstall` (macOS, §6.4) |
 | End-to-end smoke test | `./scripts/smoke.sh --teardown` |
 | Provision Kafka topics | `./scripts/provision-topics.sh` |
 | Grafana | http://localhost:3001 (board: **Norse Stack — Trading Pipeline**) |
@@ -490,6 +491,69 @@ rows. It reads the store with the same credentials MinIO and muninn take from `.
 passed through the environment, never on a command line. A read-only user scoped to
 `muninn-raw` would be better (G0.4); mount its keys as files and set
 `S3_ACCESS_KEY_FILE` and `S3_SECRET_KEY_FILE`, which take precedence.
+
+### 6.4 Data heartbeat: a notification when recording stops
+
+Alerting is deferred (decision D2), with one exception the owner asked for on
+2026-11-11: a notification on the Mac when data stops flowing, because muninn's
+ingestion was once silently down for about four months. `scripts/data-heartbeat.sh`
+runs from launchd every 15 minutes and at login. It reads MinIO's data folder
+directly, not through MinIO, so it still works when MinIO, muninn or Docker is down,
+and checks two things:
+
+1. that the folder named by `MINIO_DATA_DIR` in the stack's `.env` exists, which on
+   the owner's Mac means "Mac 4T" is mounted;
+2. that each of the twenty streams (two venues, five pairs, trades and book
+   snapshots) has an object written in the last 15 minutes. The recorder flushes at
+   least once a minute, so a healthy stream is never close.
+
+It shows a notification only when the state changes: from OK to FAILING, naming the
+failing streams or the missing drive, and from FAILING back to OK. A first run that
+finds everything OK shows nothing, and a check that is still failing stays quiet. If
+a notification cannot be shown, the old state is kept so the next run tries again.
+Nothing leaves the machine: there is no webhook, email or network call of any kind.
+It is not a replacement for the gap audit (§6.3), which measures what was lost; the
+heartbeat only says that something is being lost now.
+
+**Install, check and remove**, from the checkout that runs the stack:
+
+```bash
+make heartbeat-install     # install and load the LaunchAgent; it runs a check at once
+make heartbeat-status      # loaded or not, the current state, the last five runs
+make heartbeat-uninstall   # unload it and delete everything it installed
+```
+
+`make heartbeat-install` copies the script to `~/.local/bin/norse-data-heartbeat`, so
+that switching branches in the checkout cannot break it (install again after changing
+the script), and writes `~/Library/LaunchAgents/io.github.lgreene03.norse.data-heartbeat.plist`
+from the template in `scripts/launchd/`. Each check reads `MINIO_DATA_DIR` from this
+checkout's `.env`, parsed and never sourced, so moving the recordings needs no
+reinstall. Running the install again replaces both files.
+
+The state is in `~/.local/state/norse/`: `data-heartbeat.state` (OK or FAILING, since
+when, and the detail), `data-heartbeat.log` (one line per run, trimmed to the last
+2,000) and `data-heartbeat.launchd.log` (anything the script wrote to stderr; normally
+empty). With launchctl directly:
+
+```bash
+launchctl print gui/$(id -u)/io.github.lgreene03.norse.data-heartbeat     # loaded? last exit code
+launchctl kickstart gui/$(id -u)/io.github.lgreene03.norse.data-heartbeat # run a check now
+```
+
+A last exit code of 0 means OK and 1 means FAILING. To remove it without make:
+
+```bash
+launchctl bootout gui/$(id -u)/io.github.lgreene03.norse.data-heartbeat
+rm ~/Library/LaunchAgents/io.github.lgreene03.norse.data-heartbeat.plist
+rm ~/.local/bin/norse-data-heartbeat ~/.local/state/norse/data-heartbeat.*
+```
+
+**When no notification appears.** macOS shows these notifications as coming from
+Script Editor, so they appear only if System Settings, Notifications, Script Editor
+allows them. `./scripts/data-heartbeat.sh test-notification` shows one on demand. If
+every stream is reported as `unreadable`, macOS is refusing the script access to the
+external drive; whether to allow it, under Privacy and Security, is the owner's
+decision.
 
 ---
 
