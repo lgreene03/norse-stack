@@ -9,11 +9,12 @@
 
 SHELL := /bin/bash
 
-.PHONY: help bootstrap clone build up up-ghcr smoke down config bench
+.PHONY: help bootstrap clone build up up-ghcr smoke down config bench \
+	heartbeat-install heartbeat-uninstall heartbeat-status
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
-		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
+		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 bootstrap: clone up ## One command for a bare clone: clone sibling repos, then build + boot the full stack
 	@echo "Bootstrap complete. Try: make smoke"
@@ -41,3 +42,15 @@ bench: ## Run the storage-path latency microbenchmark (Mimir point-in-time store
 
 down: ## Tear down the stack and volumes
 	docker compose down -v
+
+# The data heartbeat (macOS only): a notification on this Mac when recording stops
+# and when it resumes. Run from the checkout that runs the stack; it reads
+# MINIO_DATA_DIR from this .env. docs/RUNBOOK.md, section 6.4.
+heartbeat-install: ## Install the data heartbeat LaunchAgent (macOS; runs every 15 min)
+	./scripts/data-heartbeat.sh install --env-file "$(CURDIR)/.env"
+
+heartbeat-uninstall: ## Remove the data heartbeat LaunchAgent, its script copy and its state
+	./scripts/data-heartbeat.sh uninstall
+
+heartbeat-status: ## Show whether the data heartbeat is loaded and its last results
+	./scripts/data-heartbeat.sh status

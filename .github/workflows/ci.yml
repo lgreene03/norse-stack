@@ -69,6 +69,12 @@ jobs:
             fi
           done
 
+      # The host-side data heartbeat against a fixture recordings folder: state
+      # changes, no repeated notifications, the missing drive, .env parsing and the
+      # LaunchAgent plist. Also run on macOS under /bin/bash 3.2 before merging.
+      - name: Test the data heartbeat
+        run: ./scripts/test-data-heartbeat.sh
+
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
