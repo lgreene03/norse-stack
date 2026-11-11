@@ -27,7 +27,7 @@ The weekly review is held on Tuesdays (11-10, 11-17, 11-24, 12-01, 12-08 and
 | G0.3 | Optional host hardening beyond Norse | Owner | Owner's choice | Not started |
 | G0.4 | Credentials passed by file, never on a command line | Security | 11-10 | Not started |
 | G0.5 | Owner decisions memo and decisions log | CTPO | 11-06 | Done 11-10 ([DECISIONS.md](DECISIONS.md)) |
-| G0.6 | Data coverage report | Quant | 11-07 | Not started |
+| G0.6 | Data coverage report | Quant | 11-07 | Done 11-11 ([#47](https://github.com/lgreene03/norse-stack/pull/47)); caps 12, 12 and 6 stand if G0.7 leaves at least 4.30 years of joined out-of-sample returns |
 | G0.7 | Pre-registration signed and tagged `prereg-v1` | Quant | 11-07 | Not started |
 | G0.8 | Cause of huginn's idleness confirmed and instrumented | Quant and technical | 11-10 | Done 11-11 ([huginn#43](https://github.com/lgreene03/huginn/pull/43), [#41](https://github.com/lgreene03/norse-stack/pull/41)); what to do with the stuck composite is decision D9 |
 | G0.9 | Risk manager on event time; fold 4 explained | Technical | 11-10 | Done 11-11 ([huginn#44](https://github.com/lgreene03/huginn/pull/44), [#40](https://github.com/lgreene03/norse-stack/pull/40)) |
@@ -40,12 +40,12 @@ The weekly review is held on Tuesdays (11-10, 11-17, 11-24, 12-01, 12-08 and
 | G0.16 | Retire huginn's unused web app | Interface | 11-17 | Done 11-10 ([huginn#40](https://github.com/lgreene03/huginn/pull/40), [#34](https://github.com/lgreene03/norse-stack/pull/34), [muninn#88](https://github.com/lgreene03/muninn/pull/88)) |
 | G0.17 | Recordings moved to the external drive | Technical | 11-12 | Done 11-10 ([#33](https://github.com/lgreene03/norse-stack/pull/33)); copy verified byte for byte, old volume held until 11-17 |
 | G0.18 | Record ETH, SOL, XRP and DOGE on both venues | Technical | 11-17 | Done 11-10 ([muninn#89](https://github.com/lgreene03/muninn/pull/89), [muninn#90](https://github.com/lgreene03/muninn/pull/90)); five pairs live from 22:10:51Z |
-| G1.1 | Dataset loaders with checksums and manifests | Technical | 11-14 | Not started |
+| G1.1 | Dataset loaders with checksums and manifests | Technical | 11-14 | Done 11-11 ([#48](https://github.com/lgreene03/norse-stack/pull/48)); 51,756 files verified, development and holdout manifests committed |
 | G1.2 | Research gateway locked down | Technical | 11-14 | Not started |
 | G1.3 | Gate statistics with known-answer tests | Quant and technical | 11-14 | Not started |
 | G1.4 | Threat model for the ledger and the seal | Security | 11-13 | Not started |
 | G1.5 | Hash-chained trial ledger | Technical | 11-17 | Not started |
-| G1.6 | Holdout sealed in code | Technical | 11-17 | Not started |
+| G1.6 | Holdout sealed in code | Technical | 11-17 | In progress: the loader refuses holdout data with no unseal path since [#48](https://github.com/lgreene03/norse-stack/pull/48); the one permitted unseal remains |
 | G1.7 | Gate calibration on no-skill and planted-edge data | Quant | 11-17 | Not started |
 | G1.8 | Gate status page and console panel | Interface | 11-17 | Not started |
 | G1.9 | Target-position harness shared by backtest and paper | Technical | 11-19 | Not started |
@@ -407,6 +407,8 @@ one to a goal.
 | Low | `docs/risk-model.md` shows the position limit default as disabled (it is 500,000), documents a volatility formula the code does not use and lists a `volatility_scale_factor` setting that does not exist. EDGE_VERDICT and RESULTS still say the `Hit` line is hardcoded; huginn#33 computes it. | Technical, huginn#44 | Technical |
 | Low | huginn's Dockerfile pins the amd64 alpine image but builds an arm64 binary, and Docker's `desktop` credential helper hangs on this Mac, so builds need a config without it. | Technical, huginn#43 | Technical |
 | Low | `.pre-commit-config.yaml`'s ruff must stay in step with `requirements-dev.txt` but dependabot only bumps the latter; #30 realigned them at 0.17.3 by hand. Add a check or a dependabot pre-commit entry. | Technical, #30 | Technical |
+| Medium | The coverage report names three pairs that reach the top ten only in the holdout (two gold tokens and a tokenised share, finding 5), so which pairs the holdout universe holds is no longer unseen. No price or return leaked. G0.7 must write the universe exclusions as categories (leveraged tokens, commodity tokens, tokenised shares, stablecoins) decided on development data alone, never as a list chosen with those holdout names in view. | Lead review, #47 | Quant |
+| Low | Only BTC and ETH bars were compared with the REST API. Before 2022-04-14 the archive is short of trades on 9 to 27 bars per series; other pairs probably share this and are unchecked. The live comparison needs the local mirror, so it runs only by hand (`NORSE_LIVE_TESTS=1`); CI tests the committed register of differences. | Technical, #48 | Technical |
 
 **Data boundaries.** From 2026-11-10T22:10:51Z muninn records five pairs on both
 venues. From the same time a refused OKX book consumes a sequence number, and OKX
@@ -435,6 +437,15 @@ Status on 2026-11-11: G0.8, G0.9 and G0.15 are done, worked from the lead sessio
 rather than by the driver. The driver is enabled and fires on schedule, but its runs
 still stop at the first permission prompt (the last run's transcript ends "interrupted
 ... for tool use"); a task's permission mode can only be set by the owner in the app,
-so until then the lead session carries the work. G0.6 and G1.1 are in progress. The
+so until then the lead session carries the work. The
 six-month re-run under G0.9 still shows no out-of-sample edge for the retired strategy
 (0 of 4 folds), with fold 4 corrected from -10,001.72 to -2,495.70.
+
+Later on 2026-11-11, G0.6 and G1.1 are done. Development history runs 7.67 years for
+H1, 5.92 for its funding-filter trial and 5.98 for H2, and the 12, 12 and 6 split stands
+at a target Sharpe of 1 provided G0.7's walk-forward leaves at least 4.30 years of
+joined out-of-sample returns, which caps the first training window for H2 at about 1.6
+years. G0.7 now also has to settle what the coverage report found: LUNAUSDT is two
+coins, a held pair can halt, a top-five pair is often younger than the 120-day lookback,
+the universe exclusions, and that development trading stops at the last development
+close. The loader already refuses holdout data, so G1.6 is left with the unseal itself.
