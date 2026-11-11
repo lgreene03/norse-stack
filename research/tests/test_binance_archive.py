@@ -141,6 +141,15 @@ def test_fetcher_refuses_hosts_outside_the_archive():
             fetcher(url, 10)
 
 
+def test_fetcher_allows_only_the_market_data_rest_host_beyond_the_archive():
+    fetcher, log, _ = make_fetcher([FakeResponse(200, b"[]")])
+    assert fetcher("https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT", 10) == b"[]"
+    assert log[0][1] == "/api/v3/klines?symbol=BTCUSDT"
+    for url in ("https://api.binance.com/api/v3/klines", "https://fapi.binance.com/fapi/v1/order"):
+        with pytest.raises(ba.ArchiveError, match="refusing"):
+            fetcher(url, 10)
+
+
 def test_fetcher_returns_body_and_counts_it():
     fetcher, log, _ = make_fetcher([FakeResponse(200, b"abc", 3)])
     assert fetcher("https://data.binance.vision/data/x.zip", 10) == b"abc"

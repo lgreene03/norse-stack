@@ -27,7 +27,12 @@ from dataclasses import dataclass
 LISTING_URL = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
 DOWNLOAD_URL = "https://data.binance.vision/"
 USER_AGENT = "norse-research/1 (public data; github.com/lgreene03/norse-stack)"
-ALLOWED_HOSTS = frozenset({"data.binance.vision", "s3-ap-northeast-1.amazonaws.com"})
+# The archive, its bucket listing, and Binance's market-data-only REST host, used to
+# check archive rows against the live API. None of them has an order or account
+# endpoint, and no request carries a key.
+ALLOWED_HOSTS = frozenset(
+    {"data.binance.vision", "s3-ap-northeast-1.amazonaws.com", "data-api.binance.vision"}
+)
 
 # A listing page is at most 1,000 keys, about 300 KB; a CHECKSUM file is under 200
 # bytes. Archive files have their own caps, set by the caller per data type.

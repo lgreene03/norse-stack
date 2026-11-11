@@ -291,9 +291,12 @@ jobs:
           fail_ci_if_error: false
 
   research:
-    # Research code for the iteration's gate (research/), starting with the data
-    # coverage tooling (G0.6). Standard library only at runtime, so the only
-    # installs are the pinned lint and test tools. The tests never touch the network.
+    # Research code for the iteration's gate (research/): data coverage (G0.6),
+    # dataset loaders and manifests (G1.1). Standard library only at runtime, so
+    # the only installs are the pinned lint and test tools. These tests never touch
+    # the network; the live REST comparison is opt-in (NORSE_LIVE_TESTS=1) because
+    # it needs the local dataset mirror and an external API that may refuse
+    # GitHub's runners. Its committed register of differences is tested here.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
