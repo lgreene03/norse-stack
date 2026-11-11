@@ -33,6 +33,7 @@ from .formats import (
     DatasetSpec,
     Gap,
     bar_gaps,
+    collapse_repeats,
     funding_gaps,
     parse_funding,
     parse_klines,
@@ -100,12 +101,20 @@ def mirror_all(store: ArchiveStore, specs: list[DatasetSpec], log: Log) -> dict[
     return months
 
 
-def read_rows(store: ArchiveStore, spec: DatasetSpec, month: str) -> list:
+def read_rows_and_repeats(
+    store: ArchiveStore, spec: DatasetSpec, month: str
+) -> tuple[list, list[int]]:
+    """One verified monthly file's rows, with exact repeats collapsed and reported."""
     data, _ = store.read(spec.key(month))
     csv_name = spec.file_name(month)[: -len(".zip")] + ".csv"
     text = read_csv_member(data, csv_name, spec.max_bytes())
     source = spec.key(month)
-    return parse_funding(text, source) if spec.kind == "fundingRate" else parse_klines(text, source)
+    rows = parse_funding(text, source) if spec.kind == "fundingRate" else parse_klines(text, source)
+    return collapse_repeats(rows, source)
+
+
+def read_rows(store: ArchiveStore, spec: DatasetSpec, month: str) -> list:
+    return read_rows_and_repeats(store, spec, month)[0]
 
 
 def daily_quote_volume(store: ArchiveStore, symbol: str, months: Iterable[str]) -> dict[int, float]:
@@ -228,12 +237,15 @@ def candidate_specs(store: ArchiveStore, universe: dict) -> list[DatasetSpec]:
     for symbol in symbols:
         specs.extend(DatasetSpec("spot", "klines", symbol, i) for i in BAR_INTERVALS)
         if symbol in perps:
+            # Four-hour premium index only: daily bars follow exactly from it (first
+            # open, highest high, lowest low, last close), so a second series would
+            # double the requests for nothing.
             specs.append(DatasetSpec("um", "fundingRate", symbol))
-            specs.extend(
-                DatasetSpec("um", "premiumIndexKlines", symbol, i) for i in ("1d", "4h")
-            )
+            specs.append(DatasetSpec("um", "premiumIndexKlines", symbol, "4h"))
         if symbol in H2_SYMBOLS:
-            specs.append(DatasetSpec("um", "premiumIndexKlines", symbol, "15m"))
+            specs.extend(
+                DatasetSpec("um", "premiumIndexKlines", symbol, i) for i in ("1d", "15m")
+            )
             specs.extend(DatasetSpec("um", "klines", symbol, i) for i in BAR_INTERVALS)
     return specs
 
@@ -264,7 +276,11 @@ def measure(store: ArchiveStore, spec: DatasetSpec) -> dict:
     )
     for period in (DEVELOPMENT, HOLDOUT):
         months = [m for m in in_scope if period_of_month(m) == period]
-        rows = [r for m in months for r in read_rows(store, spec, m)]
+        rows, repeats = [], []
+        for month in months:
+            file_rows, file_repeats = read_rows_and_repeats(store, spec, month)
+            rows.extend(file_rows)
+            repeats.extend(file_repeats)
         if not rows:
             record[period] = None
             continue
@@ -280,6 +296,7 @@ def measure(store: ArchiveStore, spec: DatasetSpec) -> dict:
             "gaps": len(gaps),
             "missing_rows": sum(g.missing for g in gaps),
             "gap_list": [_gap_record(g) for g in gaps[:50]],
+            "repeated_rows": [iso_time(t) for t in repeats],
         }
         if not spec.is_bars:
             record[period]["intervals_hours"] = sorted({r.interval_hours for r in rows})

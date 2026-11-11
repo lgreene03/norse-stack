@@ -9,6 +9,7 @@ Format traps handled here, each with a test:
 * Funding settlement times carry a few milliseconds of jitter (``...800002``), and a
   symbol's funding interval can change (8 hours to 4 or 1), so funding gaps are judged
   against the interval each row declares, within a tolerance.
+* A few files repeat a row exactly; ``collapse_repeats`` keeps one and reports it.
 """
 
 from __future__ import annotations
@@ -247,6 +248,27 @@ def parse_funding(text: str, source: str) -> list[Funding]:
         if rows[-1].interval_hours not in (1, 2, 4, 8):
             raise DataIntegrityError(f"{source}:{lineno}: funding interval {f[1]} hours")
     return rows
+
+
+def collapse_repeats(rows: list, source: str = "") -> tuple[list, list[int]]:
+    """Drop rows that exactly repeat the row before them; return the rest and the times
+    repeated.
+
+    The archive holds a few rows published twice, identically, inside one file (for
+    example AXSUSDT daily on 2026-02-10). Keeping one loses nothing and invents
+    nothing, so the repeat is collapsed and reported; a repeated time whose rows
+    differ cannot be resolved without choosing one, so it raises.
+    """
+    kept: list = []
+    repeated: list[int] = []
+    for row in rows:
+        if kept and row[0] == kept[-1][0]:
+            if row != kept[-1]:
+                raise DataIntegrityError(f"{source}: two different rows at time {row[0]}")
+            repeated.append(row[0])
+            continue
+        kept.append(row)
+    return kept, repeated
 
 
 def bar_gaps(open_times: Sequence[int], step_ms: int, source: str = "") -> list[Gap]:

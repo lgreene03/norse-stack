@@ -6,6 +6,7 @@ from norse_research.formats import (
     Funding,
     Gap,
     bar_gaps,
+    collapse_repeats,
     funding_gaps,
     parse_funding,
     parse_klines,
@@ -70,6 +71,17 @@ def test_bar_gaps_refuses_duplicates_disorder_and_off_grid_times():
         bar_gaps([T0 + DAY, T0], DAY)
     with pytest.raises(DataIntegrityError, match="grid"):
         bar_gaps([T0 + 1], DAY)
+
+
+def test_exact_repeats_collapse_and_are_reported_but_conflicts_raise():
+    # The archive repeats AXSUSDT's 2026-02-10 daily row, identically, in one file.
+    text = "\n".join([kline_line(T0), kline_line(T0 + DAY), kline_line(T0 + DAY)])
+    rows, repeated = collapse_repeats(parse_klines(text, "t"), "t")
+    assert [r.open_time for r in rows] == [T0, T0 + DAY]
+    assert repeated == [T0 + DAY]
+    conflict = parse_klines(kline_line(T0) + "\n" + kline_line(T0).replace("15.0", "16.0"), "t")
+    with pytest.raises(DataIntegrityError, match="different rows"):
+        collapse_repeats(conflict, "t")
 
 
 def test_funding_gaps_tolerate_jitter_and_interval_changes():

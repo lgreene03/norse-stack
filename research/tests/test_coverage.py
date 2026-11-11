@@ -49,6 +49,8 @@ def test_measure_reports_span_missing_months_gaps_and_the_period_split(tmp_path)
         times = days(month)
         if month == "2025-12":
             times = times[:10] + times[12:]  # two missing days
+        if month == "2026-01":
+            times = times[:9] + [times[9]] + times[9:]  # one row published twice
         put(store, spec, month, times)
     write_listing(store, spec, months)
 
@@ -64,8 +66,10 @@ def test_measure_reports_span_missing_months_gaps_and_the_period_split(tmp_path)
     assert dev["gaps"] == 2
     assert dev["missing_rows"] == 30 + 2
     assert dev["first"] == "2025-10-01 00:00" and dev["last"] == "2025-12-31 00:00"
+    assert dev["repeated_rows"] == []
     holdout = record["holdout"]
     assert holdout["files"] == 1 and holdout["rows"] == 31 and holdout["gaps"] == 0
+    assert holdout["repeated_rows"] == ["2026-01-10 00:00"]
 
 
 def test_measure_handles_an_absent_series(tmp_path):
