@@ -60,6 +60,9 @@ def test_parse_checksum_checks_format_and_name():
         ba.parse_checksum(f"{digest}  Y.zip".encode(), "X-1d-2024-01.zip")
     with pytest.raises(ba.ArchiveError, match="unparseable"):
         ba.parse_checksum(b"not a checksum", "X.zip")
+    # The archive names some pairs in Chinese; their CHECKSUM files are UTF-8.
+    name = "币安人生USDT-1d-2026-01.zip"
+    assert ba.parse_checksum(f"{digest}  {name}\n".encode(), name) == digest
 
 
 def fake_archive(files):

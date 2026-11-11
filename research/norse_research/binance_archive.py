@@ -247,7 +247,8 @@ def iter_archives(objects: list[ArchiveObject]) -> Iterator[ArchiveObject]:
 
 def parse_checksum(text: bytes, expected_name: str) -> str:
     """Return the SHA-256 from a ``.CHECKSUM`` file, checking it names the file."""
-    line = text.decode("ascii", errors="strict").strip()
+    # UTF-8, not ASCII: pairs named in Chinese carry their name into the CHECKSUM.
+    line = text.decode("utf-8", errors="strict").strip()
     match = _CHECKSUM_RE.match(line)
     if not match:
         raise ArchiveError(f"unparseable CHECKSUM for {expected_name}: {line[:120]!r}")
