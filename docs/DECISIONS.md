@@ -66,8 +66,10 @@ is mounted and that each of the twenty streams has written in the last 15 minute
 shows a macOS notification only when that state changes. Nothing leaves the machine.
 Remove it with `make heartbeat-uninstall`. G0.14 stays deferred.
 
-**D9. What to do with huginn's stuck composite strategy.** Open; the owner decides.
-G0.8 found that the live composite opened one long in each of its five instruments on
+**D9. What to do with huginn's stuck composite strategy.** Decided by the owner on
+2026-11-11, on the recommendation below: leave it idle. Its five stored positions are
+not cleared and no exits are added; the metrics from G0.8 keep showing why it does not
+trade. G0.8 found that the live composite opened one long in each of its five instruments on
 2026-06-22 and has no exit path, so its one-position-per-instrument check refuses every
 entry since. The options are to leave it idle, to clear its stored positions (it
 trades again and sticks again the same way), or to give it exits. Recommendation:
