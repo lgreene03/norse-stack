@@ -90,3 +90,70 @@ needs an account, so it would mean relaxing the no-paid-feeds rule for that one
 source. Live intraday or order-book equities data is not recommended: it is paid, and
 the retired order-book signal showed that short-horizon edges do not survive retail
 costs. Free daily FX reference rates can be added at any time.
+
+The five decisions below were open questions in the pre-registration (G0.7,
+[PREREGISTRATION.md](PREREGISTRATION.md)). The owner answered "apply recommendations" on
+2026-11-11, so each records the quant's recommendation as decided, with the options that
+were rejected and why. The holdout key is not among them: D4 already decides it.
+
+**D11. The target Sharpe for the trial caps.** Decided by the owner on 2026-11-11, on the
+quant's recommendation: a target Sharpe of 1.0 in the minimum backtest length rule, so
+G0.6's caps stand at 12 trials for H1, 12 for H2 and 6 in reserve, 30 in all. The
+alternative was 0.75, which would cut the total to 17, the most H2's 5.98 years of
+out-of-sample returns support at that target. The deflated Sharpe ratio charges for every
+trial actually run whatever the cap, and the grids register only 14 configurations, so the
+cap decides only how many reruns after a defect the budget can absorb: 16 at 1.0, 3 at 0.75.
+At 0.75 a single harness defect found after the trials (which reruns all 14) would exhaust
+the budget and turn a bug into a fail. At 1.0, the best of 30 skill-less trials over H2's
+5.98 years is expected to show a Sharpe of 0.85, below every pass mark.
+
+**D12. A position in a pair that halts or is delisted.** Decided by the owner on
+2026-11-11, on the quant's recommendation: when a pair's run of daily bars ends (a
+collapse such as LUNA's, a suspension such as FTT's, a delisting or a rename), a long
+position is closed at the low of its last daily bar (a short at the high), with the usual
+fee and slippage on top, and the slot holds cash until the next month end. Rejected:
+freezing the position at its last price and exiting when trading resumes, following a
+table of successor symbols, because that table is not in the archive and would be typed
+from memory with hindsight; writing the position off to zero, because a scheduled rename
+such as MATIC to POL is not a total loss; and exiting at the last traded price, the most
+optimistic price available in a collapse. The chosen rule never invents a price, since the
+low did trade, and errs against the strategy; it is not a worst case, since a coin can end
+worth less than its last day's low.
+
+**D13. Pairs younger than H1's 120-day lookback.** Decided by the owner on 2026-11-11, on
+the quant's recommendation: a pair joins the universe only once it has a daily close 120
+days before the month-end close, and the next eligible pair by volume takes its place,
+within the ten largest. This arises at 28 of the 92 development month ends. Rejected:
+giving the young pair its slot but holding cash until it has the history, which dilutes
+exposure for a reason unrelated to trend; and letting it trade on the lookbacks it has,
+which gives new listings a faster signal than every other pair and so mixes two horizons in
+one trial. The chosen rule keeps five working slots and a fully defined signal; its cost is
+that a new coin enters only after four months.
+
+**D14. Exclusions from H1's universe.** Decided by the owner on 2026-11-11, on the quant's
+recommendation: exclusions by category, never by name: fiat and fiat-pegged stablecoins,
+leveraged tokens, tokens designed to track an asset outside crypto (commodity-backed
+tokens, tokenised shares, funds or other securities), and wrapped, bridged or
+liquid-staking forms of another coin. The alternative was to exclude only what development
+data shows reaching a top ten, which is stablecoins and leveraged tokens (ETHBEAR 6th and
+ETHBULL 10th at the 2020-03 month end). The broader categories change nothing in
+development, because no such token reaches a development top ten, so they cannot have been
+fitted to development results; they keep the hypothesis about crypto assets in both
+periods. Disclosed: G0.6 named three pairs that reach a top ten only in the holdout, PAXG
+and XAUT (gold) and SNDKB (a tokenised share), and 2026 gold prices are public, so neither
+option could be chosen blind; the categories follow the hypothesis's definition. Before
+signing, the CTPO checks the ten other holdout-only candidates against the categories from
+their own published descriptions.
+
+**D15. How H2 is compared with buy-and-hold.** Decided by the owner on 2026-11-11, on the
+quant's recommendation: H2's second criterion uses its returns in excess of a beta-matched
+equal-weight BTC and ETH buy-and-hold (the regression slope removed), while H1 keeps the
+volatility-matched comparison NEXT_ITERATION.md names. The comparison exists because a
+long-flat trend rule can otherwise pass on market exposure alone; H2 holds equal quantities
+long spot and short perpetual, so it has no market exposure to pass on. Applied to H2, the
+volatility-matched difference would instead require carry's Sharpe ratio to beat the
+market's by a wide margin (about 2.4 to 3.2 under the assumptions in the pre-registration),
+testing "better than the market" rather than "not just the market". Rejected: keeping the
+volatility-matched comparison for both, for that reason; and beta-matching both, because
+for a long-flat trend rule the volatility-matched comparison is the stricter one and was
+chosen deliberately.
