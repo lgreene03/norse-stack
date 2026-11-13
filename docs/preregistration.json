@@ -3,7 +3,7 @@
   "title": "Pre-registration of H1 (dated-universe trend) and H2 (funding carry), G0.7",
   "prose": "docs/PREREGISTRATION.md",
   "precedence": "This file governs wherever it and docs/PREREGISTRATION.md disagree.",
-  "status": "Draft of 2026-11-11 for the CTPO's review and the owner's signature. Binding only once the commit holding it is tagged prereg-v1.",
+  "status": "Draft of 2026-11-11, revised on 2026-11-13 after the CTPO's review (PR 52), for the CTPO's approval and the owner's signature. Binding only once the owner tags the merged commit on main as prereg-v1 (change_control).",
   "decisions": {
     "D3": "paper short perpetual positions approved for H2",
     "D4": "the owner alone holds the holdout key",
@@ -11,7 +11,9 @@
     "D12": "a position in an instrument that stops trading is closed at the worst price of its last daily bar",
     "D13": "a pair is eligible only once its current instrument has a close 120 days before the month-end close",
     "D14": "universe exclusions by category",
-    "D15": "H2's second criterion is in excess of a beta-matched buy-and-hold; H1's stays volatility-matched"
+    "D15": "H2's second criterion is in excess of a beta-matched buy-and-hold; H1's stays volatility-matched",
+    "D16": "rulesets: main cannot be force pushed or deleted and needs the research and validate checks; prereg-* and ledger-* tags cannot be updated or deleted",
+    "D17": "the holdout files stay off the local mirror until the single unseal, then are fetched again and verified against the frozen holdout manifest"
   },
   "data": {
     "source": "data.binance.vision",
@@ -77,9 +79,9 @@
   "walk_forward": {
     "design": "expanding window anchored at the start of the archive; test folds are calendar years",
     "fitted_parameters": 0,
-    "training_window_use": "signal lookbacks, volatility estimates and the volume ranking only",
+    "training_window_use": "signal lookbacks, volatility estimates, trailing funding sums and the volume ranking only",
     "joined_out_of_sample_series": "the configuration's daily net returns over its whole out-of-sample window",
-    "minbtl_years_required_for_30_trials_at_s_1": 4.30
+    "minbtl_years_required_for_30_trials_at_s_1": 4.3
   },
   "trial_definition": {
     "trial": "any harness run of a configuration in hypotheses.H1.configurations or hypotheses.H2.configurations that produces a return for any day of that hypothesis's out-of-sample window",
@@ -106,17 +108,21 @@
     "H2_max_trial_entries": 12,
     "reserve_trial_entries": 6,
     "total_max_trial_entries": 30,
-    "registered_configurations": {"H1": 8, "H2": 6},
+    "registered_configurations": {
+      "H1": 8,
+      "H2": 6
+    },
     "reserve_use": "only after the hypothesis has used its own 12 entries, only for a rerun of a registered configuration, and only with a recorded reason",
     "exhausted_budget": "the hypothesis cannot run further trials; if it has not passed, that is a fail"
   },
   "run_rules": {
     "order": "every registered configuration of a hypothesis is run in the registered order, whatever earlier results show",
     "completeness": "a hypothesis is judged only when every one of its registered configurations has a selectable run; otherwise it cannot pass and its entries still count",
-    "rerun_requires": "a recorded defect: what was wrong and the commit that fixes it, in the rerun's entry",
-    "rerun_scope": "a fix to code both hypotheses use (harness, loaders, fills, costs, statistics) reruns every configuration already run; a fix confined to one hypothesis's strategy code reruns that hypothesis's configurations already run",
-    "selectable_run": "a configuration's last completed trial entry at the freeze",
-    "consistency": "all selectable runs of a hypothesis were produced by identical harness and strategy code, as recorded in their entries"
+    "rerun_requires": "a recorded defect: what was wrong and the commit that fixes it, in the rerun's entry. A defect is a departure of the code from this registration, or a failure to complete; the rerun's entry names the section of docs/PREREGISTRATION.md the code departed from, and the fix may only bring the code into line with it",
+    "rerun_scope": "a fix to code both hypotheses use (harness, loaders, fills, costs) reruns every configuration already run; a fix confined to one hypothesis's strategy code reruns that hypothesis's configurations already run; a fix to statistics code reruns no trial",
+    "selectable_run": "a configuration's last completed trial entry at the freeze whose returns cover its hypothesis's whole out-of-sample window; the harness runs a grid configuration only over that whole window",
+    "consistency": "all selectable runs of a hypothesis come from identical git tree hashes of the harness and strategy paths the genesis entry lists, as their entries record; a hypothesis whose selectable runs do not is treated as lacking a selectable run for every configuration",
+    "statistics_computed": "once, at the freeze, from the committed return series with the code at the freeze tag"
   },
   "costs": {
     "fee_bps_per_side": 10,
@@ -133,10 +139,11 @@
   "fills": {
     "reference_price": "VWAP of the 15-minute bar opening at the decision time: quote-asset volume divided by base volume",
     "missing_or_zero_volume_bar": "use the next 15-minute bar with volume",
-    "lapse_after_hours": 24,
-    "lapse": "the order is dropped, the position is unchanged and the next decision re-evaluates",
+    "lapse": "if no bar with volume opens before the next decision time (t plus 24 hours for a daily decision, t plus 4 hours for a four-hour one) or before the end of the window being run, whichever is earlier, the order lapses, the position is unchanged and the next decision re-evaluates; an unfilled order never survives the next decision",
     "position_changes_at": "the close of the fill bar",
-    "perpetual_leg": "the perpetual's own 15-minute bar opening at the same time, by the same rule"
+    "perpetual_leg": "the two legs of an H2 carry position fill together, on the first 15-minute bar at or after the decision at which both the spot and the perpetual bar have volume, each leg at its own bar's VWAP; if no such bar opens before t plus 24 hours or the end of the window, both legs lapse and the coin's state is unchanged",
+    "holdout_perpetual_gap": "on 2026-10-28, when the holdout has no BTC or ETH perpetual klines, an H2 decision at 00:00 finds no bar with both legs before 2026-10-29 00:00, so both legs lapse",
+    "orders": "quantity = change in target weight * equity marked at the decision / fill bar reference price; real quantities, no lot-size or minimum-notional rounding; within a bar sells fill before buys; if buys and fees would take cash below zero, every buy is scaled down in proportion so that cash ends at zero; in H2 the same scaling applies to a coin's two legs together"
   },
   "marks": {
     "daily": "each instrument's daily close at 00:00 UTC; the perpetual's own daily close for the short leg",
@@ -168,11 +175,7 @@
     "update": "at each month-end close, the decision at 00:00 UTC on the 1st",
     "ranking": "USDT spot symbols, without the base assets in exclusions.removed_before_ranking, by quote volume over the 30 daily bars closing at the month end, delisted symbols included, exactly as norse_research.universe.rank_month_ends with depth 10",
     "rank_depth": 10,
-    "eligibility": [
-      "the symbol is not in an excluded category",
-      "the symbol's current instrument has the month-end daily bar",
-      "the current instrument has a daily close 120 days before the month-end close (D13)"
-    ],
+    "eligibility": ["the symbol is not in an excluded category", "the symbol's current instrument has the month-end daily bar", "the current instrument has a daily close 120 days before the month-end close (D13)"],
     "members": "the first five eligible symbols in rank order among the ten largest",
     "fewer_than_five_eligible": "the empty slots hold cash for the month; this never happens at a development month end",
     "membership_holds_for": "the month"
@@ -193,7 +196,7 @@
       "wrapped_or_staked": []
     },
     "unclassified_candidates_are": "crypto assets and stay eligible",
-    "review_before_signing": "the CTPO checks the other ten holdout-only candidates (BANK, CHIP, DEXE, FOGO, NIGHT, RE, SENT, TAO, TUT, ZAMA) against the categories from each token's own published description, and adds any that falls in one to classified_candidates before the tag"
+    "reviewed": "2026-11-13 by the CTPO (PR 52): none of BANK, CHIP, DEXE, FOGO, NIGHT, RE, SENT, TAO, TUT or ZAMA falls in an excluded category; classified_candidates unchanged"
   },
   "hypotheses": {
     "H1": {
@@ -203,30 +206,32 @@
         "vote": "1 if the instrument's close at the decision divided by its close the lookback earlier, minus one, is above zero; otherwise 0",
         "signal": "the mean of the votes, so 0, 1/3, 2/3 or 1",
         "volatility": "square root of the exponentially weighted mean of squared simple close-to-close returns, not demeaned, alpha = 2 / (span + 1), weights (1 - alpha)^j over every return of the instrument (pandas ewm(span, adjust=True)), annualised by the square root of the bars in a year",
-        "target_weight_vol_scaled": "(1 / slots) * signal * min(max_weight_per_slot, vol_target_annual / volatility)",
+        "target_weight_vol_scaled": "(1 / slots) * signal * min(max_fraction_of_slot, vol_target_annual / volatility)",
         "target_weight_unscaled": "(1 / slots) * signal",
         "non_members": "target weight 0",
         "band": "trade an instrument to its target only if the absolute difference between target and current weight exceeds rebalance_band times the target weight",
         "weights": "fractions of equity marked at the decision; the remainder is cash",
         "four_hour_bars": "lookbacks and the volatility span are converted to bars at six a day; volatility is annualised by the square root of 2190; the universe still updates only at month-end 00:00 decisions; a decision whose four-hour bar is missing is skipped",
-        "funding_filter": "the signal is set to 0 while the sum of the coin's perpetual funding settlements with calc_time in the 7 days up to the decision exceeds flat_if_sum_above; if the coin has no perpetual, or its perpetual's settlements do not cover the whole 7 days without a recorded gap, the filter does not apply"
+        "funding_filter": "the signal is set to 0 while the sum of the coin's perpetual funding settlements with calc_time in the interval (t - lookback_days + 60 s, t + 60 s] exceeds flat_if_sum_above; that interval holds exactly 21 settlements for a coin settling every eight hours; if the coin has no perpetual, or its perpetual's settlements do not cover the interval without a recorded gap, the filter does not apply",
+        "max_fraction_of_slot": "a fraction of the slot's 1/slots of equity, so 1.0 means the whole slot, never leverage",
+        "eligibility_scope": "the 120-day eligibility rule (D13) applies to every configuration, H1-02 included"
       },
       "configurations": [
-        {"id": "H1-01", "label": "base", "bar": "1d", "lookbacks_days": [20, 60, 120], "slots": 5, "vol_scaling": true, "vol_target_annual": 0.20, "vol_ewm_span_days": 60, "max_weight_per_slot": 1.0, "rebalance_band": 0.25, "funding_filter": null},
-        {"id": "H1-02", "label": "fast lookbacks", "bar": "1d", "lookbacks_days": [5, 10, 20], "slots": 5, "vol_scaling": true, "vol_target_annual": 0.20, "vol_ewm_span_days": 60, "max_weight_per_slot": 1.0, "rebalance_band": 0.25, "funding_filter": null},
-        {"id": "H1-03", "label": "slow lookbacks", "bar": "1d", "lookbacks_days": [60, 90, 120], "slots": 5, "vol_scaling": true, "vol_target_annual": 0.20, "vol_ewm_span_days": 60, "max_weight_per_slot": 1.0, "rebalance_band": 0.25, "funding_filter": null},
-        {"id": "H1-04", "label": "narrow band", "bar": "1d", "lookbacks_days": [20, 60, 120], "slots": 5, "vol_scaling": true, "vol_target_annual": 0.20, "vol_ewm_span_days": 60, "max_weight_per_slot": 1.0, "rebalance_band": 0.10, "funding_filter": null},
-        {"id": "H1-05", "label": "wide band", "bar": "1d", "lookbacks_days": [20, 60, 120], "slots": 5, "vol_scaling": true, "vol_target_annual": 0.20, "vol_ewm_span_days": 60, "max_weight_per_slot": 1.0, "rebalance_band": 0.50, "funding_filter": null},
-        {"id": "H1-06", "label": "four-hour bars", "bar": "4h", "lookbacks_days": [20, 60, 120], "slots": 5, "vol_scaling": true, "vol_target_annual": 0.20, "vol_ewm_span_days": 60, "max_weight_per_slot": 1.0, "rebalance_band": 0.25, "funding_filter": null},
-        {"id": "H1-07", "label": "funding filter", "bar": "1d", "lookbacks_days": [20, 60, 120], "slots": 5, "vol_scaling": true, "vol_target_annual": 0.20, "vol_ewm_span_days": 60, "max_weight_per_slot": 1.0, "rebalance_band": 0.25, "funding_filter": {"lookback_days": 7, "flat_if_sum_above": 0.0063}},
-        {"id": "H1-08", "label": "no volatility scaling", "bar": "1d", "lookbacks_days": [20, 60, 120], "slots": 5, "vol_scaling": false, "vol_target_annual": null, "vol_ewm_span_days": null, "max_weight_per_slot": 1.0, "rebalance_band": 0.25, "funding_filter": null}
+        {"id": "H1-01", "label": "base", "bar": "1d", "lookbacks_days": [20, 60, 120], "slots": 5, "vol_scaling": true, "vol_target_annual": 0.2, "vol_ewm_span_days": 60, "max_fraction_of_slot": 1.0, "rebalance_band": 0.25, "funding_filter": null},
+        {"id": "H1-02", "label": "fast lookbacks", "bar": "1d", "lookbacks_days": [5, 10, 20], "slots": 5, "vol_scaling": true, "vol_target_annual": 0.2, "vol_ewm_span_days": 60, "max_fraction_of_slot": 1.0, "rebalance_band": 0.25, "funding_filter": null},
+        {"id": "H1-03", "label": "slow lookbacks", "bar": "1d", "lookbacks_days": [60, 90, 120], "slots": 5, "vol_scaling": true, "vol_target_annual": 0.2, "vol_ewm_span_days": 60, "max_fraction_of_slot": 1.0, "rebalance_band": 0.25, "funding_filter": null},
+        {"id": "H1-04", "label": "narrow band", "bar": "1d", "lookbacks_days": [20, 60, 120], "slots": 5, "vol_scaling": true, "vol_target_annual": 0.2, "vol_ewm_span_days": 60, "max_fraction_of_slot": 1.0, "rebalance_band": 0.1, "funding_filter": null},
+        {"id": "H1-05", "label": "wide band", "bar": "1d", "lookbacks_days": [20, 60, 120], "slots": 5, "vol_scaling": true, "vol_target_annual": 0.2, "vol_ewm_span_days": 60, "max_fraction_of_slot": 1.0, "rebalance_band": 0.5, "funding_filter": null},
+        {"id": "H1-06", "label": "four-hour bars", "bar": "4h", "lookbacks_days": [20, 60, 120], "slots": 5, "vol_scaling": true, "vol_target_annual": 0.2, "vol_ewm_span_days": 60, "max_fraction_of_slot": 1.0, "rebalance_band": 0.25, "funding_filter": null},
+        {"id": "H1-07", "label": "funding filter", "bar": "1d", "lookbacks_days": [20, 60, 120], "slots": 5, "vol_scaling": true, "vol_target_annual": 0.2, "vol_ewm_span_days": 60, "max_fraction_of_slot": 1.0, "rebalance_band": 0.25, "funding_filter": {"lookback_days": 7, "flat_if_sum_above": 0.0063}},
+        {"id": "H1-08", "label": "no volatility scaling", "bar": "1d", "lookbacks_days": [20, 60, 120], "slots": 5, "vol_scaling": false, "vol_target_annual": null, "vol_ewm_span_days": null, "max_fraction_of_slot": 1.0, "rebalance_band": 0.25, "funding_filter": null}
       ]
     },
     "H2": {
       "name": "funding carry: long spot and short USDT-margined perpetual in equal quantity, BTC and ETH",
       "window": "out_of_sample_windows.H2",
       "rules": {
-        "trailing_funding": "for each coin, the sum of its published funding rates with calc_time in the lookback_days up to the decision",
+        "trailing_funding": "for each coin, the sum of its published funding rates with calc_time in the interval (t - lookback_days + 60 s, t + 60 s], which holds exactly 3 * lookback_days settlements for a coin settling every eight hours",
         "thresholds": "entry_threshold = entry_multiple * round_trip_cost * lookback_days / 28; exit_threshold = exit_multiple * round_trip_cost * lookback_days / 28",
         "enter": "a flat coin enters when its trailing funding is above entry_threshold",
         "exit": "a coin in carry exits when its trailing funding is below exit_threshold",
@@ -248,12 +253,36 @@
     }
   },
   "benchmarks": [
-    {"id": "B-H1", "for": "every H1 configuration", "window": "out_of_sample_windows.H1", "rule": "at each month-end decision, trade to 1/5 of equity in each H1 universe member (cash for empty slots); no trading between month ends; same fills, costs and D12 rule as H1"},
-    {"id": "B-H2", "for": "every H2 configuration", "window": "out_of_sample_windows.H2", "rule": "buy BTCUSDT and ETHUSDT spot at half of equity each at the first decision, and trade back to half each at every month-end decision; same fills, costs and D12 rule as H2"}
+    {
+      "id": "B-H1",
+      "for": "every H1 configuration",
+      "window": "out_of_sample_windows.H1",
+      "rule": "at each month-end decision, trade to 1/5 of equity in each H1 universe member (cash for empty slots); no trading between month ends; same fills, costs and D12 rule as H1"
+    },
+    {
+      "id": "B-H2",
+      "for": "every H2 configuration",
+      "window": "out_of_sample_windows.H2",
+      "rule": "buy BTCUSDT and ETHUSDT spot at half of equity each at the first decision, and trade back to half each at every month-end decision; same fills, costs and D12 rule as H2"
+    }
   ],
   "controls": [
-    {"id": "C-H1", "base": "H1-01", "seeds": [0, 99], "rule": "votes are computed on a synthetic close series per instrument, starting at its first close and compounding its actual daily simple returns with each day's sign flipped independently with probability 1/2; volatility, sizing, universe and P&L use the actual prices", "rng": "numpy.random.default_rng(seed), one draw per instrument-day in order of symbol then date"},
-    {"id": "C-H2", "base": "H2-01", "seeds": [0, 99], "rule": "each coin's trailing funding for the entry and exit decisions is computed from its development funding series shifted circularly by k settlements, k drawn uniformly from the integers 540 to M - 540 where M is the coin's number of development settlements; funding received and P&L use the actual series", "rng": "numpy.random.default_rng(seed), BTCUSDT drawn before ETHUSDT"}
+    {
+      "id": "C-H1",
+      "base": "H1-01",
+      "rule": "votes are computed on a synthetic close series per instrument, starting at its first close and compounding its actual daily simple returns with each day's sign flipped independently with probability 1/2; volatility, sizing, universe and P&L use the actual prices",
+      "rng": "rng = numpy.random.default_rng(seed); rng.random(n) < 0.5 flips the sign, one value per instrument-day for every development daily bar of the 115 pinned candidates, in order of symbol then date",
+      "seed_first": 0,
+      "seed_last": 99
+    },
+    {
+      "id": "C-H2",
+      "base": "H2-01",
+      "rule": "each coin's trailing funding for the entry and exit decisions is computed from its development funding series shifted circularly by k settlements, where M is the coin's number of development settlements; funding received and P&L use the actual series",
+      "rng": "rng = numpy.random.default_rng(seed); k = rng.integers(540, M - 540, endpoint=True), BTCUSDT drawn before ETHUSDT",
+      "seed_first": 0,
+      "seed_last": 99
+    }
   ],
   "sensitivity": {
     "who": "each hypothesis's candidate only",
@@ -264,17 +293,17 @@
   },
   "statistics": {
     "returns": "daily net returns over the configuration's out-of-sample window",
-    "sharpe": "mean divided by standard deviation with T - 1 in the denominator, per day, not annualised; zero if the standard deviation is zero",
+    "sharpe": "mean divided by standard deviation with T - 1 in the denominator, per day, not annualised; a run whose daily returns have no variance has a Sharpe ratio of 0 and a DSR of 0",
     "skewness": "m3 / m2^1.5 with m_k the k-th central moment using 1/T",
     "kurtosis": "m4 / m2^2, Pearson (3 for a normal distribution)",
     "expected_max_z": "(1 - gamma) * Phi^-1(1 - 1/N) + gamma * Phi^-1(1 - 1/(N e)), gamma = 0.5772156649015329; 0 when N = 1",
     "psr_z": "(SR - SR*) * sqrt(T - 1) / sqrt(1 - skewness * SR + (kurtosis - 1) / 4 * SR^2)",
     "dsr": "Phi(psr_z with SR* = SR_0), SR_0 = sqrt(V) * expected_max_z(N)",
-    "V": "sample variance (denominator: the number of selectable runs minus one) of the per-day Sharpe ratios of every selectable run in the ledger, both hypotheses, each over its own window; for DEV-2 the same over their excess-return Sharpe ratios; 1/T of the candidate's window if fewer than two selectable runs exist",
+    "V": "sample variance (denominator: the number of selectable runs minus one) of the per-day Sharpe ratios of every selectable run in the ledger, both hypotheses, each over its own window, with no floor (this supersedes the null-variance floor in docs/research/gate-statistics.md, Decisions made here); for DEV-2 the same over their excess-return Sharpe ratios; 1/(T - 1) of the candidate's window if fewer than two selectable runs exist; computed with norse_research.sharpe.deflated_sharpe_ratio(SR, T, skewness, kurtosis, N, V), V from norse_research.sharpe.cross_trial_sharpe_variance over the selectable runs and N from the ledger; norse_research.sharpe.deflated_sharpe is not used",
     "pbo": {
-      "matrix": "columns: the hypothesis's selectable runs in registered order; rows: daily net returns over its window",
+      "matrix": "columns: the hypothesis's selectable runs in registered order (not one per trial counted in N); rows: daily net returns over its window",
       "blocks": 16,
-      "trim": "drop the earliest T mod 16 rows; blocks are contiguous and equal",
+      "trim": "no rows are dropped; 16 contiguous blocks whose lengths differ by at most one, the first T mod 16 one row longer (norse_research.cscv.block_bounds)",
       "splits": 12870,
       "in_sample": "the 8 blocks of the combination, in time order; out of sample the other 8",
       "metric": "the per-day Sharpe ratio as defined above",
@@ -282,21 +311,46 @@
       "oos_rank": "ascending rank of the selected column's out-of-sample Sharpe among all columns, 1 the lowest, ties averaged",
       "omega": "rank / (number of columns + 1)",
       "logit": "ln(omega / (1 - omega))",
-      "pbo": "the share of the 12870 splits with logit at or below zero"
+      "pbo": "the share of the 12870 splits with logit at or below zero",
+      "implementation": "norse_research.cscv.cscv, columns in registered order"
     },
     "min_track_record_days": "1 + (1 - skewness * SR + (kurtosis - 1) / 4 * SR^2) * (1.6448536269514722 / (SR - SR*))^2, reported for SR* = 0 and SR* = SR_0; not reached when SR <= SR*",
-    "bootstrap": "circular block bootstrap, block 20 days, 10000 resamples, numpy.random.default_rng(20261111), 5th and 95th percentiles of the annualised Sharpe; reported only"
+    "bootstrap": "norse_research.block_bootstrap.block_bootstrap(returns, seed=20261111, block_length=20, reps=10000, confidence=0.90): Python random.Random(seed), linear-interpolation percentiles; the 5th and 95th percentiles of the per-day Sharpe ratio, annualised by sqrt(365); reported only"
   },
   "gate": {
     "development": [
-      {"id": "DEV-1", "test": "dsr of the candidate's daily net returns", "pass": "> 0.95"},
-      {"id": "DEV-2", "test": "dsr of the candidate's excess returns: H1 r - k r_B with k = sd(r) / sd(r_B) over the window (B-H1); H2 r - beta r_B with beta the least-squares slope, intercept included, of r on r_B over the window (B-H2, D15)", "pass": "> 0.95"},
-      {"id": "DEV-3", "test": "pbo of the candidate's hypothesis", "pass": "< 0.5"},
-      {"id": "DEV-4", "test": "Sharpe of the window's daily net returns with each calendar year removed in turn", "pass": "every one > 0"},
-      {"id": "DEV-5", "test": "Sharpe of the window's daily net returns without the 20 largest daily returns (ties: earliest dates first)", "pass": "> 0"}
+      {
+        "id": "DEV-1",
+        "test": "dsr of the candidate's daily net returns",
+        "pass": "> 0.95"
+      },
+      {
+        "id": "DEV-2",
+        "test": "dsr of the candidate's excess returns: H1 r - k r_B with k = sd(r) / sd(r_B) over the window (B-H1); H2 r - beta r_B with beta the least-squares slope, intercept included, of r on r_B over the window (B-H2, D15)",
+        "pass": "> 0.95"
+      },
+      {
+        "id": "DEV-3",
+        "test": "pbo of the candidate's hypothesis",
+        "pass": "< 0.5"
+      },
+      {
+        "id": "DEV-4",
+        "test": "Sharpe of the window's daily net returns with each calendar year removed in turn",
+        "pass": "every one > 0"
+      },
+      {
+        "id": "DEV-5",
+        "test": "Sharpe of the window's daily net returns without the 20 largest daily returns (ties: earliest dates first)",
+        "pass": "> 0"
+      }
     ],
     "holdout": [
-      {"id": "HOLD-1", "test": "per-day Sharpe SR_h of the holdout candidate's 304 holdout daily net returns, against SR_w over its development window", "pass": "SR_h > 0 and SR_h >= SR_w - 1.6448536269514722 * sqrt((1 - skewness_w * SR_w + (kurtosis_w - 1) / 4 * SR_w^2) / (304 - 1)), with skewness_w and kurtosis_w from the development window"}
+      {
+        "id": "HOLD-1",
+        "test": "per-day Sharpe SR_h of the holdout candidate's 304 holdout daily net returns, against SR_w over its development window",
+        "pass": "SR_h > 0 and SR_h >= SR_w - 1.6448536269514722 * sqrt((1 - skewness_w * SR_w + (kurtosis_w - 1) / 4 * SR_w^2) / (304 - 1)), with skewness_w and kurtosis_w from the development window"
+      }
     ],
     "reported_not_criteria": ["family PBO over all selectable runs on their common days", "minimum track record length", "block-bootstrap intervals", "percentile among the 100 control runs", "benchmark statistics", "cost sensitivity"]
   },
@@ -307,21 +361,26 @@
     "no_candidate": "no unseal and no holdout run"
   },
   "holdout_run": {
-    "unseal": "names the prereg-v1 commit and file hashes and the holdout candidate's configuration hash, and is accepted only with the owner's key (D4)",
+    "unseal": "names the commit and file hashes of the pre-registration tag the genesis entry names and the holdout candidate's configuration hash, and is accepted only with the owner's key (D4)",
     "simulation": "one simulation of the candidate configuration from the start of its development window through 2026-10-31, positions carried across the boundary; HOLD-1 reads only the returns of 2026-01-01 to 2026-10-31",
     "spent_by": "one holdout result entry",
-    "retry": "a run that fails before producing a result may be retried under the same unseal for the same configuration only, every attempt ledgered",
+    "retry": "a run that fails before producing a result may be retried under the same unseal for the same configuration only, at the commit of its selectable run plus only commits that touch data loading or the seal, every attempt ledgered",
     "nothing_else_on_the_holdout": "no other configuration, benchmark, control or sensitivity run reads holdout data",
-    "data": "the holdout files are fetched again at the unseal and verified against the holdout manifest (owner's decision of 2026-11-11); a file that fails verification stops the run before any return is computed"
+    "data": "the holdout files are fetched again at the unseal and verified against the frozen holdout manifest (D17); a file that fails verification stops the run before any return is computed",
+    "key_record": "scrypt with n of at least 2^17, r 8, p 1 and a 16-byte salt (threat model T25), pinned in the genesis entry, which is written after G1.6 commits it",
+    "development_check": "its returns up to 2025-12-31 must equal the candidate's selectable run's committed series exactly, or the run stops before any holdout return is computed"
   },
   "verdict": {
     "PASS": "the hypothesis passes development and its candidate was the holdout candidate and passes HOLD-1",
     "PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT": "passes development but the other hypothesis's candidate was the holdout candidate",
-    "FAIL": "otherwise, once every registered configuration has a selectable run",
-    "NOT RUN": "not every registered configuration has a selectable run at the freeze"
+    "FAIL": "otherwise, once every registered configuration has a selectable run; and whenever the hypothesis's own entries and the reserve are exhausted without a pass",
+    "NOT RUN": "not every registered configuration has a selectable run at the freeze, and the hypothesis's own entries and the reserve are not exhausted; if they are, the verdict is FAIL"
   },
   "change_control": {
-    "before_the_first_trial": "a change needs a new tag (prereg-v2 and onward) and its reason recorded in the change log of docs/PREREGISTRATION.md",
-    "after_the_first_trial": "no change is allowed"
-  }
+    "before_the_first_entry_after_genesis": "a change needs a new tag (prereg-v2 and onward) and its reason recorded in the change log of docs/PREREGISTRATION.md",
+    "after_the_first_entry_after_genesis": "no change is allowed: the first ledger entry that follows the genesis entry, of any kind (benchmark, control or trial), closes the registration",
+    "signing_and_tag": "the owner signs by filling in the owner's row; the pull request is merged; the owner personally creates the annotated tag prereg-v1 on the resulting commit on main; no agent or scheduled task creates a prereg-* tag"
+  },
+  "benchmark_computation": "both benchmarks run through the same harness as the trials, not through norse_research.benchmark.equal_weight_buy_and_hold; DEV-2 for H1 applies norse_research.benchmark.excess_returns(r, volatility_matched(r_B, r))",
+  "controls_seeds_note": "seed_first to seed_last inclusive: 100 seeds per hypothesis"
 }

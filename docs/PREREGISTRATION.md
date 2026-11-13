@@ -1,7 +1,8 @@
 # Pre-registration of H1 and H2 (G0.7)
 
-**Status: draft of 2026-11-11 for the CTPO's review and the owner's signature. It binds
-nothing until the commit holding it is tagged `prereg-v1`.** Owner: quant. The CTPO
+**Status: draft of 2026-11-11, revised on 2026-11-13 after the CTPO's review (PR 52), for
+the CTPO's approval and the owner's signature. It binds nothing until the commit holding
+it is tagged `prereg-v1` (section 16).** Owner: quant. The CTPO
 approves; the owner signs. The goal is G0.7 in [ITERATION_GOALS.md](ITERATION_GOALS.md);
 the hypotheses and the gate are set out in [NEXT_ITERATION.md](NEXT_ITERATION.md).
 
@@ -34,9 +35,11 @@ records the SHA-256 of both files and the `prereg-v1` commit.
 12. The net Sharpe each criterion implies
 13. What the gate cannot detect
 14. Decisions this rests on
-15. Where NEXT_ITERATION.md and the register disagree with this
+15. Where NEXT_ITERATION.md, the register and merged code disagree with this
 16. Change control and signatures
 17. References
+
+Appendix A. The D14 review of the ten other holdout-only candidates
 
 ## 1. What was seen before this was written
 
@@ -80,9 +83,10 @@ ETH); they are not patched from the API, because the API cannot be pinned by a m
 covers only pairs still listed, and would let the data change after this document is
 signed. The effect is small and the same for every configuration.
 
-The owner decided on 2026-11-11 that the holdout files are removed from the local mirror
-until the single unseal, then fetched again and verified file by file against the
-committed holdout manifest. A holdout run never starts on a file that fails that check.
+The owner decided on 2026-11-11 (D17) that the holdout files are removed from the local
+mirror until the single unseal, then fetched again and verified file by file against the
+committed holdout manifest; [#54](https://github.com/lgreene03/norse-stack/pull/54)
+implements the first half. A holdout run never starts on a file that fails that check.
 
 ## 3. Walk-forward design and out-of-sample windows
 
@@ -175,9 +179,17 @@ It applies in the holdout run in the same way (three candidates end on 2026-04-0
 **Fills.** An order decided at time t fills at the volume-weighted average price of the
 15-minute bar that opens at t, computed as the bar's quote-asset volume divided by its
 base volume. If that bar is missing or has no volume, the next 15-minute bar with volume
-is used; if none trades within 24 hours, the order lapses, the position is unchanged and
-the next decision re-evaluates. A position changes at the close of its fill bar. A
-perpetual leg fills on the perpetual's own 15-minute bar by the same rule.
+is used. If no bar with volume opens before the next decision time (t plus 24 hours for a
+daily decision, t plus 4 hours for a four-hour one) or before the end of the window being
+run, whichever is earlier, the order lapses, the position is unchanged and the next
+decision re-evaluates; an unfilled order never survives the next decision. A position
+changes at the close of its fill bar.
+
+**The two legs of an H2 carry position fill together**, on the first 15-minute bar at or
+after the decision at which both the spot and the perpetual bar have volume, each leg at
+its own bar's volume-weighted average price. If no such bar opens before t plus 24 hours
+(or the end of the window), both legs lapse and the coin's state, in carry or flat, is
+unchanged. So H2 never holds one leg without the other.
 
 **Costs: 10 bps a side plus the executor's slippage.** The slippage model is huginn's
 executor's: the execution price is the reference price moved against the order by
@@ -221,8 +233,11 @@ a run:
    while its trailing window holds a recorded funding gap (SLPUSDT lacks 203 settlements in
    2025).
 6. In the holdout, the single missing day of BTC and ETH perpetual klines (2026-10-28) is
-   handled by rule 1 and the mark rule above: fills wait and the last close is carried
-   forward; funding still accrues, since the funding series has no gap.
+   handled by the joint fill rule and the mark rule above: an H2 entry or exit decided at
+   2026-10-28 00:00 finds no bar with both legs before 2026-10-29 00:00, so both legs lapse
+   and the coin's state is unchanged until the next decision re-evaluates; the perpetual's
+   last close is carried forward for marks; funding still accrues, since the funding series
+   has no gap, valued at the latest perpetual 15-minute close before each settlement.
 
 ## 6. H1, dated-universe trend
 
@@ -259,10 +274,10 @@ bridged or liquid-staking forms of another coin. Applied to the 115 pinned candi
 drops ETHBULL and ETHBEAR (leveraged; ranked 6th and 10th at the 2020-03 month end, the
 only time any excluded category reaches a development top ten) and PAXG, XAUT and SNDKB
 (off-chain assets; each reaches a top ten only in the holdout). The other 100 development
-candidates are crypto assets. Before signing, the CTPO checks the ten other holdout-only
-candidates (BANK, CHIP, DEXE, FOGO, NIGHT, RE, SENT, TAO, TUT and ZAMA) against the
-categories from each token's own published description, and any that falls in one is
-added to the list in [preregistration.json](preregistration.json) before the tag.
+candidates are crypto assets. The CTPO checked the ten other holdout-only candidates
+(BANK, CHIP, DEXE, FOGO, NIGHT, RE, SENT, TAO, TUT and ZAMA) against the categories on
+2026-11-13, from each token's published description; none falls in one, so all ten stay
+eligible. The classification is in appendix A.
 
 **Pairs younger than the lookback (decision D13).** At 28 of the 92 development month ends
 from 2018-04 to 2025-11, a pair in the raw top five has no close 120 days earlier
@@ -291,6 +306,13 @@ so each slot is sized to 20% annualised volatility and never exceeds its fifth o
 Pairs outside the universe have a target of 0. The configuration without volatility
 scaling uses w* = (1/5) × s.
 
+**Orders.** An order's quantity is the change in target weight times equity marked at the
+decision, divided by its fill bar's reference price. Quantities are real numbers with no
+lot-size or minimum-notional rounding, so returns do not depend on starting equity. Within
+a bar sells fill before buys, and if buys and fees would take cash below zero, every buy
+is scaled down in proportion so that cash ends at zero. In H2 the same rule scales a
+coin's two legs together, so their quantities stay equal.
+
 **Rebalancing.** Daily, at every 00:00 UTC decision; the universe changes only monthly.
 An instrument is traded to its target only when the absolute difference between its
 target and its current (drifted) weight exceeds 25% of the target, which means entries and
@@ -303,8 +325,10 @@ the 15-minute bar opening at each decision, and the universe updated only at the
 00:00 decision. It isolates one change, how often the same signal is read.
 
 **Funding filter** (H1-07): a member's signal is set to 0 while the sum of its perpetual's
-published funding rates with `calc_time` in the seven days up to the decision exceeds
-0.63%. The threshold is three times Binance's baseline funding (0.01% per eight hours when
+published funding rates with `calc_time` in the interval (t − 7 days + 60 s, t + 60 s]
+exceeds 0.63%. That interval holds exactly 21 settlements for a coin settling every eight
+hours (42 every four), whatever the archive's millisecond jitter: the settlement at t is
+in, the one at t − 7 days is out. The threshold is three times Binance's baseline funding (0.01% per eight hours when
 the premium is zero, 0.21% over seven days), about 33% a year: funding that high means
 leveraged longs are crowded, which is when trend longs are most exposed to a sharp
 reversal. The opposite direction (long only while funding is positive) was considered and
@@ -332,8 +356,8 @@ on a 60-day span, at most one fifth of equity per slot, a 25% band and no filter
 Why these and not others. The lookback sets span one to three weeks, three weeks to four
 months, and two to four months; crypto's time-series momentum is reported at daily and
 weekly horizons (Liu and Tsyvinski 2021), so the fast set is a genuinely different horizon,
-not a nudge. The longest lookback is held at 120 days in every configuration so that all
-share one window and one eligibility rule. The volatility target is not varied: below the
+not a nudge. The 120-day eligibility rule (decision D13) applies to every configuration,
+H1-02 included, so all share one window and one universe. The volatility target is not varied: below the
 one-fifth cap, which binds only when a coin's volatility falls under 20%, it scales
 returns without changing the Sharpe ratio, so a second target would spend a trial on
 nothing; switching scaling off (H1-08) is the informative contrast. The universe size is
@@ -348,8 +372,9 @@ USDT-margined perpetual short in equal quantities, so its price exposure is zero
 from the basis between the two, and it earns the funding that longs pay shorts.
 
 **Rule.** At each daily decision t, for each coin separately, F is the sum of its published
-funding rates with `calc_time` in the L days up to t (21 settlements over seven days, since
-BTC and ETH settle every eight hours throughout the archive). With the round-trip cost of a
+funding rates with `calc_time` in the interval (t − L days + 60 s, t + 60 s], which holds
+exactly 3L settlements for a coin settling every eight hours, as BTC and ETH do throughout
+the archive: 21 over seven days, whatever the archive's millisecond jitter. With the round-trip cost of a
 carry position c = 4 × 12 bps = 0.48% (both legs in and out), the thresholds are
 
     entry threshold = m_entry × c × L / 28,    exit threshold = m_exit × c × L / 28.
@@ -360,7 +385,8 @@ trailing seven-day funding above twice the round-trip cost spread over 28 days, 
 0.24% over seven days (about 12.5% a year), and exit below it.
 
 **Sizing and holding.** On entry, the spot quantity is q = 0.5 × equity divided by the spot
-fill's reference price; q spot is bought and q perpetual sold on the same 15-minute bar.
+fill's reference price; q spot is bought and q perpetual sold on the same 15-minute bar,
+under the joint fill rule of section 5.
 Quantities stay fixed until the exit, which sells q spot and buys q perpetual. Each coin
 uses half of equity, and the two coins act independently. At each settlement while short,
 the book receives q times the funding mark times the rate, and pays it when the rate is
@@ -397,23 +423,28 @@ fifth of equity in each H1 universe member (cash for an empty slot), with no tra
 between month ends, the same fills and costs and the same rule for halted pairs. It is the
 least trading that stays an equal-weight holding of the same dated universe. B-H2, for
 every H2 configuration: BTC and ETH spot at half of equity each from the first H2 decision,
-traded back to halves at each month-end decision, with the same fills and costs.
+traded back to halves at each month-end decision, with the same fills, costs and rule for
+halted pairs. Both benchmarks are run through the same harness as the trials, not
+computed by G1.3's `benchmark.equal_weight_buy_and_hold`, which values at daily closes,
+charges costs on turnover and raises on a halted holding; G1.3's `volatility_matched` and
+`excess_returns` are then applied to the benchmark's harness returns for DEV-2.
 
-**Control runs.** One hundred per hypothesis, seeds 0 to 99, using
-`numpy.random.default_rng(seed)`.
+**Control runs.** One hundred per hypothesis, seeds 0 to 99 inclusive, each drawing from
+`rng = numpy.random.default_rng(seed)`.
 
 * C-H1 (random sign) is H1-01 with its votes computed on a synthetic price series per
   instrument: starting at its first close, compounding its actual daily simple returns
-  with each day's sign flipped independently with probability one half. Volatility,
-  sizing, the universe and the profit and loss use actual prices. Squared returns are
-  unchanged by a sign flip, so the control has the same sizing and a realistic,
-  persistent signal and turnover, but no information about direction.
+  with a day's sign flipped where `rng.random(n) < 0.5`, one value per instrument-day for
+  every development daily bar of the 115 pinned candidates, in order of symbol then date.
+  Volatility, sizing, the universe and the profit and loss use actual prices. Squared
+  returns are unchanged by a sign flip, so the control has the same sizing and a
+  realistic, persistent signal and turnover, but no information about direction.
 * C-H2 (random timing) is H2-01 with each coin's entry and exit decided on its development
-  funding series shifted circularly by k settlements, k drawn uniformly from 540 to M − 540
-  (180 days from either end) where M is the coin's number of development settlements;
-  funding received and the profit and loss use the actual series. The control is in
-  carry about as often and for about as long as the real rule, at times unrelated to the
-  funding it collects.
+  funding series shifted circularly by k settlements, `k = rng.integers(540, M - 540,
+  endpoint=True)` (at least 180 days from either end), where M is the coin's number of
+  development settlements, BTC drawn before ETH; funding received and the profit and loss
+  use the actual series. The control is in carry about as often and for about as long as
+  the real rule, at times unrelated to the funding it collects.
 
 Controls are diagnostics, not pass criteria: the verdict memo reports each candidate's
 percentile among its hundred controls' Sharpe ratios. A random-sign trend control still
@@ -456,12 +487,20 @@ for reruns; no configuration outside the grids is ever run.
    selectable run. If it has not by the freeze on 2026-12-01, it cannot pass and its
    entries still count.
 3. A rerun requires a recorded defect: what was wrong and the commit that fixes it, written
-   in the rerun's entry. A fix to code both hypotheses use (the harness, loaders, fills,
-   costs or statistics) reruns every configuration already run; a fix confined to one
-   hypothesis's strategy code reruns that hypothesis's configurations already run.
-4. A configuration's selectable run is its last completed trial entry at the freeze, and
-   all selectable runs of a hypothesis must come from identical harness and strategy code,
-   as their entries record.
+   in the rerun's entry. A defect is a departure of the code from this registration, or a
+   failure to complete; the rerun's entry names the section of this document the code
+   departed from, and the fix may only bring the code into line with it. A fix to code
+   both hypotheses use (the harness, loaders, fills or costs) reruns every configuration
+   already run; a fix confined to one hypothesis's strategy code reruns that hypothesis's
+   configurations already run. Every statistic of section 10 is computed once, at the
+   freeze, from the committed return series with the code at the freeze tag, so a fix to
+   statistics code reruns no trial.
+4. A configuration's selectable run is its last completed trial entry at the freeze whose
+   returns cover its hypothesis's whole out-of-sample window; the harness runs a grid
+   configuration only over that whole window. All selectable runs of a hypothesis must come
+   from identical git tree hashes of the harness and strategy paths the genesis entry
+   lists, as their entries record; a hypothesis whose selectable runs do not is treated as
+   lacking a selectable run for every configuration.
 5. Reserve entries are drawn only after a hypothesis has used its own 12, only for reruns
    under rule 3, each with its recorded reason. When the budget is exhausted no further
    trial runs; a hypothesis that has not passed by then has failed.
@@ -476,7 +515,9 @@ All statistics are computed on daily net returns over the configuration's window
 and not annualised. Annualised figures, for reporting only, multiply a daily Sharpe ratio
 by the square root of 365, since crypto trades every day. Notation: T is the number of
 daily returns; SR the daily Sharpe ratio, mean over standard deviation with T − 1 in the
-denominator (zero if the standard deviation is zero); γ3 the skewness m3 / m2^1.5 and γ4
+denominator (a run whose daily returns have no variance, such as a configuration that
+never trades, has a Sharpe ratio of 0 and a DSR of 0, where G1.3's `sharpe.moments`
+raises); γ3 the skewness m3 / m2^1.5 and γ4
 the kurtosis m4 / m2^2 (Pearson, so 3 for a normal distribution), with m_k the k-th central
 moment computed with 1/T; Φ the standard normal distribution function; and z = 1.6448536...,
 its 95% point.
@@ -491,14 +532,30 @@ and the deflated Sharpe ratio is DSR = PSR(SR0), where
     SR0 = √V × [ (1 − γ) × Φ⁻¹(1 − 1/N) + γ × Φ⁻¹(1 − 1/(N e)) ],   γ = 0.5772156649...,
 
 is the Sharpe ratio the best of N skill-less trials is expected to show (taken as 0 when
-N = 1). N is the ledger's count from section 9. V is the sample variance (the denominator
-is one less than the number of selectable runs) of the daily Sharpe ratios of every
-selectable run in the ledger, both hypotheses together, each over its own window: the holdout candidate is
-chosen across both, so the deflation charges for the whole family. If fewer than two
-selectable runs exist, V = 1/T. Known answers G1.3 must reproduce, from the paper's own
-example (N = 100, V of 1/2 in annual terms, an annualised Sharpe of 2.5 over T = 1,250 daily
-returns at 250 a year, γ3 = −3, γ4 = 10): SR0 = 0.1132 a day and DSR = 0.9004; with N = 46,
-DSR = 0.9505; and with normal returns DSR stays above 0.95 up to N = 88.
+N = 1). N is the ledger's count from section 9.
+
+**V, with no floor.** V is the sample variance (the denominator is one less than the
+number of selectable runs) of the daily Sharpe ratios of every selectable run in the
+ledger, both hypotheses together, each over its own window: the holdout candidate is
+chosen across both, so the deflation charges for the whole family. There is no floor at
+the null variance. If fewer than two selectable runs exist, V = 1/(T − 1) of the
+candidate's window (run rule 2 makes that impossible in practice). The DSR is computed
+with `norse_research.sharpe.deflated_sharpe_ratio(SR, T, γ3, γ4, N, V)`, V from
+`cross_trial_sharpe_variance` over the selectable runs and N from the ledger. This
+supersedes the floor that G1.3 chose (gate-statistics.md, "Decisions made here"), which
+`sharpe.deflated_sharpe` applies as max(1/(T − 1), V) and which also requires one Sharpe
+ratio per trial counted in N; that function must not be used for the gate as it stands.
+The reasons: the grid is fixed here, so near-duplicate trials cannot be added to lower V,
+which is the abuse the floor guards against; for equally correlated trials the paper's V
+with the raw count N reproduces the right expected maximum, whereas a floor would charge
+correlated trials as if they were independent; and both forms pass the no-skill
+calibration with a wide margin (section 12), the paper's keeping more of the power the
+gate lacks (section 13).
+
+Known answers, from the paper's own example and reproduced by G1.3's tests (N = 100, V of
+1/2 in annual terms, an annualised Sharpe of 2.5 over T = 1,250 daily returns at 250 a
+year, γ3 = −3, γ4 = 10): SR0 = 0.1132 a day and DSR = 0.9004; with N = 46, DSR = 0.9505;
+and with normal returns DSR stays above 0.95 up to N = 88.
 
 **Minimum track record length** (Bailey and López de Prado 2012), reported, not a criterion:
 
@@ -509,10 +566,12 @@ paper's appendix: monthly mean 2 and standard deviation √12 (so SR = 1/√3), 
 γ4 = 5.78 and SR* = 1/√12 give 59.895 months.
 
 **Probability of backtest overfitting** (Bailey, Borwein, López de Prado and Zhu 2017), by
-combinatorially symmetric cross-validation. The matrix has one column per selectable run of
-the candidate's hypothesis, in registered order, and one row per day of its window. The
-earliest T mod 16 rows are dropped and the rest split into 16 contiguous blocks of equal
-length. For each of the C(16, 8) = 12,870 ways to choose 8 blocks (the paper's text prints
+combinatorially symmetric cross-validation, computed by `norse_research.cscv.cscv`. The
+matrix has one column per selectable run of the candidate's hypothesis, in registered
+order (not one per trial counted in N: failed entries have no returns and reruns would
+duplicate a column), and one row per day of its window. The rows are split into 16
+contiguous blocks whose lengths differ by at most one, the first T mod 16 blocks one row
+longer, as `norse_research.cscv.block_bounds` computes them; no row is dropped. For each of the C(16, 8) = 12,870 ways to choose 8 blocks (the paper's text prints
 12,780, a transposition), the chosen blocks in time order are the in-sample set and the
 other 8 the out-of-sample set. The column with the highest in-sample Sharpe ratio is
 selected (ties to the lowest column index); its out-of-sample Sharpe ratio is ranked
@@ -544,8 +603,10 @@ excess return is e = r − β × r_B with r_B the daily return of B-H2 and β th
 slope of r on r_B, intercept included, over the window (decision D15): H2 holds equal
 quantities long and short, so there is no market exposure for it to pass on, and a
 volatility-matched comparison would instead ask it to beat the market's Sharpe ratio
-(section 12). The DSR of an excess series uses the same N, and V computed over every
-selectable run's excess-return Sharpe ratio. Calendar years for DEV-4 are 2018 (from
+(section 12). H1's excess is G1.3's `excess_returns(r, volatility_matched(r_B, r))`; H2's
+has no implementation yet (section 15). The DSR of an excess series uses the same N, and V
+computed the same way, with no floor, over every selectable run's excess-return Sharpe
+ratio. Calendar years for DEV-4 are 2018 (from
 05-01) to 2025 for H1, and 2020 (from 01-08) to 2025 for H2.
 
 **The holdout criterion.** HOLD-1: on the holdout candidate's 304 holdout daily returns,
@@ -558,15 +619,21 @@ is that of a Sharpe ratio estimated over 304 days if the holdout came from the s
 process as development; the development estimate's own error is ignored, which makes the
 band narrower and the test stricter.
 
-**Reported, never criteria:** the family PBO, the minimum track record length, 20-day
-circular block bootstrap intervals (10,000 resamples, seed 20261111, the 5th and 95th
-percentiles of the annualised Sharpe), each candidate's percentile among its controls,
-the benchmarks' own statistics and the cost sensitivity.
+**Reported, never criteria:** the family PBO, the minimum track record length, block
+bootstrap intervals, each candidate's percentile among its controls, the benchmarks' own
+statistics and the cost sensitivity. The intervals are
+`norse_research.block_bootstrap.block_bootstrap(returns, seed=20261111, block_length=20,
+reps=10000, confidence=0.90)`: Python's `random.Random(seed)`, linear-interpolation
+percentiles, the 5th and 95th percentiles of the daily Sharpe ratio, annualised by the
+square root of 365.
 
 **Calibration.** The gate as registered here, with these windows, a family N of up to 30,
-V across both hypotheses and per-hypothesis PBO matrices of 8 and 6 columns, is what G1.7
-must calibrate: no strategy is judged until it passes at most 5% of 1,000 simulated
-no-skill ledgers at N = 30 and detects a planted Sharpe of 1.5.
+V across both hypotheses with no floor and per-hypothesis PBO matrices of 8 and 6 columns,
+is what G1.7 must calibrate: no strategy is judged until it passes at most 5% of 1,000
+simulated no-skill ledgers at N = 30 and detects a planted Sharpe of 1.5. Because V has no
+floor, the no-skill ledgers must include correlated families (the only case where the two
+forms of V differ), and power must be reported for a family whose configurations share one
+edge as well as for a single planted column.
 
 ## 11. The holdout candidate, the single holdout run and the verdict
 
@@ -582,21 +649,25 @@ development results nor a private look at 2026 can change which configuration is
 3. **The holdout candidate** is, among hypotheses that pass development, the candidate with
    the higher DEV-1 deflated Sharpe ratio; ties go to H1. If neither passes, there is no
    holdout candidate, no unseal and no holdout run.
-4. **The unseal** names the `prereg-v1` commit and file hashes and the holdout candidate's
-   configuration hash, and is accepted only with the owner's key (decision D4: the owner
-   alone holds it, as a passphrase kept in a password manager, with only its salted hash
-   committed under G1.6). The harness refuses an unseal that names any other
-   configuration.
+4. **The unseal** names the commit and file hashes of the pre-registration tag the genesis
+   entry names and the holdout candidate's configuration hash, and is accepted only with
+   the owner's key (decision D4: the owner alone holds it, as a passphrase kept in a
+   password manager, with only its salted hash committed under G1.6). The key record
+   (scrypt with n of at least 2^17, r 8, p 1 and a 16-byte salt, threat model T25) is
+   pinned in the genesis entry, which is written after G1.6 commits it. The harness
+   refuses an unseal that names any other configuration.
 5. **The holdout run** is one simulation of the candidate configuration from the start of
    its development window through 2026-10-31, with positions carried across the boundary
    and the 2025-12 month-end universe taking effect at 2026-01-01 00:00. HOLD-1 reads only
    the returns of 2026-01-01 to 2026-10-31. Before it starts, the holdout files are fetched
    again and verified against the holdout manifest; any failure stops the run before a
-   return is computed.
+   return is computed. Its returns up to 2025-12-31 must equal the candidate's selectable
+   run's committed series exactly, or the run stops before any holdout return is computed.
 6. **One result spends the seal.** A run that fails before producing a result may be
-   retried under the same unseal for the same configuration only, every attempt ledgered.
-   No other configuration, and no benchmark, control or sensitivity run, ever reads holdout
-   data.
+   retried under the same unseal for the same configuration only, at the commit of its
+   selectable run plus only commits that touch data loading or the seal, every attempt
+   ledgered. No other configuration, and no benchmark, control or sensitivity run, ever
+   reads holdout data.
 
 **The verdict, per hypothesis**, in words:
 
@@ -604,8 +675,8 @@ development results nor a private look at 2026 can change which configuration is
 |---|---|
 | PASS | it passes development, its candidate was the holdout candidate, and HOLD-1 holds |
 | PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT | it passes development, but the other hypothesis's candidate was the holdout candidate |
-| FAIL | otherwise, once every registered configuration has a selectable run |
-| NOT RUN | not every registered configuration has a selectable run at the freeze |
+| FAIL | otherwise, once every registered configuration has a selectable run; and whenever the hypothesis's own entries and the reserve are exhausted without a pass |
+| NOT RUN | not every registered configuration has a selectable run at the freeze, and the hypothesis's own entries and the reserve are not exhausted; if they are, the verdict is FAIL |
 
 ## 12. The net Sharpe each criterion implies
 
@@ -657,7 +728,8 @@ assumed about 5.6 years for every hypothesis.
   weak filter on its own; DEV-1 carries the weight.
 * DEV-4 is the true Sharpe ratio at which removing the best calendar year leaves a
   positive Sharpe half the time, by simulation over the actual year lengths; it agrees
-  with E[max Z_Y] / (Y − 1) for Y = 8 and 6 years (0.20 and 0.25).
+  with E[max Z_Y] / (Y − 1), using the exact expectation of the largest of Y standard
+  normals, for Y = 8 and 6 years (0.20 and 0.25).
 * DEV-5 is the realised Sharpe ratio at which the 20 largest of T standardised normal
   returns, which sum to about 55 and 54 standard deviations, exactly offset the rest.
 * HOLD-1's band sits below zero for every development Sharpe ratio under about 1.81, since
@@ -678,15 +750,23 @@ For DEV-5 under fat tails (a Student t with γ4 = 10), the figures rise to 0.52 
 (H2). V is the one input the data sets: trials of one hypothesis are correlated, which
 lowers V and with it the bar, while a family in which H1 and H2 differ sharply raises it.
 Using the empirical V with the raw count N follows the paper: for equally correlated
-trials it reproduces the correct expected maximum, whereas a floor at 1/T would charge
-twice for the same correlation.
+trials it reproduces the correct expected maximum, whereas a floor at 1/T would give
+correlated trials no credit for their correlation, charging for them as if they were
+independent.
+
+**Is the gate still safe without the floor?** Yes. The CTPO simulated no-skill families
+shaped like the registered grid (8 columns over 2,802 days and 6 over 2,185, correlation
+within a hypothesis from 0 to 0.95, N of 14 or 30, 20,000 runs each, DEV-1 alone) on
+2026-11-13: DEV-1 passed 0.03% to 0.56% of them without the floor and 0.01% to 0.09% with
+it. Without the floor the worst case tends to a single trial's 5% as the correlation tends
+to 1, and never exceeds it. G1.7 calibrates the whole gate on such families (section 10).
 
 ## 13. What the gate cannot detect
 
 * **A modest edge.** At N = 30, a true net Sharpe of 1.0 passes DEV-1 for H1 only about one
   time in six (1.34 needed, standard error 0.36 a year) and for H2 about one time in ten
-  (1.52 needed, standard error 0.41). A
-  strategy worth trading at a Sharpe of 0.7 to 1.0 would most likely be reported as a fail.
+  (1.52 needed, standard error 0.41). A strategy worth trading at a Sharpe of 0.7 to 1.0
+  would most likely be reported as a fail.
   A fail is therefore "no edge large enough to detect in 6 to 8 years of daily data", not
   "no edge".
 * **The holdout catches only a gross failure.** Over 304 days, a strategy with a true
@@ -695,6 +775,17 @@ twice for the same correlation.
   The holdout is also contaminated: 2026 prices are public and known to every model
   involved (D4), so it can only catch a failure.
 * **The PBO alone** passes a family with no skill at all about half the time.
+* **PBO and a shared edge.** When every configuration of a hypothesis carries the same
+  edge, the in-sample best is no more likely than any other to stay best, so DEV-3 passes
+  about as often as for a family with no skill (0.42 to 0.60 in simulation at a true
+  Sharpe of 1.5); a real edge whose configurations perform alike fails DEV-3 about half the
+  time. That is the realistic case for H2's threshold variants and H1's band and filter
+  variants, so for such a family the DEV-1 power figures in section 12 overstate the whole
+  gate's power by up to a factor of two. (CTPO simulation of 2026-11-13: 60 families per case with
+  `norse_research.cscv`, 6 columns over 2,185 days or 8 over 2,802, correlation 0.9 or 0.5;
+  when the configurations' true Sharpe ratios differed with a standard deviation of 0.2,
+  DEV-3 passed 0.85 to 0.90 of them. Each rate has a standard error of about 0.06.)
+  Changing DEV-3 would change NEXT_ITERATION.md's gate and need the owner; it stays.
 * **Hindsight in the design.** Development returns are unfitted but not unseen; the
   configurations were written by people who know crypto's history from 2018 to 2025. The
   deflated Sharpe charges for the 14 to 30 trials actually run, not for the many ideas
@@ -709,7 +800,8 @@ twice for the same correlation.
 
 All are in [DECISIONS.md](DECISIONS.md). D11 to D15 were decided by the owner on
 2026-11-11, on the quant's recommendation; each entry keeps the options that were rejected
-and why.
+and why. D16 and D17 are the owner's decisions of the same day on the ledger's and the
+seal's protections.
 
 | Decision | What it fixes here |
 |---|---|
@@ -720,59 +812,118 @@ and why.
 | D13 | a pair joins the universe only once it has a close 120 days back; the next eligible pair takes its place |
 | D14 | universe exclusions by category; the holdout names that were seen |
 | D15 | H2's excess return is against a beta-matched buy-and-hold; H1's stays volatility-matched |
+| D16 | rulesets: main cannot be force pushed or deleted and needs the `research` and `validate` checks; `prereg-*` and `ledger-*` tags cannot be moved or deleted |
+| D17 | the holdout files stay off the local mirror until the single unseal, then are fetched again and verified against the frozen holdout manifest |
 
-Two further owner decisions of 2026-11-11 stand behind the ledger and the seal: the
-repository now has rulesets that forbid force pushes to and deletion of main, require the
-`research` and `validate` checks, and make `prereg-*` and `ledger-*` tags immutable once
-created; and the holdout files are deleted from the local mirror until the single unseal,
-then fetched again and verified against the committed holdout manifest.
+## 15. Where NEXT_ITERATION.md, the register and merged code disagree with this
 
-## 15. Where NEXT_ITERATION.md and the register disagree with this
+Each with severity (what goes wrong if ignored) and confidence. None moves a pass mark
+except as decided in D15. Once `prereg-v1` is tagged, this document supersedes the items
+below. The CTPO, who owns NEXT_ITERATION.md and the register, adds pointers there and
+records the follow-ups as register rows; this pull request changes only this document,
+its JSON file and DECISIONS.md.
 
-Each with severity (what goes wrong if ignored) and confidence. None changes a criterion
-except as decided in D15.
+**Decisions of the merged G1.3 code and page that this supersedes.**
 
-1. **Medium, confirmed by arithmetic.** NEXT_ITERATION.md's volatility-matched comparison,
+1. **Medium, confirmed.** The variance V in SR0. G1.3 floors V at the null variance
+   1/(T − 1), and `sharpe.deflated_sharpe` requires one Sharpe ratio per trial counted in
+   N. Here V is the paper's cross-trial variance over the selectable runs, with no floor,
+   computed through `deflated_sharpe_ratio` (section 10). gate-statistics.md's sentence that
+   correlated trials "make it strict rather than lenient" no longer holds: correlated trials
+   lower V, and with it the bar, as the paper intends. Follow-ups: G1.5 calls
+   `deflated_sharpe_ratio` directly with V from the selectable runs, or G1.3's
+   `deflated_sharpe` is changed to take V separately from N; G1.7 calibrates on correlated
+   no-skill families.
+2. **Medium, confirmed.** PBO columns. G1.3's `cscv` docstring and page say the columns are
+   "the N ledger trials"; here they are the hypothesis's selectable runs (section 10). The
+   block rule is G1.3's as merged: no row is dropped.
+3. **Low, confirmed.** The bootstrap is G1.3's `block_bootstrap` at 90% confidence with
+   Python's `random.Random`, replacing this draft's earlier numpy generator (section 10).
+4. **Low, confirmed.** A run whose returns have no variance has a Sharpe ratio of 0 and a DSR
+   of 0 here, where `sharpe.moments` raises. Follow-up: G1.5 handles the case before it
+   calls G1.3's functions.
+5. **Low, confirmed.** The benchmarks run through the harness, not G1.3's
+   `equal_weight_buy_and_hold`, so that fills, costs and the rule for halted pairs match the
+   trials (section 8).
+
+**NEXT_ITERATION.md, the register, G0.6 and the threat model.**
+
+6. **Medium, confirmed by arithmetic.** NEXT_ITERATION.md's volatility-matched comparison,
    applied to H2 as written, would test whether carry beats the market's Sharpe ratio rather
    than whether it is more than market exposure: 2.36 to 3.15 needed under the assumptions
    of section 12. Resolved by D15.
-2. **Medium, likely.** "The five largest non-stablecoin pairs", read literally, can need a
+7. **Medium, confirmed.** D15's beta-matched excess has no implementation in G1.3's
+   `benchmark.py`; it needs a function with hand-computed known answers before G2.3, and
+   G1.7 must calibrate it. Follow-up for the technical specialist, with the quant.
+8. **Medium, likely.** "The five largest non-stablecoin pairs", read literally, can need a
    pair ranked eleventh or lower once exclusions and young pairs are removed, and the
    holdout manifest pins finer bars only for a top ten. By their listing dates alone, RE
-   and SNDKB can only have reached a holdout top ten while younger than 120 days. Resolved here by ranking within the ten largest
-   (section 6); in development it never binds, but some holdout months may leave a slot in
-   cash.
-3. **Medium, likely.** G1.7 must calibrate this gate as registered (family N and V across
-   both hypotheses, the windows of section 3, PBO matrices of 8 and 6 columns). A
+   and SNDKB can only have reached a holdout top ten while younger than 120 days. Resolved
+   here by ranking within the ten largest (section 6); in development it never binds, but
+   some holdout months may leave a slot in cash.
+9. **Medium, likely.** G1.7 must calibrate this gate as registered: family N, V across both
+   hypotheses with no floor, the windows of section 3, PBO matrices of 8 and 6 columns, with
+   correlated no-skill families among the 1,000 ledgers and power reported for a family that
+   shares one edge as well as for a single planted column (sections 10 and 13). A
    calibration of a simpler gate would not support the 5% false-pass claim for this one.
-4. **Low, confirmed.** NEXT_ITERATION.md's "about 5.6 years" and its implied Sharpe ratios
-   (1.4 at N = 10, 1.6 at N = 30) are superseded by section 12.
-5. **Low, confirmed.** G2.3 says "funding accrued every eight hours"; the rule is per
-   published settlement. BTC and ETH settle every eight hours throughout, so H2 is
-   unaffected, but the wording should change.
-6. **Low, confirmed.** G2.4 headlines returns "net of 20 bps"; the gate's cost basis is
-   24 bps a round trip on one leg (10 plus 2 bps a side). The tear sheet's headline should
-   use the gate's basis, with 15, 20 and 30 bps as sensitivity.
-7. **Low, confirmed.** NEXT_ITERATION.md calls benchmark and control runs "recorded but can
-   never be selected" and the threat model calls them "trials marked unselectable"; here
-   they are ledgered kinds outside N, told apart by their registered configuration.
-8. **Low, confirmed.** NEXT_ITERATION.md leaves open the form of the blended signal, what
-   "at most 1x per coin" means, what "four-hour bars" changes and which way the funding
-   filter points; section 6 fixes each, with the alternative not tried.
-9. **Low, confirmed.** The PBO paper prints 12,780 splits for 16 blocks; the correct count,
-   used by G1.3, is 12,870.
-10. **Informational.** G0.6's limit of about 1.6 years on a first training window does not
+10. **Medium, confirmed.** NEXT_ITERATION.md's kill criteria call an exhausted budget a fail;
+    the verdict table says so (section 11), and NOT RUN applies only while budget remains.
+11. **Low, likely.** Sensitivity runs sit outside N, so they must be enforced: follow-up for
+    security and G1.5 to add `test_sensitivity_run_before_the_freeze_is_refused` and
+    `test_sensitivity_run_of_a_non_candidate_is_refused`.
+12. **Low, confirmed.** NEXT_ITERATION.md calls benchmark and control runs "recorded but can
+    never be selected", G2.1 speaks of "random-sign control runs ... marked unselectable",
+    and threat model T18 calls them "trials marked unselectable". Here they are ledgered
+    kinds outside N, told apart by their registered configuration, and H2's control is
+    random timing, not random sign (section 8). T18's control text needs the same change.
+13. **Low, confirmed.** Change control now closes at the first ledger entry after the genesis
+    entry of any kind, not at the first trial (section 16). Follow-up for security: extend
+    `test_preregistration_change_after_the_first_trial_is_refused` to match.
+14. **Low, confirmed.** G0.6's 5.92-year window for the funding-filter trial, and its "the
+    shorter window, 5.92" for the whole family, are superseded: H1-07 shares H1's 7.67-year
+    window (section 6), so the family's shortest window is H2's 5.98 years.
+15. **Low, confirmed.** G2.2's "at most 12 H1 trials" can reach 18 trial entries with the
+    reserve, every extra one a rerun (section 9).
+16. **Low, confirmed.** NEXT_ITERATION.md's "about 5.6 years" and its implied Sharpe ratios
+    (1.4 at N = 10, 1.6 at N = 30) are superseded by section 12.
+17. **Low, confirmed.** G2.3 says "funding accrued every eight hours"; the rule is per
+    published settlement. BTC and ETH settle every eight hours throughout, so H2 is
+    unaffected, but the wording should change.
+18. **Low, confirmed.** G2.4 headlines returns "net of 20 bps"; the gate's cost basis is
+    24 bps a round trip on one leg (10 plus 2 bps a side). The tear sheet's headline should
+    use the gate's basis, with 15, 20 and 30 bps as sensitivity.
+19. **Low, confirmed.** NEXT_ITERATION.md leaves open the form of the blended signal, what
+    "at most 1x per coin" means, what "four-hour bars" changes and which way the funding
+    filter points; section 6 fixes each, with the alternative not tried.
+20. **Low, confirmed.** The PBO paper prints 12,780 splits for 16 blocks; the correct count,
+    used by G1.3, is 12,870.
+21. **Low, confirmed.** The register's follow-up from #47 (the universe exclusions must be
+    categories decided on development data alone) is resolved by D14.
+22. **Informational.** G0.6's limit of about 1.6 years on a first training window does not
     arise, because nothing is fitted (section 3).
-11. **Informational.** The pre-registration was due on 2026-11-07 and is drafted on
+23. **Informational.** The pre-registration was due on 2026-11-07 and is drafted on
     2026-11-11; G2.2 and G2.3 cannot start before it is tagged and G1.7 has passed.
 
 ## 16. Change control and signatures
 
-Before the first trial entry, a change to this document or to
-[preregistration.json](preregistration.json) needs a new tag (`prereg-v2` and onward, since
-tags are immutable) and its reason recorded in the change log below; the ledger's genesis
-entry then names the new tag. After the first trial entry, no change is allowed, and the
-ledger refuses a new genesis.
+Until the first ledger entry that follows the genesis entry, a change to this document or
+to [preregistration.json](preregistration.json) needs a new tag (`prereg-v2` and onward,
+since tags are immutable under D16) and its reason recorded in the change log below; the
+genesis entry then names the new tag. After the first ledger entry that follows the
+genesis entry, of any kind (benchmark, control or trial), no change is allowed, and the
+ledger refuses a new genesis. The trigger is the first entry of any kind, not the first
+trial, because G2.1's benchmark and control runs come before any trial and already show
+out-of-sample returns over the registered windows, the controls through H1-01's and
+H2-01's own machinery.
+
+**Signing and tagging.** The CTPO approves on the pull request. The owner signs by filling
+in the owner's row; the pull request is then merged and the owner personally creates the
+annotated tag `prereg-v1` on the resulting commit on main. No agent or scheduled task
+creates a `prereg-*` tag. The tag ruleset (D16) forbids moving or deleting a `prereg-*` tag
+but not creating one, so the first `prereg-v1` created anywhere is permanent, and a squash
+merge would orphan a tag placed on this branch. One GitHub identity is shared by the owner
+and every agent, so the signature row records the owner's decision without proving who
+wrote it; the owner creating the tag in person is what does.
 
 **Change log.**
 
@@ -784,7 +935,7 @@ ledger refuses a new genesis.
 
 | Role | Name | Date | Signature |
 |---|---|---|---|
-| Quant (drafted) | quant specialist | 2026-11-11 | drafted; not a signature |
+| Quant (drafted) | quant specialist | 2026-11-11, revised 2026-11-13 | drafted; not a signature |
 | CTPO (approves) | | | |
 | Owner (signs) | | | |
 
@@ -804,3 +955,25 @@ ledger refuses a new genesis.
   of backtest overfitting. *Journal of Computational Finance* 20(4), 39 to 69.
 * Liu, Y. and Tsyvinski, A. (2021). Risks and returns of cryptocurrency. *Review of
   Financial Studies* 34(6), 2689 to 2727.
+
+## Appendix A. The D14 review of the ten other holdout-only candidates
+
+The CTPO classified these on 2026-11-13 (review on PR 52) from each token's published
+description only. No price, volume, market capitalisation or return was looked at or
+recorded. None falls in an excluded category, so the classified list in
+[preregistration.json](preregistration.json) is unchanged. The CTPO notes that most of the
+mappings from ticker to project rest on reports of Binance's listing announcements rather
+than the announcements themselves, and that CHIP's and RE's were confirmed directly.
+
+| Token | Project and what the token is | D14 category | Confidence | Source |
+|---|---|---|---|---|
+| BANK | Lorenzo Protocol: governance and utility token (vote-escrowed as veBANK) of an on-chain asset-management protocol; the protocol issues fund and staked-BTC products, but BANK itself tracks none of them | none | likely | [CoinGecko](https://www.coingecko.com/en/coins/lorenzo-protocol) |
+| CHIP | USD.AI: governance token; holders vote on loan pricing, underwriting and liquidity for GPU-backed loans; no backing or claim on loans (USDai is the separate synthetic dollar) | none | confirmed | [USD.AI docs](https://docs.usd.ai), [listing report](https://cryptobriefing.com/binance-lists-chip-token-for-usdai-boosting-market-confidence/) |
+| DEXE | DeXe Network: token of a DAO-infrastructure protocol, used for governance, delegation and staking | none | likely | [CoinGecko](https://www.coingecko.com/en/coins/dexe), [DeXe docs](https://docs.dexe.network) |
+| FOGO | Fogo: native gas and staking token of a Solana-compatible layer-1 chain | none | likely | [Fogo docs](https://docs.fogo.io), [CoinGecko](https://www.coingecko.com/en/coins/fogo) |
+| NIGHT | Midnight Network (Cardano ecosystem): native and governance token of a zero-knowledge privacy chain; holding it generates the DUST fee resource | none | confirmed | [midnight.network/night](https://midnight.network/night) |
+| RE | Re Protocol: governance and utility token of an on-chain reinsurance marketplace; the project states it is not a claim on reinsurance reserves or premiums, so the token does not track the reinsurance | none | confirmed | [Re launch post](https://re.xyz/insights/inside-the-re-launch) |
+| SENT | Sentient: economic token of its decentralised AI network, used for contributor rewards and staking | none | likely | [Sentient docs](https://docs.sentient.xyz) |
+| TAO | Bittensor: native token of the Bittensor chain, paid to miners, validators and subnet creators and staked to validators | none | confirmed | [Bittensor docs](https://bittensor.com/docs) |
+| TUT | Tutorial: a BNB Chain memecoin that began as a token-launch tutorial | none | likely | [CoinGecko](https://www.coingecko.com/en/coins/tutorial) |
+| ZAMA | Zama Protocol: native token of a confidential-blockchain protocol using fully homomorphic encryption; pays protocol fees and is staked by operators | none | confirmed | [Zama litepaper](https://docs.zama.org/protocol/zama-protocol-litepaper) |

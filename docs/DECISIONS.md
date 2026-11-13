@@ -91,7 +91,7 @@ source. Live intraday or order-book equities data is not recommended: it is paid
 the retired order-book signal showed that short-horizon edges do not survive retail
 costs. Free daily FX reference rates can be added at any time.
 
-The five decisions below were open questions in the pre-registration (G0.7,
+The five decisions D11 to D15 were open questions in the pre-registration (G0.7,
 [PREREGISTRATION.md](PREREGISTRATION.md)). The owner answered "apply recommendations" on
 2026-11-11, so each records the quant's recommendation as decided, with the options that
 were rejected and why. The holdout key is not among them: D4 already decides it.
@@ -141,9 +141,10 @@ development, because no such token reaches a development top ten, so they cannot
 fitted to development results; they keep the hypothesis about crypto assets in both
 periods. Disclosed: G0.6 named three pairs that reach a top ten only in the holdout, PAXG
 and XAUT (gold) and SNDKB (a tokenised share), and 2026 gold prices are public, so neither
-option could be chosen blind; the categories follow the hypothesis's definition. Before
-signing, the CTPO checks the ten other holdout-only candidates against the categories from
-their own published descriptions.
+option could be chosen blind; the categories follow the hypothesis's definition. The CTPO
+checked the ten other holdout-only candidates against the categories on 2026-11-13, from
+their published descriptions, and found none in an excluded category (the classification
+is appendix A of the pre-registration).
 
 **D15. How H2 is compared with buy-and-hold.** Decided by the owner on 2026-11-11, on the
 quant's recommendation: H2's second criterion uses its returns in excess of a beta-matched
@@ -156,4 +157,31 @@ market's by a wide margin (about 2.4 to 3.2 under the assumptions in the pre-reg
 testing "better than the market" rather than "not just the market". Rejected: keeping the
 volatility-matched comparison for both, for that reason; and beta-matching both, because
 for a long-flat trend rule the volatility-matched comparison is the stricter one and was
-chosen deliberately.
+chosen deliberately. G1.3's `benchmark.py` has only the volatility-matched excess, so the
+beta-matched one needs a function with hand-computed known answers before G2.3, and G1.7
+must calibrate it.
+
+**D16. Rulesets on the owner's public repositories.** Decided by the owner on 2026-11-11.
+The G1.4 threat model (finding 1, threats T10 and T24) found that main had no protection
+and tags none either, while one admin identity is shared by the owner and every agent, so
+any session could force push an edited ledger or move `prereg-v1`. The owner put rulesets
+on the public repositories. On norse-stack, as active on 2026-11-13: main cannot be
+deleted or force pushed and needs the `research` and `validate` checks to pass, with no
+bypass; tags matching `prereg-*` and `ledger-*` cannot be updated or deleted once created,
+with no bypass; and changes to main go through a pull request with one approval. Creating
+a tag stays allowed, so the first `prereg-v1` created is permanent; the pre-registration
+therefore has the owner create it in person on the merged commit (its section 16). The
+rulesets bind agents only while nobody with admin rights lifts them, which the agents'
+standing rules forbid.
+
+**D17. The holdout files off disk until the unseal.** Decided by the owner on 2026-11-11:
+option B of the G1.4 threat model (finding 4, threat T21). The holdout's 8,517 archive
+files leave the local mirror until the single unseal on 2026-12-08, when G1.6 fetches them
+again and verifies each against the committed holdout manifest, which is frozen at its
+SHA-256. The loader's seal only covers reads through the harness, and the files sat in
+plain form on an unencrypted volume that any tool, glob or agent could read; removing
+them stops accidental reads, not a deliberate download of public data, which only the
+mechanical holdout-candidate rule of the pre-registration makes useless. Implemented for
+the tools in [#54](https://github.com/lgreene03/norse-stack/pull/54) (the mirror, the
+store, `verify` and the REST check refuse the holdout months); the re-fetch at the unseal
+is G1.6's.
