@@ -168,8 +168,8 @@ any session could force push an edited ledger or move `prereg-v1`. The owner put
 on the public repositories. On norse-stack, as active on 2026-11-13: main cannot be
 deleted or force pushed and needs the `research` and `validate` checks to pass, with no
 bypass; tags matching `prereg-*` and `ledger-*` cannot be updated or deleted once created,
-with no bypass; and changes to main go through a pull request with one approval. Creating
-a tag stays allowed, so the first `prereg-v1` created is permanent; the pre-registration
+with no bypass; and changes to main go through a pull request with one approval, which
+repository admins may bypass. Creating a tag stays allowed, so the first `prereg-v1` created is permanent; the pre-registration
 therefore has the owner create it in person on the merged commit (its section 16). The
 rulesets bind agents only while nobody with admin rights lifts them, which the agents'
 standing rules forbid.

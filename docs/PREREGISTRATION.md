@@ -440,11 +440,12 @@ charges costs on turnover and raises on a halted holding; G1.3's `volatility_mat
   returns are unchanged by a sign flip, so the control has the same sizing and a
   realistic, persistent signal and turnover, but no information about direction.
 * C-H2 (random timing) is H2-01 with each coin's entry and exit decided on its development
-  funding series shifted circularly by k settlements, `k = rng.integers(540, M - 540,
-  endpoint=True)` (at least 180 days from either end), where M is the coin's number of
-  development settlements, BTC drawn before ETH; funding received and the profit and loss
-  use the actual series. The control is in carry about as often and for about as long as
-  the real rule, at times unrelated to the funding it collects.
+  funding series shifted circularly by k settlements (the value used at settlement i is the
+  series' value at index (i + k) mod M), `k = rng.integers(540, M - 540, endpoint=True)` (at
+  least 180 days from either end), where M is the coin's number of development settlements,
+  BTC drawn before ETH; funding received and the profit and loss use the actual series. The
+  control is in carry about as often and for about as long as the real rule, at times
+  unrelated to the funding it collects.
 
 Controls are diagnostics, not pass criteria: the verdict memo reports each candidate's
 percentile among its hundred controls' Sharpe ratios. A random-sign trend control still
@@ -494,7 +495,8 @@ for reruns; no configuration outside the grids is ever run.
    already run; a fix confined to one hypothesis's strategy code reruns that hypothesis's
    configurations already run. Every statistic of section 10 is computed once, at the
    freeze, from the committed return series with the code at the freeze tag, so a fix to
-   statistics code reruns no trial.
+   statistics code reruns no trial. Any figure displayed before the freeze (G1.8, G2.1) is
+   provisional and binds nothing.
 4. A configuration's selectable run is its last completed trial entry at the freeze whose
    returns cover its hypothesis's whole out-of-sample window; the harness runs a grid
    configuration only over that whole window. All selectable runs of a hypothesis must come
@@ -548,9 +550,10 @@ ratio per trial counted in N; that function must not be used for the gate as it 
 The reasons: the grid is fixed here, so near-duplicate trials cannot be added to lower V,
 which is the abuse the floor guards against; for equally correlated trials the paper's V
 with the raw count N reproduces the right expected maximum, whereas a floor would charge
-correlated trials as if they were independent; and both forms pass the no-skill
-calibration with a wide margin (section 12), the paper's keeping more of the power the
-gate lacks (section 13).
+correlated trials as if they were independent; and both forms keep DEV-1's no-skill pass
+rate below 5% in every case simulated, the floor by a wide margin and the paper's form by
+at least one point (section 12), the paper's keeping more of the power the gate lacks
+(section 13).
 
 Known answers, from the paper's own example and reproduced by G1.3's tests (N = 100, V of
 1/2 in annual terms, an annualised Sharpe of 2.5 over T = 1,250 daily returns at 250 a
@@ -631,8 +634,9 @@ square root of 365.
 V across both hypotheses with no floor and per-hypothesis PBO matrices of 8 and 6 columns,
 is what G1.7 must calibrate: no strategy is judged until it passes at most 5% of 1,000
 simulated no-skill ledgers at N = 30 and detects a planted Sharpe of 1.5. Because V has no
-floor, the no-skill ledgers must include correlated families (the only case where the two
-forms of V differ), and power must be reported for a family whose configurations share one
+floor, the no-skill ledgers must include families correlated within each hypothesis and
+across the two (the only case where the two forms of V differ, and the one that brings the
+paper's form closest to 5%), and power must be reported for a family whose configurations share one
 edge as well as for a single planted column.
 
 ## 11. The holdout candidate, the single holdout run and the verdict
@@ -688,7 +692,9 @@ market data.
 **Base assumptions.** Daily net returns independent and normal (γ3 = 0, γ4 = 3); the
 windows of section 3 (H1 2,802 days, H2 2,185); V equal to 1/T, the dispersion of Sharpe
 estimates among independent skill-less trials (the reading behind NEXT_ITERATION.md's
-earlier figures); 365 days a year.
+earlier figures); 365 days a year. Because V pools runs over both windows, its expectation
+for independent skill-less trials is the mean of 1/(T − 1) over the 14 runs, about 1.12/T
+for H1 and 0.87/T for H2; the sensitivity table shows the marks that implies.
 
 | Criterion | H1, N = 10 | N = 20 | N = 30 | H2, N = 10 | N = 20 | N = 30 |
 |---|---|---|---|---|---|---|
@@ -741,6 +747,7 @@ assumed about 5.6 years for every hypothesis.
 | Assumption | H1, N = 10 | N = 20 | N = 30 | H2, N = 10 | N = 20 | N = 30 |
 |---|---|---|---|---|---|---|
 | Base: normal, V = 1/T | 1.16 | 1.28 | 1.34 | 1.32 | 1.45 | 1.52 |
+| Pooled null V: the mean of 1/(T − 1) over 8 H1 and 6 H2 runs, as registered | 1.20 | 1.32 | 1.39 | 1.28 | 1.40 | 1.47 |
 | Fat tails: γ3 = −1, γ4 = 10 | 1.18 | 1.30 | 1.37 | 1.34 | 1.48 | 1.55 |
 | Correlated trials: V = 0.25/T (pairwise correlation 0.75) | 0.88 | 0.94 | 0.97 | 0.99 | 1.06 | 1.10 |
 | Dispersed trials: V = 2/T | 1.40 | 1.56 | 1.65 | 1.58 | 1.77 | 1.87 |
@@ -754,12 +761,15 @@ trials it reproduces the correct expected maximum, whereas a floor at 1/T would 
 correlated trials no credit for their correlation, charging for them as if they were
 independent.
 
-**Is the gate still safe without the floor?** Yes. The CTPO simulated no-skill families
-shaped like the registered grid (8 columns over 2,802 days and 6 over 2,185, correlation
-within a hypothesis from 0 to 0.95, N of 14 or 30, 20,000 runs each, DEV-1 alone) on
-2026-11-13: DEV-1 passed 0.03% to 0.56% of them without the floor and 0.01% to 0.09% with
-it. Without the floor the worst case tends to a single trial's 5% as the correlation tends
-to 1, and never exceeds it. G1.7 calibrates the whole gate on such families (section 10).
+**Is the gate still safe without the floor?** Yes, on DEV-1 alone. The CTPO simulated
+no-skill families shaped like the registered grid (8 columns over 2,802 days and 6 over
+2,185, N of 14 or 30, 20,000 runs each) on 2026-11-13. With H1 and H2 independent and
+correlation within a hypothesis from 0 to 0.95, DEV-1 passed 0.01% to 0.56% of families
+without the floor and 0.01% to 0.09% with it. With the trials also correlated across the
+two hypotheses (within 0.5 to 0.999, across up to the within value), it passed up to 3.5%
+at N = 30 and 4.0% at N = 14 without the floor: below 5% in every case simulated, but not
+by a wide margin. G1.7 calibrates the whole gate on families correlated within and across
+hypotheses (section 10).
 
 ## 13. What the gate cannot detect
 
@@ -863,9 +873,10 @@ its JSON file and DECISIONS.md.
    some holdout months may leave a slot in cash.
 9. **Medium, likely.** G1.7 must calibrate this gate as registered: family N, V across both
    hypotheses with no floor, the windows of section 3, PBO matrices of 8 and 6 columns, with
-   correlated no-skill families among the 1,000 ledgers and power reported for a family that
-   shares one edge as well as for a single planted column (sections 10 and 13). A
-   calibration of a simpler gate would not support the 5% false-pass claim for this one.
+   no-skill families correlated within and across hypotheses among the 1,000 ledgers and
+   power reported for a family that shares one edge as well as for a single planted column
+   (sections 10 and 13). A calibration of a simpler gate would not support the 5%
+   false-pass claim for this one.
 10. **Medium, confirmed.** NEXT_ITERATION.md's kill criteria call an exhausted budget a fail;
     the verdict table says so (section 11), and NOT RUN applies only while budget remains.
 11. **Low, likely.** Sensitivity runs sit outside N, so they must be enforced: follow-up for
@@ -916,14 +927,16 @@ trial, because G2.1's benchmark and control runs come before any trial and alrea
 out-of-sample returns over the registered windows, the controls through H1-01's and
 H2-01's own machinery.
 
-**Signing and tagging.** The CTPO approves on the pull request. The owner signs by filling
-in the owner's row; the pull request is then merged and the owner personally creates the
-annotated tag `prereg-v1` on the resulting commit on main. No agent or scheduled task
-creates a `prereg-*` tag. The tag ruleset (D16) forbids moving or deleting a `prereg-*` tag
-but not creating one, so the first `prereg-v1` created anywhere is permanent, and a squash
-merge would orphan a tag placed on this branch. One GitHub identity is shared by the owner
-and every agent, so the signature row records the owner's decision without proving who
-wrote it; the owner creating the tag in person is what does.
+**Signing and tagging.** The CTPO approves by a comment on the pull request and the CTPO
+row below. GitHub does not let the shared identity approve its own pull request, so the
+owner merges with the repository-admin bypass of the approval rule (D16). The owner signs
+by filling in the owner's row; the pull request is then merged and the owner personally
+creates the annotated tag `prereg-v1` on the resulting commit on main. No agent or
+scheduled task creates a `prereg-*` tag. The tag ruleset (D16) forbids moving or deleting a
+`prereg-*` tag but not creating one, so the first `prereg-v1` created anywhere is
+permanent, and a squash merge would orphan a tag placed on this branch. One GitHub identity
+is shared by the owner and every agent, so the signature row records the owner's decision
+without proving who wrote it; the owner creating the tag in person is what does.
 
 **Change log.**
 
@@ -936,7 +949,7 @@ wrote it; the owner creating the tag in person is what does.
 | Role | Name | Date | Signature |
 |---|---|---|---|
 | Quant (drafted) | quant specialist | 2026-11-11, revised 2026-11-13 | drafted; not a signature |
-| CTPO (approves) | | | |
+| CTPO (approves) | CTPO role | 2026-11-13 | approved with nits (PR 52 re-review) |
 | Owner (signs) | | | |
 
 ## 17. References

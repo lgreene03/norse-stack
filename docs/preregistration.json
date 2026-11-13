@@ -122,7 +122,7 @@
     "rerun_scope": "a fix to code both hypotheses use (harness, loaders, fills, costs) reruns every configuration already run; a fix confined to one hypothesis's strategy code reruns that hypothesis's configurations already run; a fix to statistics code reruns no trial",
     "selectable_run": "a configuration's last completed trial entry at the freeze whose returns cover its hypothesis's whole out-of-sample window; the harness runs a grid configuration only over that whole window",
     "consistency": "all selectable runs of a hypothesis come from identical git tree hashes of the harness and strategy paths the genesis entry lists, as their entries record; a hypothesis whose selectable runs do not is treated as lacking a selectable run for every configuration",
-    "statistics_computed": "once, at the freeze, from the committed return series with the code at the freeze tag"
+    "statistics_computed": "once, at the freeze, from the committed return series with the code at the freeze tag; any figure displayed before the freeze (G1.8, G2.1) is provisional and binds nothing"
   },
   "costs": {
     "fee_bps_per_side": 10,
@@ -278,7 +278,7 @@
     {
       "id": "C-H2",
       "base": "H2-01",
-      "rule": "each coin's trailing funding for the entry and exit decisions is computed from its development funding series shifted circularly by k settlements, where M is the coin's number of development settlements; funding received and P&L use the actual series",
+      "rule": "each coin's trailing funding for the entry and exit decisions is computed from its development funding series shifted circularly by k settlements (the value used at settlement i is the series' value at index (i + k) mod M), where M is the coin's number of development settlements; funding received and P&L use the actual series",
       "rng": "rng = numpy.random.default_rng(seed); k = rng.integers(540, M - 540, endpoint=True), BTCUSDT drawn before ETHUSDT",
       "seed_first": 0,
       "seed_last": 99
