@@ -2,6 +2,7 @@ import hashlib
 
 import pytest
 from norse_research.binance_archive import DOWNLOAD_URL, ChecksumMismatch
+from norse_research.loader import HoldoutSealed
 from norse_research.store import ArchiveStore, datasets_root
 
 KEY = "data/spot/monthly/klines/X/1d/X-1d-2024-01.zip"
@@ -44,6 +45,28 @@ def test_read_refuses_a_file_changed_on_disk(tmp_path):
     store.path(KEY).write_bytes(b"edited")
     with pytest.raises(ChecksumMismatch):
         store.read(KEY)
+
+
+def test_the_store_refuses_to_download_a_month_after_development(tmp_path):
+    requested = []
+
+    def fetch(url, max_bytes):
+        requested.append(url)
+        raise AssertionError("nothing may be requested")
+
+    store = ArchiveStore(tmp_path, fetch)
+    for key in (
+        "data/spot/monthly/klines/X/1d/X-1d-2026-01.zip",  # the holdout's first month
+        "data/futures/um/monthly/fundingRate/X/X-fundingRate-2026-10.zip",  # its last
+        "data/spot/monthly/klines/X/1d/X-1d-2026-11.zip",  # after the holdout
+        "data/spot/daily/klines/X/1d/X-1d-2026-11-09.zip",  # a daily file
+    ):
+        with pytest.raises(HoldoutSealed):
+            store.get(key, 100)
+    with pytest.raises(ValueError, match="not a dated archive file"):
+        store.get("data/spot/monthly/klines/X/1d/X-1d.zip", 100)
+    assert requested == []
+    assert not (tmp_path / "data.binance.vision").exists()
 
 
 def test_offline_store_never_fetches(tmp_path):

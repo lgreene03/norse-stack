@@ -5,12 +5,17 @@ Every file is stored at ``<root>/data.binance.vision/<archive key>`` beside the
 re-verifies it, so a file corrupted or edited on disk is refused rather than used.
 The data file is written before its CHECKSUM, each by an atomic rename, so the
 presence of a CHECKSUM means the download completed.
+
+The store downloads development files only. The holdout's files are kept off disk
+until the unseal (G1.6), which adds the one permitted re-fetch; until then a file
+dated 2026-01 or later is refused before anything is requested.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import threading
 from collections.abc import Callable, Iterable
@@ -28,6 +33,10 @@ from .binance_archive import (
     parse_checksum,
     sha256_hex,
 )
+from .periods import LAST_DEVELOPMENT_MONTH, HoldoutSealed
+
+# The month of a monthly (``-2024-01.zip``) or daily (``-2024-01-31.zip``) archive file.
+FILE_MONTH = re.compile(r"-(\d{4}-\d{2})(?:-\d{2})?\.zip$")
 
 MIRROR_DIR = "data.binance.vision"
 LISTINGS_DIR = "listings"
@@ -139,6 +148,14 @@ class ArchiveStore:
             return self.read(key)
         if self.fetch is None:
             raise FileNotFoundError(f"{key} is not in the local mirror and fetching is off")
+        month = FILE_MONTH.search(key)
+        if month is None:
+            raise ValueError(f"{key} is not a dated archive file")
+        if month.group(1) > LAST_DEVELOPMENT_MONTH:
+            raise HoldoutSealed(
+                f"{key} is dated after the development period; the holdout's files stay "
+                "off disk until the unseal (G1.6)"
+            )
         path = self.path(key)
         checksum = self.fetch(DOWNLOAD_URL + key + ".CHECKSUM", CHECKSUM_MAX_BYTES)
         published = parse_checksum(checksum, path.name)

@@ -2,12 +2,19 @@
 
 Run from research/ with NORSE_DATASETS_DIR set (or present in norse-stack's .env):
 
-``python -m norse_research.datasets sync``        mirror every series G1.1 loads
-``python -m norse_research.datasets manifest``    write both committed manifests
-``python -m norse_research.datasets verify``      re-verify every pinned file
+``python -m norse_research.datasets sync``        mirror the development months of
+                                                  every series G1.1 loads
+``python -m norse_research.datasets manifest``    rewrite the development manifest
+``python -m norse_research.datasets verify``      re-verify every development file, and
+                                                  check the frozen holdout manifest
 ``python -m norse_research.datasets rest-check``  compare 24 windows with the API
 ``python -m norse_research.datasets rest-sweep``  compare every BTC and ETH bar, and
                                                   rewrite the register of differences
+
+The holdout's files are kept off disk until the unseal (G1.6), which fetches them again
+and verifies each against the committed holdout manifest. That manifest is frozen until
+then: no step here rewrites it or fetches a holdout month
+(docs/research/ledger-threat-model.md, option B).
 
 The series are the universe input (daily klines of every ranked USDT spot pair,
 which the dated universe is computed from), and for every pair that universe can
@@ -27,11 +34,26 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .binance_archive import Fetch, HttpFetcher
-from .coverage import SPOT_KLINES_ROOT, UNIVERSE_FILE, candidate_specs, listed_months, mirror_all
+from .coverage import (
+    SPOT_KLINES_ROOT,
+    UNIVERSE_FILE,
+    candidate_specs,
+    development_months,
+    mirror_all,
+)
 from .formats import DatasetSpec
 from .loader import DatasetLoader
-from .manifest import MANIFEST_DIR, MANIFEST_FILES, Manifest, build, verify, write
-from .periods import DEVELOPMENT, HOLDOUT, HOLDOUT_START_MS, LAST_HOLDOUT_MONTH, iso_time
+from .manifest import (
+    MANIFEST_DIR,
+    MANIFEST_FILES,
+    Manifest,
+    build,
+    frozen_holdout_manifest,
+    pinned_files_on_disk,
+    verify,
+    write,
+)
+from .periods import DEVELOPMENT, HOLDOUT, HOLDOUT_START_MS, iso_time
 from .rest_check import REST_LIMIT, compare, fetch_rest_klines
 from .store import ArchiveStore, datasets_root
 from .universe import is_ranked
@@ -57,10 +79,8 @@ def series_specs(store: ArchiveStore) -> list[DatasetSpec]:
 
 
 def series_months(store: ArchiveStore, specs: list[DatasetSpec]) -> list[tuple[DatasetSpec, list]]:
-    return [
-        (spec, [m for m in listed_months(store, spec) if m <= LAST_HOLDOUT_MONTH])
-        for spec in specs
-    ]
+    """Each series with its development months, the only ones kept on disk."""
+    return [(spec, development_months(store, spec)) for spec in specs]
 
 
 def _register_entry(problem: str) -> list[str]:
@@ -165,20 +185,30 @@ def main(argv: list[str] | None = None) -> int:
         mirror_all(store, series_specs(store), log)
         log(f"new files: {store.downloaded_files}, {store.downloaded_bytes:,} bytes")
     elif args.step == "manifest":
-        series = series_months(store, series_specs(store))
-        for period in (DEVELOPMENT, HOLDOUT):
-            doc = build(store, period, series)
-            digest = write(doc, MANIFEST_FILES[period])
-            files = sum(len(e["files"]) for e in doc["datasets"].values())
-            size = sum(f[2] for e in doc["datasets"].values() for f in e["files"])
-            log(
-                f"{period}: {len(doc['datasets'])} series, {files} files, {size:,} bytes, "
-                f"sha256 {digest}"
-            )
+        doc = build(store, DEVELOPMENT, series_months(store, series_specs(store)))
+        digest = write(doc, MANIFEST_FILES[DEVELOPMENT])
+        files = sum(len(e["files"]) for e in doc["datasets"].values())
+        size = sum(f[2] for e in doc["datasets"].values() for f in e["files"])
+        log(
+            f"{DEVELOPMENT}: {len(doc['datasets'])} series, {files} files, {size:,} bytes, "
+            f"sha256 {digest}"
+        )
+        log(f"{HOLDOUT}: not rebuilt, the committed manifest is frozen until the unseal (G1.6)")
     elif args.step == "verify":
-        for period in (DEVELOPMENT, HOLDOUT):
-            manifest = Manifest.load(MANIFEST_FILES[period])
-            log(f"{period}: {verify(manifest, store)} files match, sha256 {manifest.sha256}")
+        manifest = Manifest.load(MANIFEST_FILES[DEVELOPMENT])
+        log(f"{DEVELOPMENT}: {verify(manifest, store)} files match, sha256 {manifest.sha256}")
+        holdout = frozen_holdout_manifest(MANIFEST_FILES[HOLDOUT])
+        pinned = sum(len(e["files"]) for e in holdout.datasets.values())
+        present = pinned_files_on_disk(holdout, store)
+        log(f"{HOLDOUT}: committed manifest unchanged, sha256 {holdout.sha256}")
+        if present:
+            log(
+                f"{HOLDOUT}: {present} of its {pinned} files are on disk; they must stay off "
+                "disk until the unseal (G1.6)"
+            )
+            status = 1
+        else:
+            log(f"{HOLDOUT}: its {pinned} files are off disk until the unseal (G1.6), not verified")
     elif args.step == "rest-sweep":
         doc = rest_sweep(fetch, log)
         REST_REGISTER.write_text(json.dumps(doc, indent=1, sort_keys=True) + "\n")

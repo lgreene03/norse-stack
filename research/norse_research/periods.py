@@ -2,7 +2,9 @@
 
 Development data ends where the holdout begins. The holdout, 2026-01-01 to
 2026-10-31 inclusive, is sealed: until G1.6 builds the unseal, nothing in this
-package hands holdout rows to research code.
+package hands holdout rows to research code, and its files are kept off disk
+(docs/research/ledger-threat-model.md, option B), so no tool here fetches a month
+after the development period.
 """
 
 from __future__ import annotations
@@ -21,6 +23,10 @@ LAST_HOLDOUT_MONTH = "2026-10"
 DEVELOPMENT = "development"
 HOLDOUT = "holdout"
 AFTER = "after"
+
+
+class HoldoutSealed(PermissionError):
+    """Holdout data was requested before the unseal exists (G1.6)."""
 
 
 def period_of_month(month: str) -> str:

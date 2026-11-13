@@ -76,6 +76,21 @@ manifest's SHA-256 is the dataset hash every result and ledger entry cites (G1.5
 all 51,756 matched. `Manifest.load` refuses a development manifest that lists a 2026
 month, and a holdout manifest that lists anything outside 2026-01 to 2026-10.
 
+## The holdout files are off disk until the unseal
+
+The holdout's 8,517 files are not kept in the mirror until the single unseal on
+2026-12-08. The loader's seal covers only reads through the harness; the files were
+plain on an unencrypted volume, and other functions in this package return their rows,
+so any tool, glob or agent could read them ([ledger-threat-model.md](ledger-threat-model.md),
+T21, finding 4 and option B, which the owner chose on 2026-11-11). Until then the tools
+mirror development months only, and the store refuses to download any file dated
+2026-01 or later; the holdout manifest is frozen at the SHA-256 above, never rebuilt;
+`verify` checks it is unchanged and that none of its files is on disk; and the REST
+fetch refuses any window reaching 2026-01-01. The holdout parts of the two coverage
+files were measured on 2026-11-11 and are carried forward unchanged. G1.6's unseal
+fetches the files again and verifies each against the frozen manifest. This stops
+accidental reads, not a deliberate download of public data.
+
 ## Loading, and the seal
 
 Research code gets rows only through `DatasetLoader(manifest, store).load(series,
@@ -154,10 +169,10 @@ service; the register test, which needs neither, does run there.
 From `research/`, with `NORSE_DATASETS_DIR` set or present in `.env`:
 
 ```bash
-python -m norse_research.coverage universe    # rank the universe (G0.6)
-python -m norse_research.datasets sync        # mirror every series above
-python -m norse_research.datasets manifest    # rewrite both manifests
-python -m norse_research.datasets verify      # re-verify every pinned file
+python -m norse_research.coverage universe    # rank the universe's development month ends (G0.6)
+python -m norse_research.datasets sync        # mirror the development months of every series above
+python -m norse_research.datasets manifest    # rewrite the development manifest
+python -m norse_research.datasets verify      # re-verify development; check the frozen holdout manifest
 python -m norse_research.datasets rest-check  # 24 windows against the live REST API
 python -m norse_research.datasets rest-sweep  # every BTC and ETH bar; rewrites the register
 python -m pytest tests/ -q                    # offline tests, as CI runs them
@@ -183,11 +198,11 @@ Each step is idempotent: files already mirrored and verified are not fetched aga
 
 * Nothing here writes to the trial ledger (G1.5) or refuses a dirty tree; the
   harness does that. The loader's manifest hash is what the ledger will cite.
-* The unseal is G1.6's. Until it exists the holdout files sit in the mirror, pinned by
-  their own manifest, and cannot be returned by the loader. They are plain files,
-  though, and other functions in this package (`ArchiveStore.read`,
-  `manifest.read_series_file`, `coverage.read_rows`) return their rows; what that means
-  for the seal, and what G1.5, G1.6 and G1.2 must test, is in
+* The unseal is G1.6's. Until it exists the holdout files are off disk (above) and
+  cannot be returned by the loader. Other functions in this package
+  (`ArchiveStore.read`, `manifest.read_series_file`, `coverage.read_rows`) would still
+  return a holdout month's rows if the files were put back; what that means for the
+  seal, and what G1.5, G1.6 and G1.2 must test, is in
   [ledger-threat-model.md](ledger-threat-model.md).
 * A monthly archive file is published once a month has closed; the tools never use
   the archive's daily files for development or holdout data.

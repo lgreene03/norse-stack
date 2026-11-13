@@ -3,7 +3,8 @@
 The offline test uses a recorded pair of files for 2026-11-09, a day after the
 holdout ends, so it belongs to neither the development nor the holdout period. The
 archive side is the published daily file, verified against its CHECKSUM; its spot
-timestamps are in microseconds, so the test also proves the unit normalisation.
+timestamps are in microseconds, so the test also proves the unit normalisation. The
+fetch itself requests development windows only, so its test uses a synthetic reply.
 
 The live test (``NORSE_LIVE_TESTS=1``) repeats the comparison against the API now,
 on development months mirrored under NORSE_DATASETS_DIR and loaded through the
@@ -18,6 +19,8 @@ from pathlib import Path
 import pytest
 from norse_research.binance_archive import HttpFetcher, parse_checksum, sha256_hex
 from norse_research.formats import DataIntegrityError, parse_klines, read_csv_member
+from norse_research.loader import HoldoutSealed
+from norse_research.periods import HOLDOUT_END_MS, HOLDOUT_START_MS
 from norse_research.rest_check import compare, fetch_rest_klines, parse_rest_klines, rest_url
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -65,20 +68,55 @@ def test_rest_parser_refuses_unexpected_shapes():
         parse_rest_klines(json.dumps([[1, 2, 3]]).encode())
 
 
+def synthetic_rest_body(start_ms, step, count):
+    """A REST reply of ``count`` klines with synthetic values, never real prices."""
+    times = range(start_ms, start_ms + count * step, step)
+    return json.dumps(
+        [[t, "1", "1", "1", "1", "1", t + step - 1, "1", 1, "1", "1", "0"] for t in times]
+    ).encode()
+
+
 def test_fetch_keeps_only_closed_bars_in_range():
-    body = (FIXTURES / "rest-BTCUSDT-4h-2026-11-09.json").read_bytes()
+    # A development day: the fetch refuses any window in the holdout or later.
+    step = 4 * 3_600_000
+    day = int(datetime(2025, 6, 2, tzinfo=UTC).timestamp() * 1000)
+    body = synthetic_rest_body(day - step, step, 7)  # one bar before the window too
     urls = []
 
     def fetch(url, max_bytes):
         urls.append(url)
         return body
 
-    end = DAY_START + 86_400_000
-    now = DAY_START + 5 * 4 * 3_600_000  # five bars closed, the sixth still forming
-    rows = fetch_rest_klines("BTCUSDT", "4h", DAY_START, end, fetch, now)
-    assert len(rows) == 5
-    assert urls == [rest_url("BTCUSDT", "4h", DAY_START, end)]
+    end = day + 86_400_000
+    now = day + 5 * step  # five bars closed, the sixth still forming
+    rows = fetch_rest_klines("BTCUSDT", "4h", day, end, fetch, now)
+    assert [r.open_time for r in rows] == list(range(day, day + 5 * step, step))
+    assert urls == [rest_url("BTCUSDT", "4h", day, end)]
     assert urls[0].startswith("https://data-api.binance.vision/api/v3/klines?")
+
+
+def test_rest_fetch_refuses_a_holdout_range():
+    urls = []
+
+    def fetch(url, max_bytes):
+        urls.append(url)
+        return b"[]"
+
+    day = 86_400_000
+    for start, end in (
+        (HOLDOUT_START_MS - day, HOLDOUT_START_MS + 1),  # one millisecond into it
+        (HOLDOUT_START_MS, HOLDOUT_START_MS + day),  # its first day
+        (HOLDOUT_END_MS - day, HOLDOUT_END_MS),  # its last day
+        (DAY_START, DAY_START + day),  # 2026-11-09, after it
+        (HOLDOUT_START_MS + day, HOLDOUT_START_MS - day),  # reversed
+    ):
+        with pytest.raises(HoldoutSealed):
+            fetch_rest_klines("BTCUSDT", "4h", start, end, fetch, DAY_START)
+    assert urls == []
+    # A window that ends where the holdout begins is development data.
+    end = HOLDOUT_START_MS
+    assert fetch_rest_klines("BTCUSDT", "4h", end - day, end, fetch, DAY_START) == []
+    assert urls == [rest_url("BTCUSDT", "4h", end - day, end)]
 
 
 LIVE = os.environ.get("NORSE_LIVE_TESTS") == "1"
