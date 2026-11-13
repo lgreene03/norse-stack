@@ -14,6 +14,12 @@ Three steps, each idempotent, all reading only public data:
 Only timestamps, row counts and volume ranks are computed. No return, signal or
 price statistic is, because pre-registration (G0.7) has not been signed.
 
+The holdout's files are kept off disk until the unseal (G1.6), so each step mirrors and
+reads development months only. The holdout parts of the two committed files, the
+holdout-only candidates and each series' holdout coverage, were measured on 2026-11-11
+while the files were on disk; they are frozen with the holdout manifest, and a later
+run carries them forward from the committed file unchanged.
+
 Run from research/: ``python -m norse_research.coverage universe`` with
 NORSE_DATASETS_DIR set.
 """
@@ -46,7 +52,6 @@ from .periods import (
     LAST_DEVELOPMENT_MONTH,
     LAST_HOLDOUT_MONTH,
     iso_time,
-    period_of_month,
 )
 from .store import ArchiveStore, datasets_root
 from .universe import (
@@ -74,6 +79,8 @@ H2_SYMBOLS = ("BTCUSDT", "ETHUSDT")
 BAR_INTERVALS = ("1d", "4h", "15m")
 # H1's longest signal lookback: the sign of the 120-day return.
 SIGNAL_LOOKBACK_DAYS = 120
+# A series' holdout coverage when there is no committed measurement to carry forward.
+HOLDOUT_OFF_DISK = "not measured: the holdout files are off disk until the unseal (G1.6)"
 
 Log = Callable[[str], None]
 
@@ -87,16 +94,19 @@ def listed_months(store: ArchiveStore, spec: DatasetSpec) -> list[str]:
     return sorted(spec.month_of(k) for k in keys)
 
 
+def development_months(store: ArchiveStore, spec: DatasetSpec) -> list[str]:
+    """The listed months of a series up to 2025-12: the only ones kept on disk."""
+    return [m for m in listed_months(store, spec) if m <= LAST_DEVELOPMENT_MONTH]
+
+
 def mirror_all(store: ArchiveStore, specs: list[DatasetSpec], log: Log) -> dict[str, list[str]]:
-    """List, then mirror, every monthly file of each series up to the holdout's end.
+    """List, then mirror, every development monthly file of each series. Holdout and
+    later months are never fetched: they stay off disk until the unseal (G1.6).
 
     Returns the months mirrored per series name.
     """
     store.prefetch_listings([spec.prefix for spec in specs])
-    months = {
-        spec.name: [m for m in listed_months(store, spec) if m <= LAST_HOLDOUT_MONTH]
-        for spec in specs
-    }
+    months = {spec.name: development_months(store, spec) for spec in specs}
     items = [(spec.key(m), spec.max_bytes()) for spec in specs for m in months[spec.name]]
     log(f"{len(specs)} series listed: {len(items)} monthly files in scope")
     store.mirror(items, progress=lambda done, total: log(f"  {done}/{total} new files"))
@@ -168,7 +178,20 @@ def history_milestones(
     return milestones
 
 
+def frozen_holdout_universe(path: Path) -> tuple[list[str], dict[str, str]]:
+    """The holdout-only candidates and the first daily bars in the committed universe
+    file, written on 2026-11-11 while the holdout's files were on disk."""
+    if not path.is_file():
+        raise RuntimeError(
+            f"{path} is missing: the holdout-only candidates were ranked from holdout files, "
+            "which are off disk until the unseal (G1.6)"
+        )
+    committed = json.loads(path.read_text())
+    return committed["holdout_only_candidates"], committed["candidate_first_daily_bar"]
+
+
 def run_universe(store: ArchiveStore, log: Log) -> dict:
+    holdout_only, committed_first_bar = frozen_holdout_universe(UNIVERSE_FILE)
     symbols = [s for s in store.subdirectories(SPOT_KLINES_ROOT) if s.endswith("USDT")]
     unsafe = [s for s in symbols if not s.isalnum()]
     if unsafe:
@@ -184,16 +207,17 @@ def run_universe(store: ArchiveStore, log: Log) -> dict:
     }
     first_month = min(months[0] for months in mirrored.values() if months)
     dev_months = months_between(first_month, LAST_DEVELOPMENT_MONTH)
-    # The ranking at the 2025-12 month end uses December 2025 bars (development data)
-    # but decides January 2026 holdings, so it belongs to both periods' candidates.
-    holdout_months = months_between(LAST_DEVELOPMENT_MONTH, "2026-09")
     dev_ranking = rank_month_ends(volumes, dev_months, CANDIDATE_DEPTH)
-    holdout_ranking = rank_month_ends(volumes, holdout_months, CANDIDATE_DEPTH)
     dev_candidates = candidate_set(dev_ranking)
-    holdout_candidates = candidate_set(holdout_ranking)
+    # The ranking at the 2025-12 month end uses December 2025 bars (development data)
+    # but decides January 2026 holdings, so it belongs to both periods' candidates. The
+    # holdout's later month ends need holdout bars, which are off disk until the unseal:
+    # the candidates they added were ranked on 2026-11-11 and are carried forward.
+    holdout_only = sorted(set(holdout_only) - set(dev_candidates))
     leveraged = leveraged_bases(base_asset(s) for s in symbols)
     first_bar = {symbol: min(series) for symbol, series in volumes.items() if series}
     history = history_milestones(dev_ranking, volumes, first_bar)
+    candidates = set(dev_candidates) | set(holdout_only)
     result = {
         "generated_at": _now(),
         "source": "data.binance.vision, spot monthly 1d klines, checksum-verified",
@@ -209,17 +233,17 @@ def run_universe(store: ArchiveStore, log: Log) -> dict:
         "excluded_stable_or_fiat": sorted(set(symbols) - set(ranked)),
         "first_month_end": dev_months[0],
         "history_milestones": history,
+        # A pair first listed in the holdout has no development bar: its first bar is
+        # the committed one.
         "candidate_first_daily_bar": {
-            s: iso_time(first_bar[s])
-            for s in sorted(set(dev_candidates) | set(holdout_candidates) | set(H2_SYMBOLS))
+            s: iso_time(first_bar[s]) if s in first_bar else committed_first_bar[s]
+            for s in sorted(candidates | set(H2_SYMBOLS))
         },
         "development_ranking": dev_ranking,
         "development_candidates": dev_candidates,
         # Holdout month ends are summarised as a set only, never ranked in public.
-        "holdout_only_candidates": sorted(set(holdout_candidates) - set(dev_candidates)),
-        "leveraged_token_candidates": sorted(
-            s for s in set(dev_candidates) | set(holdout_candidates) if base_asset(s) in leveraged
-        ),
+        "holdout_only_candidates": holdout_only,
+        "leveraged_token_candidates": sorted(s for s in candidates if base_asset(s) in leveraged),
     }
     COVERAGE_DIR.mkdir(parents=True, exist_ok=True)
     UNIVERSE_FILE.write_text(json.dumps(result, indent=1, sort_keys=True) + "\n")
@@ -275,8 +299,12 @@ def _gap_record(gap: Gap) -> dict:
     return {"after": iso_time(gap.after), "before": iso_time(gap.before), "missing": gap.missing}
 
 
-def measure(store: ArchiveStore, spec: DatasetSpec) -> dict:
-    """Coverage of one series: listing span, missing months, rows and gaps per period."""
+def measure(
+    store: ArchiveStore, spec: DatasetSpec, holdout: dict | str | None = HOLDOUT_OFF_DISK
+) -> dict:
+    """Coverage of one series: listing span, missing months, and rows and gaps in the
+    development period. The holdout's files are off disk until the unseal (G1.6), so
+    its coverage is not measured here: ``holdout`` is recorded as given."""
     listed = listed_months(store, spec)
     record: dict = {
         "dataset": spec.name,
@@ -286,48 +314,56 @@ def measure(store: ArchiveStore, spec: DatasetSpec) -> dict:
     }
     if not listed:
         return record
-    in_scope = [m for m in listed if m <= LAST_HOLDOUT_MONTH]
     record["missing_months"] = sorted(
         set(months_between(listed[0], listed[-1])) - set(listed)
     )
-    for period in (DEVELOPMENT, HOLDOUT):
-        months = [m for m in in_scope if period_of_month(m) == period]
-        rows, repeats = [], []
-        for month in months:
-            file_rows, file_repeats = read_rows_and_repeats(store, spec, month)
-            rows.extend(file_rows)
-            repeats.extend(file_repeats)
-        if not rows:
-            record[period] = None
-            continue
-        off_grid: list[int] = []
-        if spec.is_bars:
-            on_grid, off_grid = split_off_grid(rows, spec.step_ms)
-            gaps = bar_gaps([r[0] for r in on_grid], spec.step_ms, spec.name)
-        else:
-            gaps = funding_gaps(rows, spec.name)
-        times = [r[0] for r in rows]
-        record[period] = {
-            "files": len(months),
-            "rows": len(rows),
-            "first": iso_time(times[0]),
-            "last": iso_time(times[-1]),
-            "gaps": len(gaps),
-            "missing_rows": sum(g.missing for g in gaps),
-            "gap_list": [_gap_record(g) for g in gaps[:50]],
-            "repeated_rows": [iso_time(t) for t in repeats],
-            "off_grid_rows": len(off_grid),
-            "off_grid_span": [iso_time(off_grid[0]), iso_time(off_grid[-1])] if off_grid else None,
-        }
-        if not spec.is_bars:
-            record[period]["intervals_hours"] = sorted({r.interval_hours for r in rows})
+    months = [m for m in listed if m <= LAST_DEVELOPMENT_MONTH]
+    record[HOLDOUT] = holdout
+    rows, repeats = [], []
+    for month in months:
+        file_rows, file_repeats = read_rows_and_repeats(store, spec, month)
+        rows.extend(file_rows)
+        repeats.extend(file_repeats)
+    if not rows:
+        record[DEVELOPMENT] = None
+        return record
+    off_grid: list[int] = []
+    if spec.is_bars:
+        on_grid, off_grid = split_off_grid(rows, spec.step_ms)
+        gaps = bar_gaps([r[0] for r in on_grid], spec.step_ms, spec.name)
+    else:
+        gaps = funding_gaps(rows, spec.name)
+    times = [r[0] for r in rows]
+    record[DEVELOPMENT] = {
+        "files": len(months),
+        "rows": len(rows),
+        "first": iso_time(times[0]),
+        "last": iso_time(times[-1]),
+        "gaps": len(gaps),
+        "missing_rows": sum(g.missing for g in gaps),
+        "gap_list": [_gap_record(g) for g in gaps[:50]],
+        "repeated_rows": [iso_time(t) for t in repeats],
+        "off_grid_rows": len(off_grid),
+        "off_grid_span": [iso_time(off_grid[0]), iso_time(off_grid[-1])] if off_grid else None,
+    }
+    if not spec.is_bars:
+        record[DEVELOPMENT]["intervals_hours"] = sorted({r.interval_hours for r in rows})
     return record
+
+
+def committed_holdout_coverage(path: Path) -> dict[str, dict | str | None]:
+    """Each series' holdout coverage in the committed report, measured on 2026-11-11
+    while the holdout's files were on disk."""
+    if not path.is_file():
+        return {}
+    return {r["dataset"]: r.get(HOLDOUT) for r in json.loads(path.read_text())["datasets"]}
 
 
 def run_report(store: ArchiveStore, log: Log) -> dict:
     universe = json.loads(UNIVERSE_FILE.read_text())
     specs = candidate_specs(store, universe)
-    measured = [measure(store, spec) for spec in specs]
+    holdout = committed_holdout_coverage(COVERAGE_FILE)
+    measured = [measure(store, s, holdout.get(s.name, HOLDOUT_OFF_DISK)) for s in specs]
     report = {
         "generated_at": _now(),
         "licence": LICENCE,

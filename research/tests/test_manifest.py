@@ -3,7 +3,15 @@ import json
 
 import pytest
 from norse_research.formats import LICENCE
-from norse_research.manifest import Manifest, ManifestError, build, dumps, verify, write
+from norse_research.manifest import (
+    MANIFEST_FILES,
+    Manifest,
+    ManifestError,
+    build,
+    dumps,
+    verify,
+    write,
+)
 from norse_research.periods import DEVELOPMENT, HOLDOUT
 from norse_research.store import ArchiveStore
 from synthetic_store import make_series, month_times, put
@@ -102,3 +110,24 @@ def test_files_over_the_size_cap_are_refused(mirrored):
     path.with_name(path.name + ".CHECKSUM").write_text(f"{digest}  {path.name}\n")
     with pytest.raises(ManifestError, match="exceeds cap"):
         build(store, DEVELOPMENT, series)
+
+
+def test_the_holdout_manifest_cannot_be_rewritten(mirrored, monkeypatch):
+    store, series, tmp = mirrored
+    frozen = tmp / "holdout.json"
+    write(build(store, HOLDOUT, series), frozen)
+    before = frozen.read_bytes()
+    monkeypatch.setitem(MANIFEST_FILES, HOLDOUT, frozen)
+    for period in (DEVELOPMENT, HOLDOUT):
+        with pytest.raises(ManifestError, match="frozen until the unseal"):
+            write(build(store, period, series), frozen)
+    assert frozen.read_bytes() == before
+
+
+def test_the_committed_holdout_manifest_is_frozen():
+    # Reads the committed manifest's hashes and counts, never a holdout file.
+    from norse_research import manifest
+
+    committed = manifest.frozen_holdout_manifest(MANIFEST_FILES[HOLDOUT])
+    assert committed.sha256 == manifest.HOLDOUT_MANIFEST_SHA256
+    assert sum(len(e["files"]) for e in committed.datasets.values()) == 8517

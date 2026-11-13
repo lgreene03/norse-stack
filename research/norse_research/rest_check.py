@@ -2,7 +2,9 @@
 
 Uses ``data-api.binance.vision``, Binance's public market-data-only host: no key, no
 account, and no order or account endpoint exists on it. Only closed klines are
-compared, because the bar still forming changes until it closes.
+compared, because the bar still forming changes until it closes. Only development
+bars are requested: a window reaching 2026-01-01 or later is refused before any
+request, because the holdout is sealed until G1.6.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ import urllib.parse
 
 from .binance_archive import Fetch
 from .formats import DataIntegrityError, Kline
+from .periods import HOLDOUT_START, HOLDOUT_START_MS, HoldoutSealed
 
 REST_KLINES_URL = "https://data-api.binance.vision/api/v3/klines"
 REST_MAX_BYTES = 1_000_000
@@ -58,7 +61,13 @@ def parse_rest_klines(body: bytes) -> list[Kline]:
 def fetch_rest_klines(
     symbol: str, interval: str, start_ms: int, end_ms: int, fetch: Fetch, now_ms: int
 ) -> list[Kline]:
-    """Closed REST klines with open time in [start, end), at most 1,000 of them."""
+    """Closed REST klines with open time in [start, end), at most 1,000 of them.
+    Refused, with nothing requested, if the window reaches the holdout or later."""
+    if start_ms >= HOLDOUT_START_MS or end_ms > HOLDOUT_START_MS:
+        raise HoldoutSealed(
+            f"{symbol} {interval}: a REST window reaching {HOLDOUT_START.isoformat()} or "
+            "later touches the holdout, sealed until G1.6"
+        )
     rows = parse_rest_klines(fetch(rest_url(symbol, interval, start_ms, end_ms), REST_MAX_BYTES))
     return [r for r in rows if start_ms <= r.open_time < end_ms and r.close_time < now_ms]
 

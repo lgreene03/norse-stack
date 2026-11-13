@@ -30,15 +30,11 @@ from datetime import UTC, datetime
 
 from .formats import DataIntegrityError, DatasetSpec, Gap
 from .manifest import Manifest, ManifestError, gap_record, on_grid_and_gaps, read_series_file
-from .periods import DEVELOPMENT, HOLDOUT_START, HOLDOUT_START_MS, iso_time
+from .periods import DEVELOPMENT, HOLDOUT_START, HOLDOUT_START_MS, HoldoutSealed, iso_time
 from .store import ArchiveStore
 from .universe import months_between
 
 FUNDING_SLACK_MS = 8 * 3_600_000 + 60_000
-
-
-class HoldoutSealed(PermissionError):
-    """Holdout data was requested before the unseal exists (G1.6)."""
 
 
 class MissingData(LookupError):

@@ -10,6 +10,10 @@ same data gives the same bytes, and its SHA-256 is the dataset hash a ledger ent
 cites (G1.5).
 
 The archive key of a file is ``DatasetSpec.from_name(series).key(month)``.
+
+The holdout manifest is frozen. Its files are kept off disk until the unseal (G1.6),
+which fetches them again and verifies each against the hashes it pins, so it is never
+rewritten and its own SHA-256 is fixed here.
 """
 
 from __future__ import annotations
@@ -51,6 +55,9 @@ MANIFEST_FILES = {
     DEVELOPMENT: MANIFEST_DIR / "binance-vision-development.json",
     HOLDOUT: MANIFEST_DIR / "binance-vision-holdout.json",
 }
+# The committed holdout manifest's SHA-256, built on 2026-11-11 from the files then on
+# disk. The files are verified against it when the unseal fetches them again.
+HOLDOUT_MANIFEST_SHA256 = "806e1d6acdd90c5454297b78c42c37cfb6f522ebcb81f01b773ba66b9308ea77"
 
 
 class ManifestError(DataIntegrityError):
@@ -152,6 +159,11 @@ def dumps(doc: dict) -> bytes:
 
 
 def write(doc: dict, path: Path) -> str:
+    if Path(path).resolve() == MANIFEST_FILES[HOLDOUT].resolve():
+        raise ManifestError(
+            f"{path} is the committed holdout manifest, frozen until the unseal (G1.6): "
+            "the holdout files fetched then are verified against it"
+        )
     data = dumps(doc)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
@@ -204,3 +216,26 @@ def verify(manifest: Manifest, store: ArchiveStore) -> int:
                 raise ManifestError(f"{spec.key(month)} does not match {manifest.path.name}")
             checked += 1
     return checked
+
+
+def frozen_holdout_manifest(path: Path) -> Manifest:
+    """The committed holdout manifest, refused unless its SHA-256 is the frozen one."""
+    manifest = Manifest.load(path)
+    if manifest.period != HOLDOUT or manifest.sha256 != HOLDOUT_MANIFEST_SHA256:
+        raise ManifestError(
+            f"{Path(path).name} has sha256 {manifest.sha256}, not the frozen holdout "
+            f"manifest's {HOLDOUT_MANIFEST_SHA256}"
+        )
+    return manifest
+
+
+def pinned_files_on_disk(manifest: Manifest, store: ArchiveStore) -> int:
+    """How many files a manifest pins are in the mirror, by file or CHECKSUM present.
+    Nothing is read: the holdout's files must not be opened before the unseal."""
+    present = 0
+    for name, entry in manifest.datasets.items():
+        spec = DatasetSpec.from_name(name)
+        for month, *_ in entry["files"]:
+            path = store.path(spec.key(month))
+            present += path.exists() or path.with_name(path.name + ".CHECKSUM").exists()
+    return present

@@ -1,8 +1,11 @@
 import hashlib
 import json
 
+import pytest
+import synthetic_store as synth
 from conftest import make_zip
 from norse_research import coverage
+from norse_research.binance_archive import DOWNLOAD_URL
 from norse_research.formats import INTERVAL_MS, DatasetSpec
 from norse_research.store import LISTINGS_DIR, ArchiveStore
 from norse_research.universe import month_close_ms
@@ -41,18 +44,19 @@ def _previous(month):
     return f"{year - 1}-12" if mon == 1 else f"{year}-{mon - 1:02d}"
 
 
-def test_measure_reports_span_missing_months_gaps_and_the_period_split(tmp_path):
+def test_measure_reports_span_missing_months_and_gaps_without_holdout_files(tmp_path):
     store = ArchiveStore(tmp_path)
     spec = DatasetSpec("spot", "klines", "XUSDT", "1d")
-    months = ["2025-10", "2025-12", "2026-01", "2026-11"]
-    for month in months:
+    on_disk = ["2025-10", "2025-12"]
+    for month in on_disk:
         times = days(month)
+        if month == "2025-10":
+            times = [*times[:9], times[9], *times[9:]]  # one row published twice
         if month == "2025-12":
             times = times[:10] + times[12:]  # two missing days
-        if month == "2026-01":
-            times = [*times[:9], times[9], *times[9:]]  # one row published twice
         put(store, spec, month, times)
-    write_listing(store, spec, months)
+    # The archive lists a holdout month and a later one; neither is on disk.
+    write_listing(store, spec, [*on_disk, "2026-01", "2026-11"])
 
     record = coverage.measure(store, spec)
 
@@ -66,10 +70,100 @@ def test_measure_reports_span_missing_months_gaps_and_the_period_split(tmp_path)
     assert dev["gaps"] == 2
     assert dev["missing_rows"] == 30 + 2
     assert dev["first"] == "2025-10-01 00:00" and dev["last"] == "2025-12-31 00:00"
-    assert dev["repeated_rows"] == []
-    holdout = record["holdout"]
-    assert holdout["files"] == 1 and holdout["rows"] == 31 and holdout["gaps"] == 0
-    assert holdout["repeated_rows"] == ["2026-01-10 00:00"]
+    assert dev["repeated_rows"] == ["2025-10-10 00:00"]
+    assert record["holdout"] == coverage.HOLDOUT_OFF_DISK
+    assert coverage.measure(store, spec, holdout=None)["holdout"] is None
+
+
+def test_sync_does_not_mirror_holdout_months_before_the_unseal(tmp_path):
+    archive = ArchiveStore(tmp_path / "archive")
+    spec, months = synth.make_series(archive, "spot/klines/XUSDT/1d", "2025-11", "2026-02")
+    synth.put(archive, spec, "2026-11", synth.month_times(spec, "2026-11"))
+    requested = []
+
+    def fetch(url, max_bytes):
+        requested.append(url.removeprefix(DOWNLOAD_URL))
+        return archive.path(requested[-1]).read_bytes()
+
+    store = ArchiveStore(tmp_path / "mirror", fetch)
+    synth.write_listing(store, spec, [*months, "2026-11"])
+
+    mirrored = coverage.mirror_all(store, [spec], lambda _: None)
+
+    assert mirrored == {spec.name: ["2025-11", "2025-12"]}
+    assert sorted({key.removesuffix(".CHECKSUM") for key in requested}) == [
+        spec.key("2025-11"),
+        spec.key("2025-12"),
+    ]
+    for month in ("2026-01", "2026-02", "2026-11"):
+        assert not store.path(spec.key(month)).exists()
+
+
+def write_root_listing(store, prefix, symbols):
+    name = prefix.strip("/").replace("/", "__") + ".json"
+    target = store.root / LISTINGS_DIR / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    record = {"prefix": prefix, "listed_at": "2026-11-11T00:00:00Z", "objects": []}
+    record["prefixes"] = [f"{prefix}{s}/" for s in symbols]
+    target.write_text(json.dumps(record))
+
+
+def test_universe_ranks_development_and_carries_the_frozen_holdout_candidates(
+    tmp_path, monkeypatch
+):
+    universe_file = tmp_path / "universe-candidates.json"
+    monkeypatch.setattr(coverage, "UNIVERSE_FILE", universe_file)
+    monkeypatch.setattr(coverage, "COVERAGE_DIR", tmp_path)
+
+    def fetch(url, max_bytes):
+        raise AssertionError(f"fetched {url}")
+
+    store = ArchiveStore(tmp_path / "mirror", fetch)
+    # Six pairs with development bars, and a holdout month the archive lists but which
+    # is off disk. NEWUSDT was first listed in the holdout: no development file at all.
+    pairs = ["AAAUSDT", "BBBUSDT", "BTCUSDT", "CCCUSDT", "DDDUSDT", "ETHUSDT"]
+    for symbol in pairs:
+        spec, months = synth.make_series(store, f"spot/klines/{symbol}/1d", "2025-11", "2025-12")
+        synth.write_listing(store, spec, [*months, "2026-01"])
+    synth.write_listing(store, DatasetSpec("spot", "klines", "NEWUSDT", "1d"), ["2026-02"])
+    write_root_listing(store, coverage.SPOT_KLINES_ROOT, [*pairs, "NEWUSDT"])
+
+    with pytest.raises(RuntimeError, match="off disk until the unseal"):
+        coverage.run_universe(store, lambda _: None)
+
+    committed = {"holdout_only_candidates": ["NEWUSDT"]}
+    committed["candidate_first_daily_bar"] = {"NEWUSDT": "2026-02-01 00:00"}
+    universe_file.write_text(json.dumps(committed))
+    result = coverage.run_universe(store, lambda _: None)
+
+    assert result["development_candidates"] == pairs
+    assert result["holdout_only_candidates"] == ["NEWUSDT"]
+    assert result["candidate_first_daily_bar"]["NEWUSDT"] == "2026-02-01 00:00"
+    assert result["candidate_first_daily_bar"]["AAAUSDT"] == "2025-11-01 00:00"
+    assert json.loads(universe_file.read_text())["holdout_only_candidates"] == ["NEWUSDT"]
+
+
+def test_report_carries_the_committed_holdout_coverage_forward(tmp_path, monkeypatch):
+    store = ArchiveStore(tmp_path / "mirror")
+    kept, months = synth.make_series(store, "spot/klines/XUSDT/1d", "2025-12", "2025-12")
+    added, _ = synth.make_series(store, "spot/klines/YUSDT/1d", "2025-12", "2025-12")
+    for spec in (kept, added):
+        synth.write_listing(store, spec, [*months, "2026-01"])
+    report = tmp_path / "series-coverage.json"
+    frozen = {"files": 1, "rows": 31, "first": "2026-01-01 00:00", "last": "2026-01-31 00:00"}
+    report.write_text(json.dumps({"datasets": [{"dataset": kept.name, "holdout": frozen}]}))
+    universe = tmp_path / "universe-candidates.json"
+    universe.write_text("{}")
+    monkeypatch.setattr(coverage, "COVERAGE_FILE", report)
+    monkeypatch.setattr(coverage, "UNIVERSE_FILE", universe)
+    monkeypatch.setattr(coverage, "candidate_specs", lambda store, universe: [kept, added])
+
+    coverage.run_report(store, lambda _: None)
+
+    written = {r["dataset"]: r for r in json.loads(report.read_text())["datasets"]}
+    assert written[kept.name]["holdout"] == frozen
+    assert written[added.name]["holdout"] == coverage.HOLDOUT_OFF_DISK
+    assert written[kept.name]["development"]["rows"] == 31
 
 
 def test_measure_handles_an_absent_series(tmp_path):
