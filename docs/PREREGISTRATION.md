@@ -1,10 +1,13 @@
 # Pre-registration of H1 and H2 (G0.7)
 
-**Status: draft of 2026-11-11, revised on 2026-11-13 after the CTPO's review (PR 52), for
-the CTPO's approval and the owner's signature. It binds nothing until the commit holding
-it is tagged `prereg-v1` (section 16).** Owner: quant. The CTPO
-approves; the owner signs. The goal is G0.7 in [ITERATION_GOALS.md](ITERATION_GOALS.md);
-the hypotheses and the gate are set out in [NEXT_ITERATION.md](NEXT_ITERATION.md).
+**Status: draft of 2026-11-11, revised on 2026-11-13 after review (PR 52), for the
+owner's signature. It binds nothing until the commit holding it is tagged `prereg-v1`
+(section 16).** The owner is the only person on this project. The quant, CTPO, technical,
+security and interface roles named in this document are AI agents the owner runs, defined
+in [.claude/agents](../.claude/agents); the quant role drafted this document and the CTPO
+role reviewed it. Neither is an independent person, and neither signs: the owner alone
+does. The goal is G0.7 in [ITERATION_GOALS.md](ITERATION_GOALS.md); the hypotheses and the
+gate are set out in [NEXT_ITERATION.md](NEXT_ITERATION.md).
 
 This document fixes, before any trial is run and before any price, return, signal or
 performance figure has been computed on real data, everything that decides whether H1 or
@@ -927,16 +930,20 @@ trial, because G2.1's benchmark and control runs come before any trial and alrea
 out-of-sample returns over the registered windows, the controls through H1-01's and
 H2-01's own machinery.
 
-**Signing and tagging.** The CTPO approves by a comment on the pull request and the CTPO
-row below. GitHub does not let the shared identity approve its own pull request, so the
-owner merges with the repository-admin bypass of the approval rule (D16). The owner signs
-by filling in the owner's row; the pull request is then merged and the owner personally
-creates the annotated tag `prereg-v1` on the resulting commit on main. No agent or
-scheduled task creates a `prereg-*` tag. The tag ruleset (D16) forbids moving or deleting a
-`prereg-*` tag but not creating one, so the first `prereg-v1` created anywhere is
-permanent, and a squash merge would orphan a tag placed on this branch. One GitHub identity
-is shared by the owner and every agent, so the signature row records the owner's decision
-without proving who wrote it; the owner creating the tag in person is what does.
+**Signing and tagging.** The CTPO role's review is a comment on the pull request, recorded
+in the review row below; it is an AI agent's review, not a second person's approval, and
+no separation of duties is claimed. The integrity of the gate rests on mechanical controls
+instead: the hash-chained ledger, the immutable tags, the holdout kept off disk and sealed
+in code, and this document fixed before any trial. GitHub does not let the shared identity
+approve its own pull request, so the owner merges with the repository-admin bypass of the
+approval rule (D16). The owner signs by filling in the owner's row; the pull request is
+then merged and the owner personally creates the annotated tag `prereg-v1` on the
+resulting commit on main. No agent or scheduled task creates a `prereg-*` tag. The tag
+ruleset (D16) forbids moving or deleting a `prereg-*` tag but not creating one, so the
+first `prereg-v1` created anywhere is permanent, and a squash merge would orphan a tag
+placed on this branch. One GitHub identity is shared by the owner and every agent, so the
+signature row records the owner's decision without proving who wrote it; the owner
+creating the tag in person is what does.
 
 **Change log.**
 
@@ -948,8 +955,8 @@ without proving who wrote it; the owner creating the tag in person is what does.
 
 | Role | Name | Date | Signature |
 |---|---|---|---|
-| Quant (drafted) | quant specialist | 2026-11-11, revised 2026-11-13 | drafted; not a signature |
-| CTPO (approves) | CTPO role | 2026-11-13 | approved with nits (PR 52 re-review) |
+| Drafted | quant role (AI agent) | 2026-11-11, revised 2026-11-13 | drafted; not a signature |
+| Reviewed | CTPO role (AI agent) | 2026-11-13 | approved with nits (PR 52 re-review); a review, not a signature |
 | Owner (signs) | | | |
 
 ## 17. References

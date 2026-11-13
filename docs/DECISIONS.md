@@ -169,7 +169,9 @@ on the public repositories. On norse-stack, as active on 2026-11-13: main cannot
 deleted or force pushed and needs the `research` and `validate` checks to pass, with no
 bypass; tags matching `prereg-*` and `ledger-*` cannot be updated or deleted once created,
 with no bypass; and changes to main go through a pull request with one approval, which
-repository admins may bypass. Creating a tag stays allowed, so the first `prereg-v1` created is permanent; the pre-registration
+repository admins may bypass. The owner is the only person on the project, so the approval
+rule guards against outside contributions; the owner's own pull requests, including every
+one an agent prepares, merge by that bypass. Creating a tag stays allowed, so the first `prereg-v1` created is permanent; the pre-registration
 therefore has the owner create it in person on the merged commit (its section 16). The
 rulesets bind agents only while nobody with admin rights lifts them, which the agents'
 standing rules forbid.
