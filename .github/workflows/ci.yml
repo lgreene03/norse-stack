@@ -292,7 +292,8 @@ jobs:
 
   research:
     # Research code for the iteration's gate (research/): data coverage (G0.6),
-    # dataset loaders and manifests (G1.1). Standard library only at runtime, so
+    # dataset loaders and manifests (G1.1), and the gate's statistics with their
+    # known-answer tests (G1.3). Standard library only at runtime, so
     # the only installs are the pinned lint and test tools. These tests never touch
     # the network; the live REST comparison is opt-in (NORSE_LIVE_TESTS=1) because
     # it needs the local dataset mirror and an external API that may refuse
