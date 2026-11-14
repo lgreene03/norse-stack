@@ -66,6 +66,26 @@ def test_rerun_of_an_identical_configuration_adds_a_trial(world):
     assert opened[1].body["rerun"]["defect"] == "synthetic defect"
 
 
+def test_every_run_appends_an_entry_holding_the_fields_g15_names(world):
+    record = run(world, "H1-01")
+    entries = remote_entries(world)
+    opened, closed = entries[-2], entries[-1]
+    assert (opened.hash, closed.hash) == (record.open_entry.hash, record.result_entry.hash)
+    head = git(world.repo, "rev-parse", "HEAD")
+    for entry, previous in ((opened, entries[-3]), (closed, opened)):
+        body = entry.body
+        assert body["prev"] == previous.hash
+        assert body["commit"] == head
+        assert body["manifest_sha256"] == world.manifest_sha256
+        assert body["cost_basis"] == {"fee_bps_per_side": 10, "slippage_bps_per_side": 2}
+        assert len(body["configuration_sha256"]) == 64
+        assert body["time"].endswith("Z")
+    summary = closed.body["result"]
+    assert summary["days"] == N_H1 and summary["covers_window"] is True
+    assert {"mean", "sd", "sharpe", "first_day", "last_day"} <= set(summary)
+    assert closed.body["configuration_sha256"] == opened.body["configuration_sha256"]
+
+
 def test_open_entry_without_a_result_counts_as_a_trial(world):
     # The run is killed inside the strategy: a real process exit, so no result entry
     # can be written. Its open entry is already on the remote and counts.
