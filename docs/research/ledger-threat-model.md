@@ -551,7 +551,9 @@ out-of-sample performance without being counted.
 
 **Control.** The harness classifies a run by its data window, not its label: any run whose
 returns cover a registered out-of-sample window is a trial. Benchmark and control runs
-are trials marked unselectable, as NEXT_ITERATION.md says. **Prevented.**
+are trials marked unselectable, as NEXT_ITERATION.md says. **Prevented.** What benchmark
+and control runs are, and how the harness tells them from trials, is now governed by
+sections 8 and 9 of [PREREGISTRATION.md](../PREREGISTRATION.md) (its section 15, item 12).
 
 **Tests.** `test_a_run_covering_an_out_of_sample_window_is_a_trial_whatever_its_label`
 (G1.5).
@@ -683,7 +685,9 @@ are unprotected.
 pre-registration and grid files; every trial chains from it; the unseal must name the same
 values; and once a trial exists the genesis cannot change, which is G0.7's rule (no change
 after the first trial) enforced. The verifier flags a tag that no longer points where the
-genesis says. **Prevented** for the harness, **detected** for the tag.
+genesis says. **Prevented** for the harness, **detected** for the tag. When that rule
+closes is now governed by section 16 of [PREREGISTRATION.md](../PREREGISTRATION.md) (its
+section 15, item 13).
 
 **Tests.** `test_trials_require_a_genesis_entry_naming_the_preregistration` (G1.5),
 `test_preregistration_change_after_the_first_trial_is_refused` (G1.5),

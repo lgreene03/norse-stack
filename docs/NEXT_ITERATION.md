@@ -109,7 +109,10 @@ months of spot order books, so recording forward continues.
 ## The evaluation gate, fixed before any test runs
 
 The pre-registration is signed and tagged `prereg-v1` on 2026-11-07, before any
-trial, and nothing in it moves after a result is seen.
+trial, and nothing in it moves after a result is seen. In the event it was signed on
+2026-11-14 and tagged `prereg-v1` on 80a5e0c (decision D18), and
+[PREREGISTRATION.md](PREREGISTRATION.md) governs wherever this page differs from it,
+change control included (its sections 15 and 16).
 
 A trial is any run whose out-of-sample result is viewed, reruns after fixes
 included. Trials are recorded in an append-only, hash-chained ledger in git; N in
@@ -126,13 +129,16 @@ buy-and-hold of the same universe, because a long-flat trend rule can otherwise
 pass on market exposure alone. The combinatorially symmetric PBO over 16 blocks is
 below 0.5. The Sharpe stays positive with each year removed and with the best 20
 days removed. On the holdout, run once for one candidate, the Sharpe is positive and
-no more than 1.645 standard errors below the walk-forward estimate.
+no more than 1.645 standard errors below the walk-forward estimate. For H2 the
+volatility-matched comparison is replaced by a beta-matched one under decision D15, and
+every criterion is governed by section 10 of PREREGISTRATION.md (its section 15, item 6).
 
 What that means in practice is published with the pre-registration: over about 5.6
 years of daily returns, passing needs a net Sharpe of roughly 1.6 at N = 30, or 1.4
-at N = 10. The holdout, 2026-01-01 to 2026-10-31, is sealed in code: the harness
-refuses events on or after its start unless an unseal names the committed
-pre-registration, and a second unseal fails. It is contaminated by hindsight,
+at N = 10. Those figures are superseded by the table in section 12 of
+PREREGISTRATION.md (its section 15, item 16). The holdout, 2026-01-01 to 2026-10-31, is
+sealed in code: the harness refuses events on or after its start unless an unseal names
+the committed pre-registration, and a second unseal fails. It is contaminated by hindsight,
 because everyone has seen 2026 prices, so it can only catch a failure; paper
 trading after the verdict is the first genuinely unseen evidence. Before judging
 any strategy, the gate must pass at most 5% of 1,000 simulated no-skill ledgers at
@@ -148,7 +154,9 @@ signs of 20, 60 and 120-day returns; positions are long or flat, sized to 20%
 annualised volatility on a 60-day exponentially weighted estimate, at most 1x per
 coin; rebalancing happens on the 00:00 UTC close, filled at the next 15-minute
 average price, only when the change exceeds 25% of target. Four-hour bars and a
-funding filter are one trial each. Budget: at most 12 trials.
+funding filter are one trial each. Budget: at most 12 trials. H1's universe, signal,
+sizing and variants are governed by section 6 of PREREGISTRATION.md where this paragraph
+is loose or differs (its section 15, items 8 and 19).
 
 **H2, funding carry.** Long spot and short perpetual on BTC and ETH, entered when
 trailing seven-day funding exceeds twice the round-trip cost spread over 28 days and
@@ -160,6 +168,8 @@ funding as a regime filter on H1. Budget: at most 12 trials. Six further trials 
 held in reserve.
 
 Benchmark runs and random-sign control runs are recorded but can never be selected.
+What these runs are, and how they are counted, is governed by sections 8 and 9 of
+PREREGISTRATION.md (its section 15, item 12).
 
 ## Milestones
 
@@ -192,7 +202,8 @@ seal. The date is two days later than first set, and this says so.
 benchmark and control runs, tear sheets generated per hypothesis (net of 20 bps,
 intervals, deflated Sharpe, PBO, minimum track record, cost sensitivity at 15, 20
 and 30 bps), and every input checksum-verified with its licence recorded. The ledger
-is frozen on 12-01.
+is frozen on 12-01. The tear sheets' cost basis is governed by sections 5 and 8 of
+PREREGISTRATION.md (its section 15, item 18).
 
 **M3, by 2026-12-15: the verdict.** The single holdout run by 12-08, the verdict
 memo, a security attestation that the chain verifies from a clean clone with
@@ -205,7 +216,9 @@ If H1 and H2 both fail, strategy search stops for this product: no re-tuning and
 hypotheses invented after seeing results. If the gate fails its no-skill
 calibration, no strategy is judged. If the trial budget is exhausted before a pass,
 that is a fail. If the ledger's chain breaks, the iteration is void and restarts
-from pre-registration.
+from pre-registration. The verdict in each case, an exhausted budget included, is
+governed by the verdict table in section 11 of PREREGISTRATION.md (its section 15,
+item 10).
 
 ## Interface rules for the whole iteration
 

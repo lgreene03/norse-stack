@@ -27,8 +27,8 @@ The weekly review is held on Tuesdays (11-10, 11-17, 11-24, 12-01, 12-08 and
 | G0.3 | Optional host hardening beyond Norse | Owner | Owner's choice | Not started |
 | G0.4 | Credentials passed by file, never on a command line | Security | 11-10 | Not started |
 | G0.5 | Owner decisions memo and decisions log | CTPO | 11-06 | Done 11-10 ([DECISIONS.md](DECISIONS.md)) |
-| G0.6 | Data coverage report | Quant | 11-07 | Done 11-11 ([#47](https://github.com/lgreene03/norse-stack/pull/47)); caps 12, 12 and 6 stand if G0.7 leaves at least 4.30 years of joined out-of-sample returns |
-| G0.7 | Pre-registration signed and tagged `prereg-v1` | Quant | 11-07 | Not started |
+| G0.6 | Data coverage report | Quant | 11-07 | Done 11-11 ([#47](https://github.com/lgreene03/norse-stack/pull/47)); caps 12, 12 and 6 stand if G0.7 leaves at least 4.30 years of joined out-of-sample returns, which it does (section 3 of [PREREGISTRATION.md](PREREGISTRATION.md)) |
+| G0.7 | Pre-registration signed and tagged `prereg-v1` | Quant | 11-07 | Done 11-14 ([#52](https://github.com/lgreene03/norse-stack/pull/52)); signed by the owner, `prereg-v1` on 80a5e0c (decision D18) |
 | G0.8 | Cause of huginn's idleness confirmed and instrumented | Quant and technical | 11-10 | Done 11-11 ([huginn#43](https://github.com/lgreene03/huginn/pull/43), [#41](https://github.com/lgreene03/norse-stack/pull/41)); the stuck composite is left idle (decision D9) |
 | G0.9 | Risk manager on event time; fold 4 explained | Technical | 11-10 | Done 11-11 ([huginn#44](https://github.com/lgreene03/huginn/pull/44), [#40](https://github.com/lgreene03/norse-stack/pull/40)) |
 | G0.10 | muninn features under their own prefix | Technical | 11-10 | Done 11-10 ([muninn#87](https://github.com/lgreene03/muninn/pull/87)) |
@@ -42,10 +42,10 @@ The weekly review is held on Tuesdays (11-10, 11-17, 11-24, 12-01, 12-08 and
 | G0.18 | Record ETH, SOL, XRP and DOGE on both venues | Technical | 11-17 | Done 11-10 ([muninn#89](https://github.com/lgreene03/muninn/pull/89), [muninn#90](https://github.com/lgreene03/muninn/pull/90)); five pairs live from 22:10:51Z |
 | G1.1 | Dataset loaders with checksums and manifests | Technical | 11-14 | Done 11-11 ([#48](https://github.com/lgreene03/norse-stack/pull/48)); 51,756 files verified, development and holdout manifests committed |
 | G1.2 | Research gateway locked down | Technical | 11-14 | Not started |
-| G1.3 | Gate statistics with known-answer tests | Quant and technical | 11-14 | Not started |
-| G1.4 | Threat model for the ledger and the seal | Security | 11-13 | Not started |
+| G1.3 | Gate statistics with known-answer tests | Quant and technical | 11-14 | Built 11-13 ([#53](https://github.com/lgreene03/norse-stack/pull/53), [huginn#47](https://github.com/lgreene03/huginn/pull/47)); not done as worded: N is a parameter until G1.5 reads it from the ledger, and the bootstrap, robustness and benchmark checks have closed-form or hand-computed known answers because no published worked example exists (gate-statistics.md finding 8) |
+| G1.4 | Threat model for the ledger and the seal | Security | 11-13 | Written 11-11 ([#51](https://github.com/lgreene03/norse-stack/pull/51)); not done as worded: it names a refusing test for every case except runs and reads outside the harness (T2, T21), which its finding 4 says no test can refuse |
 | G1.5 | Hash-chained trial ledger | Technical | 11-17 | Not started |
-| G1.6 | Holdout sealed in code | Technical | 11-17 | In progress: the loader refuses holdout data with no unseal path since [#48](https://github.com/lgreene03/norse-stack/pull/48); the one permitted unseal remains |
+| G1.6 | Holdout sealed in code | Technical | 11-17 | In progress: the loader refuses holdout data with no unseal path since [#48](https://github.com/lgreene03/norse-stack/pull/48), and the holdout files stay off disk until the unseal since [#54](https://github.com/lgreene03/norse-stack/pull/54) (decision D17); the one permitted unseal, with the re-fetch D17 assigns to it, remains |
 | G1.7 | Gate calibration on no-skill and planted-edge data | Quant | 11-17 | Not started |
 | G1.8 | Gate status page and console panel | Interface | 11-17 | Not started |
 | G1.9 | Target-position harness shared by backtest and paper | Technical | 11-19 | Not started |
@@ -144,7 +144,9 @@ costs of 10 bps a side plus the executor's slippage; the benchmark and the contr
 runs; every pass criterion; and a table of the net Sharpe each criterion implies at
 N = 10, 20 and 30. It is tagged `prereg-v1` and pushed. A change before the first
 trial needs a new tag with its reason recorded; after the first trial, none is
-allowed.
+allowed. From `prereg-v1` on, change control is governed by section 16 of
+[PREREGISTRATION.md](PREREGISTRATION.md), not by the previous sentence (its section 15,
+item 13).
 
 **G0.8. Why huginn does not trade.** Owner: quant, with the technical specialist.
 Due 11-10. Done when huginn exports a counter of blocked entries by reason and the time
@@ -249,7 +251,9 @@ skew, kurtosis and N read from the ledger; minimum track record length; 20-day b
 bootstrap intervals; leave-one-year-out and minus-best-20-days robustness; and the
 volatility-matched equal-weight buy-and-hold benchmark. huginn's fold-level PBO proxy
 and per-fold averaged deflated Sharpe are removed or renamed so they cannot be
-mistaken for these.
+mistaken for these. How the gate uses these statistics, H2's beta-matched benchmark under
+decision D15 included, is governed by section 10 of PREREGISTRATION.md (its section 15,
+items 1 to 7).
 
 **G1.4. Threat model for the ledger and the seal.** Owner: security. Due 11-13. Done
 when `docs/research/ledger-threat-model.md` lists how a result could be quietly re-run,
@@ -276,7 +280,9 @@ unseal and an unseal without the key are each refused.
 when `docs/research/gate-calibration.md` shows the full gate passing at most 5% of
 1,000 simulated no-skill ledgers at N = 30, detecting a planted Sharpe of 1.5, and
 reporting its power at Sharpe 1.0, 1.5 and 2.0. If calibration fails, no strategy is
-judged, and that is itself an outcome to report.
+judged, and that is itself an outcome to report. Which gate is calibrated, and on which
+no-skill families, is governed by section 10 of PREREGISTRATION.md under "Calibration"
+(its section 15, items 1, 7 and 9).
 
 **G1.8. Gate status page and console panel.** Owner: interface. Due 11-17, with the
 result schema agreed with the technical specialist by 11-12. Done when a generated
@@ -303,22 +309,28 @@ existing console's trading panels are removed once the new one covers what they 
 
 **G2.1. Benchmark and control runs.** Owner: quant. Due 11-21. Depends on M1. Done
 when buy-and-hold and random-sign control runs are in the ledger, marked
-unselectable, with their statistics on the gate status page.
+unselectable, with their statistics on the gate status page. What the benchmark and
+control runs are, and how the ledger tells them from trials, is governed by sections 8
+and 9 of PREREGISTRATION.md (its section 15, items 5 and 12).
 
 **G2.2. H1 trend trials.** Owner: quant. Due 11-26. Depends on G0.7 and M1. Done when
 at most 12 H1 trials (or the cap G0.6 sets) are in the ledger, exactly as
-pre-registered, with no configuration outside the registered grid.
+pre-registered, with no configuration outside the registered grid. How many H1 trial
+entries there may be, the reserve included, is governed by section 9 of
+PREREGISTRATION.md (its section 15, item 15).
 
 **G2.3. H2 funding carry trials.** Owner: quant. Due 12-01. Depends on G0.5 (paper
 shorts approved, or H2 reverted to a filter on H1) and M1. Done when at most 12 H2
 trials are in the ledger, with funding accrued every eight hours and both legs
-costed.
+costed. How funding accrues is governed by section 5 of PREREGISTRATION.md (its
+section 15, item 17).
 
 **G2.4. Tear sheets.** Owner: interface. Due 12-01. Depends on G2.2 and G2.3. Done
 when each hypothesis has a generated tear sheet: returns net of 20 bps with intervals,
 the deflated Sharpe, PBO, minimum track record length, the benchmark comparison and
 cost sensitivity at 15, 20 and 30 bps a round trip, with the trial count and data
-window beside every figure.
+window beside every figure. The cost basis of the headline and of the sensitivity runs
+is governed by sections 5 and 8 of PREREGISTRATION.md (its section 15, item 18).
 
 **G2.5. Manifest audit and licence register.** Owner: security. Due 12-01, with the
 manifest audit by 11-24. Done when every dataset file is re-verified against its
@@ -372,7 +384,9 @@ on a fail.
 Findings that independent reviews raised against merged work and did not block it.
 They are owned and visible here rather than lost in pull request threads; the driver
 picks them up after the dated goals, highest severity first, and the CTPO may promote
-one to a goal.
+one to a goal. Rows citing #52 are the follow-ups that section 15 of
+[PREREGISTRATION.md](PREREGISTRATION.md) assigns, with its severity and confidence, and
+the goal that owns each is named beside its owner.
 
 | Severity | Finding | Raised by, on | Owner |
 |---|---|---|---|
@@ -407,8 +421,19 @@ one to a goal.
 | Low | `docs/risk-model.md` shows the position limit default as disabled (it is 500,000), documents a volatility formula the code does not use and lists a `volatility_scale_factor` setting that does not exist. EDGE_VERDICT and RESULTS still say the `Hit` line is hardcoded; huginn#33 computes it. | Technical, huginn#44 | Technical |
 | Low | huginn's Dockerfile pins the amd64 alpine image but builds an arm64 binary, and Docker's `desktop` credential helper hangs on this Mac, so builds need a config without it. | Technical, huginn#43 | Technical |
 | Low | `.pre-commit-config.yaml`'s ruff must stay in step with `requirements-dev.txt` but dependabot only bumps the latter; #30 realigned them at 0.17.3 by hand. Add a check or a dependabot pre-commit entry. | Technical, #30 | Technical |
-| Medium | The coverage report names three pairs that reach the top ten only in the holdout (two gold tokens and a tokenised share, finding 5), so which pairs the holdout universe holds is no longer unseen. No price or return leaked. G0.7 must write the universe exclusions as categories (leveraged tokens, commodity tokens, tokenised shares, stablecoins) decided on development data alone, never as a list chosen with those holdout names in view. | Lead review, #47 | Quant |
+| Resolved | The coverage report names three pairs that reach the top ten only in the holdout (two gold tokens and a tokenised share, finding 5), so which pairs the holdout universe holds is no longer unseen. No price or return leaked. G0.7 must write the universe exclusions as categories (leveraged tokens, commodity tokens, tokenised shares, stablecoins) decided on development data alone, never as a list chosen with those holdout names in view. Resolved 11-14 by decision D14, as section 15 (item 21) of the pre-registration records ([#52](https://github.com/lgreene03/norse-stack/pull/52)); sections 1 and 6 and appendix A disclose the names that were seen. | Lead review, #47 | Quant |
 | Low | Only BTC and ETH bars were compared with the REST API. Before 2022-04-14 the archive is short of trades on 9 to 27 bars per series; other pairs probably share this and are unchecked. The live comparison needs the local mirror, so it runs only by hand (`NORSE_LIVE_TESTS=1`); CI tests the committed register of differences. | Technical, #48 | Technical |
+| Medium | The gate's V in SR0 is the cross-trial variance over the selectable runs with no floor (section 10), but G1.3's `sharpe.deflated_sharpe` floors V at 1/(T - 1) and needs one Sharpe ratio per trial counted in N, so it must not be used for the gate as it stands. G1.5 calls `deflated_sharpe_ratio` directly with V from the selectable runs, or `deflated_sharpe` is changed to take V separately from N. | Pre-registration, #52 (section 15, item 1, confirmed) | Technical (G1.5) |
+| Medium | G1.3's `cscv` docstring and gate-statistics.md say the PBO matrix's columns are "the N ledger trials"; under section 10 they are the hypothesis's selectable runs in registered order. G1.5 builds the matrix that way and the docstring is corrected. | Pre-registration, #52 (section 15, item 2, confirmed) | Technical (G1.5) |
+| Medium | D15's beta-matched excess return for H2 has no implementation in G1.3's `benchmark.py`. It needs a function with hand-computed known answers before G2.3, and G1.7 must calibrate it. | Pre-registration, #52 (section 15, item 7, confirmed) | Technical, with the quant (G1.3) |
+| Medium | G1.7 must calibrate the gate as registered (section 10, "Calibration"): family N, V across both hypotheses with no floor, the windows of section 3 and PBO matrices of 8 and 6 columns, with no-skill families correlated within and across hypotheses among the 1,000 ledgers, and power reported for a family that shares one edge as well as for a single planted column. A calibration of a simpler gate would not support the 5% false-pass claim. | Pre-registration, #52 (section 15, items 1, confirmed, and 9, likely) | Quant (G1.7) |
+| Low | A run whose returns have no variance has a Sharpe ratio of 0 and a DSR of 0 under section 10, where G1.3's `sharpe.moments` raises. G1.5 handles the case before it calls G1.3's functions. | Pre-registration, #52 (section 15, item 4, confirmed) | Technical (G1.5) |
+| Low | The registered intervals are `block_bootstrap(returns, seed=20261111, block_length=20, reps=10000, confidence=0.90)` (section 10), but the function's default confidence is 0.95, so whatever computes them for the tear sheets passes every argument. | Pre-registration, #52 (section 15, item 3, confirmed); the default checked by the CTPO | Technical (G1.5) |
+| Low | The benchmarks B-H1 and B-H2 run through the harness with the trials' fills, costs and rule for halted pairs (section 8), not through G1.3's `equal_weight_buy_and_hold`, which values at daily closes, charges costs on turnover and raises on a halted holding. | Pre-registration, #52 (section 15, item 5, confirmed) | Quant (G2.1) |
+| Low | Sensitivity runs sit outside N, so the ledger must enforce them: add `test_sensitivity_run_before_the_freeze_is_refused` and `test_sensitivity_run_of_a_non_candidate_is_refused`. | Pre-registration, #52 (section 15, item 11, likely) | Security and technical (G1.5) |
+| Low | Threat model T18 calls benchmark and control runs "trials marked unselectable"; under sections 8 and 9 they are ledgered kinds outside N, told apart by their registered configuration, and H2's control is random timing, not random sign. T18's control text needs the same change. | Pre-registration, #52 (section 15, item 12, confirmed) | Security (G1.4) |
+| Low | Change control now closes at the first ledger entry after the genesis entry, of any kind, not at the first trial (section 16). Extend `test_preregistration_change_after_the_first_trial_is_refused` to match. | Pre-registration, #52 (section 15, item 13, confirmed) | Security (G1.5) |
+| Low | G2.4 headlines returns "net of 20 bps", but the gate's cost basis is 24 bps a round trip on one leg (section 5). The tear sheet's headline uses the gate's basis, with 15, 20 and 30 bps as sensitivity (section 8). | Pre-registration, #52 (section 15, item 18, confirmed) | Interface (G2.4) |
 
 **Data boundaries.** From 2026-11-10T22:10:51Z muninn records five pairs on both
 venues. From the same time a refused OKX book consumes a sequence number, and OKX
@@ -449,3 +474,14 @@ years. G0.7 now also has to settle what the coverage report found: LUNAUSDT is t
 coins, a held pair can halt, a top-five pair is often younger than the 120-day lookback,
 the universe exclusions, and that development trading stops at the last development
 close. The loader already refuses holdout data, so G1.6 is left with the unseal itself.
+
+Status on 2026-11-14: G0.7 is done, seven days after its due date. The owner signed the
+pre-registration in conversation, and an agent session on the owner's instruction merged
+it as [#52](https://github.com/lgreene03/norse-stack/pull/52) and created the annotated
+tag `prereg-v1` on 80a5e0c (decision D18). G1.3 and G1.4 have merged work but are not
+done as their tests are worded, for the reasons in the table, and G1.6 gained
+[#54](https://github.com/lgreene03/norse-stack/pull/54). The pre-registration settles
+what the previous paragraph left to G0.7 in its sections 3, 4 and 6, and its section 3
+supersedes the 5.92-year window and the limit of about 1.6 years on a first training
+window given there (its section 15, items 14 and 22). Its section 15 follow-ups are
+recorded above under the goals that own them, most of them G1.5's and G1.7's.

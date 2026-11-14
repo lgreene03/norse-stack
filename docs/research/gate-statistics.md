@@ -25,6 +25,10 @@ functions in the gate's public functions, which take the ledger and have no N pa
 (threat T19, `test_statistics_take_n_only_from_the_ledger`). Nothing here reads a
 ledger.
 
+Since `prereg-v1`, [PREREGISTRATION.md](../PREREGISTRATION.md) governs how the gate uses
+these functions wherever this page differs from it (its sections 8, 10 and 12, and
+section 15, items 1 to 5).
+
 ## Summary
 
 | Statistic | Function | Source | Known answer | Published worked example? |
@@ -115,7 +119,9 @@ The full calibration at N = 30 over 1,000 ledgers is G1.7's, not this page's.
 autocorrelated daily returns make its standard error too small, which is one reason for
 the block bootstrap below. N counts trials, not independent trials, so correlated trials
 make it strict rather than lenient. It says nothing about whether a strategy that passed
-on 2018 to 2025 will work later.
+on 2018 to 2025 will work later. For the gate, the sentence on correlated trials no longer
+holds, and how V is computed is governed by section 10 of PREREGISTRATION.md (its
+section 15, item 1).
 
 ## The probabilistic Sharpe ratio and minimum track record length
 
