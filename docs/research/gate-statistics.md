@@ -17,13 +17,12 @@ Everything here was computed on synthetic data or is arithmetic. No price, retur
 signal or performance figure was computed on market data, and nothing was read from the
 holdout, because the pre-registration (G0.7) is not signed.
 
-The trial ledger (G1.5) does not exist yet, so N and the trials' return series are
-parameters of these functions. G1.5 must feed them from the ledger, with N the count of
-trial entries under the counting rule registered in `prereg-v1`
-([ledger-threat-model.md](ledger-threat-model.md), principle 3), and must wrap these
-functions in the gate's public functions, which take the ledger and have no N parameter
-(threat T19, `test_statistics_take_n_only_from_the_ledger`). Nothing here reads a
-ledger.
+N and the trials' return series are parameters of these functions, and nothing here
+reads a ledger. The gate's public functions are in `norse_research.gate` (G1.5,
+[trial-ledger.md](trial-ledger.md)): they take the ledger and have no N parameter, read
+N as the count of trial entries under the counting rule registered in `prereg-v1`
+([ledger-threat-model.md](ledger-threat-model.md), principle 3), and build V and the PBO
+matrix from the selectable runs (threat T19, `test_statistics_take_n_only_from_the_ledger`).
 
 Since `prereg-v1`, [PREREGISTRATION.md](../PREREGISTRATION.md) governs how the gate uses
 these functions wherever this page differs from it (its sections 8, 10 and 12, and
@@ -368,15 +367,16 @@ series.
 (dropping rows would compute PBO on different data from the DSR); the in-sample winner
 among equals is the lowest-indexed trial; tied out-of-sample scores share their mean rank;
 a logit of exactly zero counts as overfit; a trial flat over a half scores zero. The CSCV
-matrix's columns are the N ledger trials' joined out-of-sample returns on common dates.
+matrix's columns are the hypothesis's selectable runs in registered order, not the N
+ledger trials (section 10 of PREREGISTRATION.md; its section 15, item 2).
 
 **Robustness and benchmark details.** Calendar years in UTC, partial years included; best
 days removed rather than zeroed; undefined counts as failing; benchmark costs default to
 zero; a held asset without a return is an error.
 
 **N as a parameter.** The brief asked for N as a parameter until G1.5; the G1.4 threat
-model asks that the gate's public functions take no N. Both hold if G1.5 wraps these
-functions, which is how the module docstrings describe it.
+model asks that the gate's public functions take no N. Both hold: `norse_research.gate`
+wraps these functions and takes the ledger instead (G1.5).
 
 ## Findings
 

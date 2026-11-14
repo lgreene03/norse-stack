@@ -21,12 +21,13 @@ kurtosis m4 / m2^2, both from central moments with divisor n, and the kurtosis i
 not excess: a normal distribution has 3. The papers' formulas use that convention
 (their normal case is skew 0, kurtosis 3).
 
-Where N comes from. ``n_trials`` and the trial Sharpe ratios are parameters here
-because the trial ledger does not exist yet. G1.5 must feed them from the ledger,
-with N the count of trial entries under the counting rule registered in
-``prereg-v1`` (docs/research/ledger-threat-model.md, principle 3), and must wrap
-these functions in the gate's public functions, which take the ledger and have no
-N parameter (threat T19). Nothing here reads the ledger.
+Where N comes from. ``n_trials`` and the trial Sharpe ratios are parameters here,
+and nothing here reads the ledger. The gate's public functions, in
+``norse_research.gate``, take the ledger and have no N parameter (threat T19): they
+read N from it under the counting rule registered in ``prereg-v1`` and call
+``deflated_sharpe_ratio`` with V from the selectable runs, as section 10 of
+docs/PREREGISTRATION.md registers. ``deflated_sharpe`` below floors V and is not
+used by the gate (section 15, item 1).
 """
 
 from __future__ import annotations
@@ -210,8 +211,11 @@ def deflated_sharpe(
     afterwards. Skew, kurtosis and length are read from that series.
 
     ``n_trials`` is N, and ``trial_sharpes`` the per-observation Sharpe ratios of
-    those N trials' joined out-of-sample returns (the candidate's included). G1.5
-    must supply both from the ledger; until then they are parameters.
+    those N trials' joined out-of-sample returns (the candidate's included).
+
+    Not the gate's function: the registered gate uses V with no floor, from the
+    selectable runs (``norse_research.gate.deflated_sharpe_of``; section 10 and
+    section 15, item 1 of docs/PREREGISTRATION.md).
 
     The variance in SR_0 is the larger of the null variance 1 / (T - 1) and the
     cross-trial variance of ``trial_sharpes`` (when given and N is at least 2). The

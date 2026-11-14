@@ -11,6 +11,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+# The first return day of any registered out-of-sample window (H1's, from 2018-05-01;
+# docs/preregistration.json). Rows from here on load only inside an open ledger entry
+# (the loader's speed bump, threat model T2); the harness checks this against the
+# registration the genesis entry pins.
+OUT_OF_SAMPLE_START = datetime(2018, 5, 1, tzinfo=UTC)
+OUT_OF_SAMPLE_START_MS = int(OUT_OF_SAMPLE_START.timestamp() * 1000)
+
 HOLDOUT_START = datetime(2026, 1, 1, tzinfo=UTC)
 HOLDOUT_END = datetime(2026, 11, 1, tzinfo=UTC)  # exclusive: the holdout ends 2026-10-31
 HOLDOUT_START_MS = int(HOLDOUT_START.timestamp() * 1000)

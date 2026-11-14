@@ -3,7 +3,13 @@ from datetime import UTC, datetime
 
 import pytest
 from norse_research.formats import DatasetSpec
-from norse_research.loader import DatasetLoader, GapError, HoldoutSealed, MissingData
+from norse_research.loader import (
+    DatasetLoader,
+    GapError,
+    HoldoutSealed,
+    MissingData,
+    inside_ledger_entry,
+)
 from norse_research.manifest import Manifest, ManifestError, build, dumps, write
 from norse_research.periods import DEVELOPMENT, HOLDOUT, HOLDOUT_START_MS
 from norse_research.store import ArchiveStore
@@ -12,6 +18,14 @@ from synthetic_store import make_series, month_times, put
 
 def utc(*args):
     return datetime(*args, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def inside_an_open_entry():
+    """These tests read synthetic 2025 rows, which lie in a registered out-of-sample
+    window, so they run as the harness does: inside an open ledger entry (G1.5)."""
+    with inside_ledger_entry("e" * 64):
+        yield
 
 
 @pytest.fixture
