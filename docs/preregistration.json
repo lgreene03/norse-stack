@@ -3,7 +3,7 @@
   "title": "Pre-registration of H1 (dated-universe trend) and H2 (funding carry), G0.7",
   "prose": "docs/PREREGISTRATION.md",
   "precedence": "This file governs wherever it and docs/PREREGISTRATION.md disagree.",
-  "status": "Draft of 2026-11-11, revised on 2026-11-13 after the CTPO's review (PR 52), for the CTPO's approval and the owner's signature. Binding only once the owner tags the merged commit on main as prereg-v1 (change_control).",
+  "status": "Signed by the owner on 2026-11-14; drafted on 2026-11-11 and revised on 2026-11-13 after the CTPO role's review (PR 52). Binding only once the merged commit on main is tagged prereg-v1 (change_control).",
   "decisions": {
     "D3": "paper short perpetual positions approved for H2",
     "D4": "the owner alone holds the holdout key",
@@ -379,7 +379,7 @@
   "change_control": {
     "before_the_first_entry_after_genesis": "a change needs a new tag (prereg-v2 and onward) and its reason recorded in the change log of docs/PREREGISTRATION.md",
     "after_the_first_entry_after_genesis": "no change is allowed: the first ledger entry that follows the genesis entry, of any kind (benchmark, control or trial), closes the registration",
-    "signing_and_tag": "the owner signs by filling in the owner's row; the pull request is merged; the owner personally creates the annotated tag prereg-v1 on the resulting commit on main; no agent or scheduled task creates a prereg-* tag"
+    "signing_and_tag": "the owner signed in conversation on 2026-11-14 and instructed an agent session to record the signature, merge the pull request and create the annotated tag prereg-v1 on the resulting commit on main (D18); no other agent or scheduled task creates a prereg-* tag, and any later one only on the owner's explicit instruction for that tag"
   },
   "benchmark_computation": "both benchmarks run through the same harness as the trials, not through norse_research.benchmark.equal_weight_buy_and_hold; DEV-2 for H1 applies norse_research.benchmark.excess_returns(r, volatility_matched(r_B, r))",
   "controls_seeds_note": "seed_first to seed_last inclusive: 100 seeds per hypothesis"

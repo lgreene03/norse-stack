@@ -187,3 +187,17 @@ mechanical holdout-candidate rule of the pre-registration makes useless. Impleme
 the tools in [#54](https://github.com/lgreene03/norse-stack/pull/54) (the mirror, the
 store, `verify` and the REST check refuse the holdout months); the re-fetch at the unseal
 is G1.6's.
+
+## 2026-11-14
+
+**D18. Signing the pre-registration and delegating the merge and tag.** Decided by the
+owner on 2026-11-14. The owner signed the pre-registration (G0.7, PR 52) in conversation
+("Approved by me") and told an agent session to do what was needed: record the
+signature, merge the pull request and create the annotated tag `prereg-v1` on the merged
+commit on main. For `prereg-v1` this replaces the rule, in section 16 of the draft and in
+D16, that the owner creates the tag in person. The owner's view is that the project is in
+development and the ceremony added nothing: one GitHub identity is shared by the owner
+and every agent, so neither a signature row nor a tag could prove who acted. What the
+freeze must achieve is unchanged, namely that the rules are fixed before the ledger's
+genesis entry and before any trial. Any later `prereg-*` tag still needs the owner's
+explicit instruction for that tag.

@@ -1,8 +1,8 @@
 # Pre-registration of H1 and H2 (G0.7)
 
-**Status: draft of 2026-11-11, revised on 2026-11-13 after review (PR 52), for the
-owner's signature. It binds nothing until the commit holding it is tagged `prereg-v1`
-(section 16).** The owner is the only person on this project. The quant, CTPO, technical,
+**Status: signed by the owner on 2026-11-14; drafted on 2026-11-11 and revised on
+2026-11-13 after review (PR 52). It binds nothing until the commit holding it is tagged
+`prereg-v1` (section 16).** The owner is the only person on this project. The quant, CTPO, technical,
 security and interface roles named in this document are AI agents the owner runs, defined
 in [.claude/agents](../.claude/agents); the quant role drafted this document and the CTPO
 role reviewed it. Neither is an independent person, and neither signs: the owner alone
@@ -936,20 +936,22 @@ no separation of duties is claimed. The integrity of the gate rests on mechanica
 instead: the hash-chained ledger, the immutable tags, the holdout kept off disk and sealed
 in code, and this document fixed before any trial. GitHub does not let the shared identity
 approve its own pull request, so the owner merges with the repository-admin bypass of the
-approval rule (D16). The owner signs by filling in the owner's row; the pull request is
-then merged and the owner personally creates the annotated tag `prereg-v1` on the
-resulting commit on main. No agent or scheduled task creates a `prereg-*` tag. The tag
-ruleset (D16) forbids moving or deleting a `prereg-*` tag but not creating one, so the
-first `prereg-v1` created anywhere is permanent, and a squash merge would orphan a tag
-placed on this branch. One GitHub identity is shared by the owner and every agent, so the
-signature row records the owner's decision without proving who wrote it; the owner
-creating the tag in person is what does.
+approval rule (D16). The owner signed in conversation on 2026-11-14 and instructed an
+agent session to record the signature, merge the pull request and create the annotated
+tag `prereg-v1` on the resulting commit on main (D18). No other agent or scheduled task
+creates a `prereg-*` tag, and any later one is created only on the owner's explicit
+instruction for that tag. The tag ruleset (D16) forbids moving or deleting a `prereg-*`
+tag but not creating one, so the first `prereg-v1` created anywhere is permanent, and a
+squash merge would orphan a tag placed on this branch. One GitHub identity is shared by
+the owner and every agent, so neither the signature row nor the tag proves who acted; D18
+records the owner's instruction, and what the tag does prove is that these rules were
+fixed before the ledger's genesis entry.
 
 **Change log.**
 
 | Tag | Date | Reason |
 |---|---|---|
-| `prereg-v1` | not yet tagged | first version |
+| `prereg-v1` | 2026-11-14 | first version |
 
 **Signatures.**
 
@@ -957,7 +959,7 @@ creating the tag in person is what does.
 |---|---|---|---|
 | Drafted | quant role (AI agent) | 2026-11-11, revised 2026-11-13 | drafted; not a signature |
 | Reviewed | CTPO role (AI agent) | 2026-11-13 | approved with nits (PR 52 re-review); a review, not a signature |
-| Owner (signs) | | | |
+| Owner (signs) | owner (lgreene03) | 2026-11-14 | signed in conversation ("Approved by me"); recorded by an agent session on the owner's instruction (D18) |
 
 ## 17. References
 
