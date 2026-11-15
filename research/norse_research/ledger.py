@@ -20,7 +20,7 @@ SHA-256 of its line without the newline. Every entry holds:
 **Genesis** pins the registration (principle 4, section 16 of PREREGISTRATION.md):
 the ``prereg-v1`` tag and commit and the SHA-256 of PREREGISTRATION.md and
 preregistration.json at that commit, the manifest hashes, the period constants, the
-out-of-sample windows, the budgets, the harness and strategy paths whose git trees
+out-of-sample windows, the budgets, the harness and strategy paths whose files
 every run records, the holdout key record G1.6 commits, the canonical remote URL with
 the ledger and code branches, and the strategy module and function that runs each
 registered configuration, benchmark and control. The ledger's first
@@ -30,8 +30,8 @@ genesis entry fails verification (section 16; section 15, item 13).
 
 **Open** is written, committed and pushed before a run computes anything (principle
 2, T8). It holds the run's kind (from its registered configuration, never a label),
-the resolved configuration and its hash, the commit, the git trees of the registered
-paths, the dataset manifest hash, the cost basis, the window, any rerun record or
+the resolved configuration and its hash, the commit, a digest of the files under
+the registered paths, the dataset manifest hash, the cost basis, the window, any rerun record or
 reserve reason, and the interpreter. **Result** follows it, naming the open entry's
 hash, with the status, a summary, and for a completed run the SHA-256 of its
 committed return series (T7). It repeats the open entry's configuration hash,
@@ -63,8 +63,7 @@ from .canonical import (
     value_hash,
 )
 from .registration import (
-    BENCHMARK,
-    CONTROL,
+    HOLDOUT,
     HYPOTHESES,
     KINDS,
     PREREGISTRATION_FILES,
@@ -227,15 +226,15 @@ def _check_open(seq: int, body: dict) -> None:
                       ("cost_basis", "costs"), ("window", "window"), ("strategy", "strategy")):
         if config.get(key) != body[name]:
             raise _fail(seq, f"{name} differs from the configuration's {key}")
-    trees = _mapping(seq, "trees", body["trees"])
-    for path, tree in trees.items():
-        if tree is not None:
-            _git_id(seq, f"trees[{path}]", tree)
+    trees = _mapping(seq, "trees", body["trees"], {"harness", *HYPOTHESES})
+    for group, digest in trees.items():
+        if digest is not None:
+            _sha(seq, f"trees[{group}]", digest)
     if body["rerun"] is not None:
         rerun = _mapping(seq, "rerun", body["rerun"], {"defect", "fix_commit", "section"})
         _git_id(seq, "rerun.fix_commit", rerun["fix_commit"])
-    if body["kind"] not in (TRIAL, BENCHMARK, CONTROL) and body["rerun"] is not None:
-        raise _fail(seq, "only a trial, a benchmark or a control carries a rerun record")
+    if body["kind"] == HOLDOUT and body["rerun"] is not None:
+        raise _fail(seq, "the holdout run carries no rerun record")
     if body["kind"] != TRIAL and body["reserve_reason"] is not None:
         raise _fail(seq, "only a trial carries a reserve reason")
 
@@ -329,6 +328,8 @@ def parse_ledger(data: bytes) -> tuple[Entry, ...]:
             tag = body["preregistration"]["tag"]
             if tag in genesis_tags:
                 raise _fail(index, f"a superseding genesis must name a new tag, not {tag}")
+            if entries and body["remote"] != entries[0].body["remote"]:
+                raise _fail(index, "a superseding genesis may not move the pinned remote")
             genesis_tags.add(tag)
         else:
             if not entries:

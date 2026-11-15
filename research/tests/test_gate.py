@@ -13,7 +13,7 @@ from ledger_fixtures import Book, issued, lcg_returns
 from norse_research import gate, harness
 from norse_research.cscv import cscv
 from norse_research.gate import GateRefused, RegisteredLedger
-from norse_research.gitledger import FREEZE_TAG
+from norse_research.gitledger import FREEZE_ANCHOR
 from norse_research.ledger import LedgerSnapshot
 from norse_research.sharpe import (
     deflated_sharpe_ratio,
@@ -170,7 +170,7 @@ def test_no_candidate_until_every_configuration_has_a_selectable_run():
 def test_selectable_runs_from_different_trees_leave_the_hypothesis_without_any():
     book = Book()
     full_family(book)
-    trees = {p: "2" * 40 for p in ("research/harness", "strategies/h1", "strategies/h2")}
+    trees = {"harness": "1" * 64, "H1": "2" * 64, "H2": "1" * 64}  # H1's strategy changed
     book.run("H1-03", lcg_returns(3, days(book, "H1")), rerun=FIX, trees=trees)
     runs = gate.selectable_runs(registered(book))
     # H1's selectable runs now come from two trees, so H1 has none; H2's all come from
@@ -202,7 +202,8 @@ def test_gate_refuses_a_ledger_that_is_not_the_frozen_head(world):
     assert not before_freeze.frozen
     gate.freeze(world.ledger, "M2: the ledger freeze", allow_incomplete=True)
     frozen = gate.gate_ledger(world.ledger)
-    assert frozen.frozen and frozen.commit == world.ledger.milestone_tags()[FREEZE_TAG]
+    tags = world.ledger.milestone_tags()
+    assert frozen.frozen and tags[f"{FREEZE_ANCHOR}{frozen.commit}"] == frozen.commit
     assert frozen.snapshot.data == before_freeze.snapshot.data
     assert gate.trial_count(frozen) == 2
     entries = frozen.snapshot.entries

@@ -27,9 +27,9 @@ G1.3's, applied as section 10 registers them:
 
 A selectable run is a configuration's last completed trial entry whose returns cover
 its hypothesis's whole window; a hypothesis whose selectable runs come from different
-git trees of the harness and strategy paths the genesis entry lists has none (run
-rule 4). Once the freeze tag exists, the gate takes only the ledger at that tag
-(T19); any figure computed before it is provisional (run rule 3).
+files under the harness paths or under its own strategy paths (their recorded digests
+differ) has none (run rule 4). Once the freeze anchor exists, the gate takes only the
+ledger at that anchor (T19); any figure computed before it is provisional (run rule 3).
 """
 
 from __future__ import annotations
@@ -43,7 +43,8 @@ from pathlib import Path
 
 from .block_bootstrap import BootstrapResult, block_bootstrap
 from .cscv import GATE_BLOCKS, CSCVResult, cscv
-from .gitledger import FREEZE_TAG, GitLedger, load_registration
+from .environment import check_environment
+from .gitledger import FREEZE_ANCHOR, GitLedger, load_registration
 from .ledger import COMPLETED, Entry, LedgerError, LedgerSnapshot, VerificationError
 from .registration import HYPOTHESES, TRIAL, Registration
 from .sharpe import (
@@ -165,8 +166,10 @@ def _selectable_runs(ledger: RegisteredLedger) -> dict[str, tuple[SelectableRun,
                     chosen = (opened, result, tuple(v for _, v in series))
             if chosen:
                 runs.append(SelectableRun(h, cid, order, *chosen))
-        paths = [*genesis.body["tree_paths"]["harness"], *genesis.body["tree_paths"][h]]
-        trees = {tuple(run.open_entry.body["trees"].get(p) for p in paths) for run in runs}
+        trees = {
+            (run.open_entry.body["trees"]["harness"], run.open_entry.body["trees"][h])
+            for run in runs
+        }
         out[h] = tuple(runs) if len(trees) <= 1 else ()
     return out
 
@@ -262,7 +265,7 @@ def gate_ledger(git_ledger: GitLedger, given: LedgerSnapshot | None = None) -> R
     (anchored and verified), the current verified ledger before it (provisional,
     binding nothing). A ``given`` ledger that is not exactly that one is refused."""
     verified = git_ledger.verify()
-    freeze = verified.tags.get(FREEZE_TAG)
+    freeze = verified.freeze
     commit = verified.head if freeze is None else freeze
     snapshot = verified.snapshot if freeze is None else git_ledger.snapshot(freeze)
     if given is not None:
@@ -281,9 +284,12 @@ def missing_selectable_runs(ledger: RegisteredLedger) -> list[str]:
 
 
 def freeze(git_ledger: GitLedger, message: str, *, allow_incomplete: bool = False) -> str:
-    """Tag the ledger head ``ledger-freeze``, which is irreversible (G2.7). Refused
-    while a registered configuration lacks a selectable run, unless the caller
-    states that the freeze leaves it unrun (review M6)."""
+    """Tag the ledger head with its freeze anchor, ``ledger-freeze-<head commit>``, which
+    is irreversible (G2.7). Refused while a registered configuration lacks a selectable
+    run, unless the caller states that the freeze leaves it unrun (review M6, N3), and
+    under any environment override (N10). A ledger the gate issued before the freeze
+    stays provisional: check ``frozen`` before relying on one (N14)."""
+    check_environment(None, git_ledger.git.repo)
     ledger = gate_ledger(git_ledger)
     if ledger.frozen:
         raise GateRefused("the ledger is already frozen")
@@ -293,7 +299,8 @@ def freeze(git_ledger: GitLedger, message: str, *, allow_incomplete: bool = Fals
             f"{len(missing)} registered configurations have no selectable run ({missing}); "
             "freezing now leaves them unrun, so it needs allow_incomplete"
         )
-    return git_ledger.tag_milestone(FREEZE_TAG, message, freeze=True)
+    name = f"{FREEZE_ANCHOR}{ledger.commit}"
+    return git_ledger.tag_milestone(name, message, _anchor=True)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -308,7 +315,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     tag = freeze(GitLedger(args.repo, args.remote), args.message,
                  allow_incomplete=args.allow_incomplete)
-    print(f"{FREEZE_TAG}: tag object {tag}")
+    print(f"freeze anchor: tag object {tag}")
     return 0
 
 

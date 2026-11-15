@@ -13,15 +13,17 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from conftest import clear_overrides
-from ledger_fixtures import KEY_RECORD, TREE_PATHS, World, git, open_body
+from ledger_fixtures import KEY_RECORD, KEY_RECORD_DOC, TREE_PATHS, World, git
 from norse_research import gate, harness
 from norse_research.canonical import sha256_hex
 from norse_research.gitledger import (
-    GENESIS_TAG,
+    FREEZE_ANCHOR,
+    GENESIS_ANCHOR,
     GitLedger,
     LedgerBusy,
     LedgerOutOfStep,
     LedgerWriteError,
+    check_key_record,
     write_genesis,
 )
 from norse_research.ledger import (
@@ -36,9 +38,13 @@ from norse_research.ledger import (
 _fixes = iter(range(10**6))
 
 
-def trial(world, cid="H1-01", behaviour="steady", **request):
-    world.mode(behaviour, "H2" if cid.startswith("H2") or cid.endswith("H2") else "H1")
+def trial(world, cid="H1-01", **request):
     return harness.run(world.repo, {"configuration": cid, **request}, store=world.store)
+
+
+def anchor(world) -> str:
+    first = world.ledger.snapshot(world.ledger.local_head()).entries[0]
+    return f"{GENESIS_ANCHOR}{first.hash}"
 
 
 def recomputed(entries, k, change):
@@ -87,20 +93,20 @@ def test_genesis_pins_the_registration_and_the_ledger_lives_on_its_own_branch(wo
 
 def test_genesis_is_anchored_by_the_ledger_genesis_tag(world):
     head = world.ledger.local_head()
-    assert world.ledger.milestone_tags() == {GENESIS_TAG: head}
+    assert world.ledger.milestone_tags() == {anchor(world): head}
     # Before this tag existed, deleting the branch and writing a new genesis in a fresh
     # clone passed verification (review M7). Now it does not.
     git(world.repo, "push", "--quiet", "origin", f":refs/heads/{LEDGER_BRANCH}")
     fresh_path = world.tmp / "fresh"
     git(world.tmp, "clone", "--quiet", str(world.remote), str(fresh_path))
-    fresh = GitLedger(fresh_path)
-    with pytest.raises(LedgerError, match=f"{GENESIS_TAG} already anchors a ledger"):
+    fresh = GitLedger(fresh_path, clock=lambda: "2030-01-01T00:00:00Z")
+    with pytest.raises(LedgerError, match=f"{GENESIS_ANCHOR}[0-9a-f]+ already anchors a ledger"):
         write_genesis(fresh, tree_paths=TREE_PATHS, strategies=world.pins,
                       key_record=(world.prereg_commit, KEY_RECORD))
     # Written by hand instead, the new genesis fails verification in every clone.
     genesis = world.ledger.snapshot(head).genesis.body
     fresh.append({k: v for k, v in genesis.items() if k not in ("seq", "prev", "time")})
-    with pytest.raises(VerificationError, match=f"milestone tag {GENESIS_TAG} .* not an ancestor"):
+    with pytest.raises(VerificationError, match=f"milestone tag {GENESIS_ANCHOR}.* not an ancestor"):
         fresh.verify()
     # A ledger without the tag at all is refused.
     bare_dir = world.tmp / "untagged"
@@ -113,7 +119,7 @@ def test_genesis_is_anchored_by_the_ledger_genesis_tag(world):
         body["key_record"] = {**body["key_record"], "commit": untagged.prereg_commit}
         body["strategies"] = untagged.pins
         untagged.ledger.append({k: v for k, v in body.items() if k not in ("seq", "prev", "time")})
-        with pytest.raises(VerificationError, match=f"no {GENESIS_TAG} tag"):
+        with pytest.raises(VerificationError, match=f"no {GENESIS_ANCHOR}[0-9a-f]+ tag"):
             untagged.ledger.verify()
     finally:
         untagged.close()
@@ -148,11 +154,15 @@ def test_truncated_tail_is_refused_against_the_remote_head(world):
 
 def test_edited_last_entry_is_refused_against_the_remote_head(world):
     trial(world, "H1-01")
-    trial(world, "H1-02", "fails")
+    trial(world, "H1-02")
     head = world.ledger.local_head()
     entries = world.ledger.verify().snapshot.entries
-    data = recomputed(entries, len(entries) - 1, lambda b: {**b, "result": {"error": "edited"}})
-    commit_on_top(world, data, push=False, parent=git(world.repo, "rev-parse", f"{head}~1"))
+    data = recomputed(entries, len(entries) - 1,
+                      lambda b: {**b, "result": {**b["result"], "sharpe": 9.0}})
+    files = world.ledger.files_at(head)
+    files.pop(LEDGER_PATH)
+    commit_on_top(world, data, files, push=False,
+                  parent=git(world.repo, "rev-parse", f"{head}~1"))
     with pytest.raises(VerificationError, match="is not in the local ledger"):
         world.ledger.verify()
 
@@ -164,10 +174,9 @@ def test_run_is_refused_when_the_local_ledger_differs_from_the_remote(world):
     with pytest.raises(LedgerOutOfStep, match="behind"):
         harness.run(other.git.repo, {"configuration": "H1-01"})
     with pytest.raises(LedgerOutOfStep, match="behind"):
-        other.append(open_body(world.registration, "B-H2"))
-    calls_before = list(world.module().CALLED)
+        other.append(world.open_body("B-H2"))
     # Ahead: an entry committed locally but never pushed.
-    body = open_body(world.registration, "B-H2")
+    body = world.open_body("B-H2")
     entries = world.ledger.verify().snapshot.entries
     last = entries[-1]
     entry = make_entry({**body, "seq": len(entries), "prev": last.hash, "time": last.body["time"]})
@@ -175,7 +184,6 @@ def test_run_is_refused_when_the_local_ledger_differs_from_the_remote(world):
     commit_on_top(world, data, push=False)
     with pytest.raises(LedgerOutOfStep, match="ahead"):
         trial(world, "H1-01")
-    assert world.module().CALLED == calls_before
     fresh_path = world.tmp / "fresh"
     git(world.tmp, "clone", "--quiet", str(world.remote), str(fresh_path))
     fresh = GitLedger(fresh_path)
@@ -200,13 +208,12 @@ def _race(appenders):
 
 
 def test_two_concurrent_appends_cannot_share_a_previous_hash(world):
-    reg = world.registration
     before = len(world.ledger.verify().snapshot.entries)
     same = [GitLedger(world.repo), GitLedger(world.repo)]
-    bodies = [open_body(reg, "B-H1"), open_body(reg, "B-H2")]
+    bodies = [world.open_body("B-H1"), world.open_body("B-H2")]
     outcomes = _race([lambda i=i: same[i].append(bodies[i]) for i in range(2)])
     clones = [world.clone("a"), world.clone("b")]
-    later = [open_body(reg, "C-H1", seed=0), open_body(reg, "C-H2", seed=0)]
+    later = [world.open_body("C-H1", seed=0), world.open_body("C-H2", seed=0)]
     outcomes += _race([lambda i=i: clones[i].append(later[i]) for i in range(2)])
     written = [o for o in outcomes if not isinstance(o, Exception)]
     assert len(written) >= 2  # at least one writer in each race got through
@@ -274,15 +281,91 @@ def test_an_upper_case_ledger_tag_is_not_ignored(world):
 
 def test_the_freeze_tag_needs_the_freeze_command_and_a_complete_grid(world):
     trial(world, "B-H1")
-    with pytest.raises(LedgerError, match="irreversible"):
-        world.ledger.tag_milestone("ledger-freeze", "too easy")
+    head = world.ledger.local_head()
+    for name in ("ledger-freeze", f"{FREEZE_ANCHOR}{head}", "ledger-genesis"):
+        with pytest.raises(LedgerError, match="reserved name"):
+            world.ledger.tag_milestone(name, "too easy")
     with pytest.raises(gate.GateRefused, match="14 registered configurations have no selectable"):
         gate.freeze(world.ledger, "M2")
-    assert "ledger-freeze" not in world.ledger.milestone_tags()
+    assert world.ledger.verify().freeze is None
     gate.freeze(world.ledger, "M2, two hypotheses unrun", allow_incomplete=True)
-    assert "ledger-freeze" in world.ledger.verify().tags
+    verified = world.ledger.verify()
+    assert verified.freeze == head and f"{FREEZE_ANCHOR}{head}" in verified.tags
     with pytest.raises(gate.GateRefused, match="already frozen"):
         gate.freeze(world.ledger, "again", allow_incomplete=True)
+
+
+def test_stray_reserved_names_never_block_the_ledger(tmp_path, monkeypatch):
+    # Review N3: a stray ledger-freeze or ledger-genesis, which the tag ruleset makes
+    # permanent, once blocked the freeze or the genesis step for ever. The anchors are
+    # named for their content, so a stray can never take their place.
+    clear_overrides(monkeypatch)
+    world = World(tmp_path, genesis=False)
+    try:
+        code = git(world.repo, "rev-parse", "HEAD")
+        strays = {"ledger-freeze": code, "ledger-genesis": code,
+                  f"{FREEZE_ANCHOR}{'0' * 40}": code, f"{GENESIS_ANCHOR}{'1' * 64}": code}
+        for name, commit in strays.items():
+            git(world.repo, "tag", name, commit)
+            git(world.repo, "push", "--quiet", "origin", f"refs/tags/{name}")
+        world.write_genesis()  # the genesis step is not blocked
+        trial(world, "B-H1")
+        # A reserved name on a ledger commit that does not match its content is stray too.
+        head = world.ledger.local_head()
+        git(world.repo, "tag", f"{FREEZE_ANCHOR}{'2' * 40}", head)
+        git(world.repo, "push", "--quiet", "origin", f"refs/tags/{FREEZE_ANCHOR}{'2' * 40}")
+        verified = world.ledger.verify()
+        assert set(verified.ignored_tags) == {*strays, f"{FREEZE_ANCHOR}{'2' * 40}"}
+        assert verified.freeze is None
+        assert trial(world, "B-H2").status == "completed"  # not frozen by a stray
+        gate.freeze(world.ledger, "M2", allow_incomplete=True)  # the freeze is not blocked
+        assert world.ledger.verify().freeze == world.ledger.local_head()
+    finally:
+        world.close()
+
+
+def test_a_superseding_genesis_cannot_move_the_pinned_remote(world):
+    # Review N5: a superseding genesis written through a mirror, pinning the mirror.
+    fake = world.tmp / "fake.git"
+    git(world.tmp, "clone", "--quiet", "--mirror", str(world.remote), str(fake))
+    clone = world.tmp / "via-fake"
+    git(world.tmp, "clone", "--quiet", str(fake), str(clone))
+    fake_ledger = GitLedger(clone)
+    fake_ledger.sync()
+    git(clone, "tag", "-a", "prereg-v2", "-m", "a second version", world.prereg_commit)
+    git(clone, "push", "--quiet", "origin", "refs/tags/prereg-v2")
+    with pytest.raises(VerificationError, match="may not move the pinned remote"):
+        write_genesis(fake_ledger, tree_paths=TREE_PATHS, strategies=world.pins,
+                      key_record=(world.prereg_commit, KEY_RECORD), tag="prereg-v2",
+                      remote_url=str(fake))
+    with pytest.raises(LedgerError, match="pinned remote"):
+        harness.run(clone, {"configuration": "H1-01"})
+
+
+def test_the_key_record_contract_is_exact():
+    good = dict(KEY_RECORD_DOC)
+    check_key_record(json.dumps(good).encode())
+    bad = [
+        {**good, "n": 2**17 + 1},  # not a power of two (review N8)
+        {**good, "n": 2**16},
+        {**good, "r": 4},
+        {**good, "p": 2},
+        {**good, "salt": "a" * 33},  # odd length
+        {**good, "salt": "ab" * 15},  # under 16 bytes
+        {**good, "salt": "AB" * 16},  # not lower-case
+        {**good, "dklen": 16, "derived_key": "cd" * 16},
+        {**good, "derived_key": "cd" * 31},  # not dklen bytes
+        {**good, "kdf": "sha256"},
+        {**good, "n": float(2**17)},
+        {**good, "sha256_of_passphrase": "ab" * 32},  # an extra field
+        {k: v for k, v in good.items() if k != "derived_key"},
+        {k: v for k, v in good.items() if k != "dklen"},
+    ]
+    for record in bad:
+        with pytest.raises(LedgerError, match="contract"):
+            check_key_record(json.dumps(record).encode())
+    with pytest.raises(LedgerError, match="not JSON"):
+        check_key_record(b"scrypt$17$8$1$salt$hash")
 
 
 def _rewrite_from(world, base, change_label):
@@ -357,7 +440,7 @@ def test_entry_result_hash_matches_the_committed_return_series(world):
 def test_a_path_with_a_newline_cannot_change_what_is_read(world):
     # The review's probe: a path holding a newline and an object id used to shift
     # every later blob in a batch read, so snapshot() saw a forged ledger (L2).
-    trial(world, "H1-01", "fails")
+    trial(world, "H1-01")
     head = world.ledger.local_head()
     real = world.ledger.git.blob(head, LEDGER_PATH)
     forged = git(world.repo, "hash-object", "-w", "--stdin", input=real.split(b"\n", 1)[0] + b"\n")
@@ -398,11 +481,16 @@ def test_write_genesis_validates_its_inputs(tmp_path, monkeypatch):
         world.write("research/keys/unpushed.json", (world.repo / KEY_RECORD).read_text())
         unpushed = world.commit("a key record not on main")
         git(world.repo, "reset", "--quiet", "--hard", "HEAD~1")
+        world.write("strategies/h2/helper.py", "import subprocess\n")
+        bad_helper = world.commit("a helper that imports subprocess")
+        world.push()
         cases = [
-            ({"key_record": (weak, "research/keys/weak.json")}, "scrypt with n of at least"),
+            ({"key_record": (weak, "research/keys/weak.json")}, "breaks its contract"),
             ({"key_record": (unpushed, "research/keys/unpushed.json")}, "not on the remote's main"),
             ({"tree_paths": {**TREE_PATHS, "H2": ["strategies/missing"]}}, "is not on the remote"),
-            ({"tree_paths": {**TREE_PATHS, "harness": ["strategies"]}}, "overlaps"),
+            ({"tree_paths": {**TREE_PATHS, "H1": ["strategies"]}}, "overlaps"),
+            ({"tree_paths": {**TREE_PATHS, "H1": ["research"]}}, "overlaps"),
+            ({}, "reaches outside the strategy allowlist"),
             ({"strategies": {k: v for k, v in world.pins.items() if k != "B-H2"}},
              "must pin exactly"),
             ({"strategies": {**world.pins, "B-H1": world.pins["H2-01"]}},
@@ -412,8 +500,14 @@ def test_write_genesis_validates_its_inputs(tmp_path, monkeypatch):
             with pytest.raises(LedgerError, match=message):
                 write_genesis(world.ledger, **{**good, **change})
         assert world.ledger.local_head() is None  # nothing was written
-        write_genesis(world.ledger, **good)
-        assert world.ledger.verify().tags[GENESIS_TAG] == world.ledger.local_head()
+        git(world.repo, "rm", "--quiet", "strategies/h2/helper.py")
+        world.commit(f"remove the helper added in {bad_helper}")
+        world.push()
+        # A harness path may hold the strategy paths: they are left out of its digest.
+        nested = {"harness": ["strategies", "research/norse_research"],
+                  "H1": ["strategies/h1"], "H2": ["strategies/h2"]}
+        write_genesis(world.ledger, **{**good, "tree_paths": nested})
+        assert world.ledger.verify().tags[anchor(world)] == world.ledger.local_head()
     finally:
         world.close()
 
@@ -447,11 +541,11 @@ def test_the_command_line_verifies_syncs_tags_and_writes_genesis(world, tmp_path
     assert main([*repo, "verify"]) == 0
     out = capsys.readouterr().out
     assert "ledger verified: 3 entries" in out and "0 trial entries" in out
-    assert f"milestone tags: {GENESIS_TAG}" in out
+    assert f"milestone tags: {anchor(world)}" in out
     assert main([*repo, "tag", "ledger-m1", "--message", "M1: the gate"]) == 0
     assert "ledger-m1: tag object" in capsys.readouterr().out
     assert main([*repo, "verify"]) == 0
-    assert f"milestone tags: {GENESIS_TAG}, ledger-m1" in capsys.readouterr().out
+    assert f"milestone tags: {anchor(world)}, ledger-m1" in capsys.readouterr().out
     assert main([*repo, "sync"]) == 0
     second_dir = tmp_path / "second"
     second_dir.mkdir()
@@ -466,7 +560,29 @@ def test_the_command_line_verifies_syncs_tags_and_writes_genesis(world, tmp_path
             "--harness", *TREE_PATHS["harness"], "--h1", *TREE_PATHS["H1"],
             "--h2", *TREE_PATHS["H2"],
         ]) == 0
-        assert f"genesis entry 0 written and tagged {GENESIS_TAG}" in capsys.readouterr().out
+        assert "genesis entry 0 written and anchored" in capsys.readouterr().out
         assert second.ledger.verify().snapshot.genesis.body["tree_paths"] == TREE_PATHS
     finally:
         second.close()
+
+
+def test_trees_cover_the_package_without_the_strategy_paths(world):
+    # Review N12: with strategies inside the package, a file the harness paths list one
+    # by one could be added later in no recorded tree. The harness digest now covers its
+    # whole paths, less the hypotheses' paths nested in them.
+    from norse_research.gitledger import tree_digests
+
+    paths = {"harness": ["research/norse_research"],
+             "H1": ["research/norse_research/strategies/h1"],
+             "H2": ["research/norse_research/strategies/h2"]}
+    world.write("research/norse_research/strategies/h1/trend.py", "X = 1\n")
+    world.write("research/norse_research/strategies/h2/carry.py", "X = 1\n")
+    before = tree_digests(world.ledger.git, world.commit("strategies"), paths)
+    world.write("research/norse_research/strategies/common.py", "SHARED = 1\n")
+    after_helper = tree_digests(world.ledger.git, world.commit("a shared helper"), paths)
+    assert after_helper["harness"] != before["harness"]
+    assert (after_helper["H1"], after_helper["H2"]) == (before["H1"], before["H2"])
+    world.write("research/norse_research/strategies/h1/trend.py", "X = 2\n")
+    after_h1 = tree_digests(world.ledger.git, world.commit("an H1 change"), paths)
+    assert after_h1["H1"] != after_helper["H1"]
+    assert (after_h1["harness"], after_h1["H2"]) == (after_helper["harness"], after_helper["H2"])

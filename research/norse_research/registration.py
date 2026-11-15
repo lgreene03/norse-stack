@@ -231,8 +231,6 @@ class Registration:
         else:
             raise RunNotRegistered(f"{cid} is not a registered configuration")
 
-        if kind == SENSITIVITY and rerun is not None:
-            raise RunNotRegistered("a sensitivity run carries no rerun record")
         if kind != TRIAL and reserve_reason is not None:
             raise RunNotRegistered("only a trial carries a reserve reason")
         if rerun is not None:
