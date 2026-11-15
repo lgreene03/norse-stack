@@ -21,7 +21,9 @@ SHA-256 of its line without the newline. Every entry holds:
 the ``prereg-v1`` tag and commit and the SHA-256 of PREREGISTRATION.md and
 preregistration.json at that commit, the manifest hashes, the period constants, the
 out-of-sample windows, the budgets, the harness and strategy paths whose git trees
-every run records, and the holdout key record G1.6 commits. The ledger's first
+every run records, the holdout key record G1.6 commits, the canonical remote URL with
+the ledger and code branches, and the strategy module and function that runs each
+registered configuration, benchmark and control. The ledger's first
 entry is a genesis entry. A later genesis may supersede it, naming a new tag, only
 until the first entry of any other type; after that the registration is closed and a
 genesis entry fails verification (section 16; section 15, item 13).
@@ -60,9 +62,18 @@ from .canonical import (
     sha256_hex,
     value_hash,
 )
-from .registration import HYPOTHESES, KINDS, PREREGISTRATION_FILES, TRIAL
+from .registration import (
+    BENCHMARK,
+    CONTROL,
+    HYPOTHESES,
+    KINDS,
+    PREREGISTRATION_FILES,
+    TRIAL,
+)
 
 FORMAT = "norse-stack/trial-ledger/v1"
+LEDGER_BRANCH = "ledger"
+CODE_BRANCH = "main"
 LEDGER_PATH = "ledger/trials.jsonl"
 RETURNS_DIR = "ledger/returns"
 ZERO_HASH = "0" * 64
@@ -82,7 +93,7 @@ _COMMON = frozenset({"seq", "prev", "type", "time"})
 _KEYS = {
     GENESIS: _COMMON
     | {"format", "preregistration", "manifests", "periods", "windows", "budgets",
-       "tree_paths", "key_record"},
+       "tree_paths", "key_record", "remote", "strategies"},
     OPEN: _COMMON
     | {"kind", "hypothesis", "configuration_id", "configuration", "configuration_sha256",
        "commit", "trees", "manifest_sha256", "cost_basis", "window", "label", "rerun",
@@ -188,6 +199,17 @@ def _check_genesis(seq: int, body: dict) -> None:
     key = _mapping(seq, "key_record", body["key_record"], {"commit", "path", "sha256"})
     _git_id(seq, "key_record.commit", key["commit"])
     _sha(seq, "key_record.sha256", key["sha256"])
+    remote = _mapping(seq, "remote", body["remote"], {"url", "branch", "code_branch"})
+    if remote["branch"] != LEDGER_BRANCH or remote["code_branch"] != CODE_BRANCH:
+        raise _fail(seq, f"the ledger lives on {LEDGER_BRANCH} and the code on {CODE_BRANCH}")
+    if not isinstance(remote["url"], str) or not remote["url"].strip():
+        raise _fail(seq, "the genesis entry pins no remote URL")
+    strategies = _mapping(seq, "strategies", body["strategies"])
+    for cid, pin in strategies.items():
+        pin = _mapping(seq, f"strategies[{cid}]", pin, {"path", "function"})
+        if not (isinstance(pin["path"], str) and pin["path"].endswith(".py")
+                and isinstance(pin["function"], str) and pin["function"].isidentifier()):
+            raise _fail(seq, f"strategies[{cid}] does not name a Python file and function")
 
 
 def _check_open(seq: int, body: dict) -> None:
@@ -212,8 +234,10 @@ def _check_open(seq: int, body: dict) -> None:
     if body["rerun"] is not None:
         rerun = _mapping(seq, "rerun", body["rerun"], {"defect", "fix_commit", "section"})
         _git_id(seq, "rerun.fix_commit", rerun["fix_commit"])
-    if body["kind"] != TRIAL and (body["rerun"] is not None or body["reserve_reason"] is not None):
-        raise _fail(seq, "only a trial carries a rerun record or a reserve reason")
+    if body["kind"] not in (TRIAL, BENCHMARK, CONTROL) and body["rerun"] is not None:
+        raise _fail(seq, "only a trial, a benchmark or a control carries a rerun record")
+    if body["kind"] != TRIAL and body["reserve_reason"] is not None:
+        raise _fail(seq, "only a trial carries a reserve reason")
 
 
 def _check_result(seq: int, body: dict) -> None:

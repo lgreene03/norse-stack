@@ -4,23 +4,36 @@
 ``ledger``, beside the committed return series under ``ledger/returns/``. It is not
 on main because main needs the ``research`` and ``validate`` checks and a pull
 request (decision D16), which would refuse the harness's push per entry; the
-threat model foresaw this ("put the ledger on its own branch"). The branch needs its
-own ruleset (no deletion, no force push), which only the owner can add.
+threat model foresaw this. The branch needs its own ruleset (no deletion, no force
+push), which only the owner can add.
+
+**Pinned remote.** The genesis entry pins the canonical remote URL, the ledger branch
+and the code branch. Before reading trust from the remote, and before every push, the
+remote's resolved fetch and push URLs must equal the pinned URL, and no ``insteadOf``
+rewrite may be configured; so a run from a scratch clone, a mirror or a redirected
+remote is refused rather than ledgered where nobody looks (security review H1). Git
+runs with ``GIT_NO_REPLACE_OBJECTS`` set, and any ``refs/replace/`` ref is refused
+(M5).
 
 **Appending.** An append never touches the working tree, so it cannot dirty it. It
-takes a lock in the repository's git directory, fetches the remote ledger ref, builds
-the new commit with git's plumbing (a blob, a private index, a tree, a commit),
-moves the local ref with a compare-and-swap, and pushes without force, so a second
-writer's push is refused as non-fast-forward (T9). If the push fails the local ref is
-put back and the append raises: the caller has computed nothing yet (T8).
+takes a lock in the repository's git directory, fetches the remote ledger ref, checks
+that the ledger is still the one the caller was admitted on (M2), builds the new commit
+with git's plumbing (a blob, a private index, a tree, a commit), moves the local ref
+with a compare-and-swap, pushes without force, and then reads the remote back: its
+ledger head must hold the new commit (H1). A second writer's push is refused as
+non-fast-forward (T9). If the push fails the local ref is put back and the append
+raises: the caller has computed nothing yet (T8).
 
 **Verifying.** The chain alone proves only that it agrees with itself. ``verify``
-adds the three anchors of the threat model's principle 1: along the ledger ref's
-first-parent history every committed version of the file is a byte prefix of the
-next and every committed return series is never changed (T4, T7); the remote's
-ledger head is in the local file (T5); and every ``ledger-*`` milestone tag is an
-ancestor of the head whose ledger is a prefix of the current one (T10). It also flags
-a pre-registration tag that no longer points where the genesis entry says (T24).
+adds the anchors of the threat model's principle 1: the remote's ledger head is in the
+local file (T5); every ``ledger-*`` tag on a ledger commit is an ancestor of the head
+whose ledger is a prefix of the current one, and ``ledger-genesis``, written straight
+after the genesis entry, must exist (T10, review M7); along the branch's first-parent
+history every committed version of the file is a byte prefix of the next and every
+return series is never changed (T4, T7); the pre-registration tag still points where
+genesis says (T24); and the run rules of section 9 hold over the whole ledger (M2). A
+``ledger-*`` tag on a commit that holds no ledger is reported, not fatal, because the
+tag ruleset makes such a tag permanent (M6).
 
 Nothing here reads the clock to decide anything; it is read only for timestamps,
 which never decrease along the chain (T11).
@@ -30,20 +43,24 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import json
 import os
 import re
 import subprocess
 import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .canonical import sha256_hex
+from . import ledger as _ledger
+from .canonical import CanonicalError, loads_strict, sha256_hex
 from .ledger import (
+    CODE_BRANCH,
     FORMAT,
     GENESIS,
+    LEDGER_BRANCH,
     LEDGER_PATH,
     TIME_FORMAT,
     ZERO_HASH,
@@ -51,9 +68,9 @@ from .ledger import (
     LedgerError,
     LedgerSnapshot,
     VerificationError,
+    genesis_of,
     make_entry,
     parse_ledger,
-    utc_now,
 )
 from .periods import HOLDOUT_START, LAST_DEVELOPMENT_MONTH, OUT_OF_SAMPLE_START
 from .registration import (
@@ -63,10 +80,11 @@ from .registration import (
     TRIAL,
     Registration,
 )
+from .rules import check_run_rules
 from .store import REPO_ROOT
 
-LEDGER_BRANCH = "ledger"
 FREEZE_TAG = "ledger-freeze"
+GENESIS_TAG = "ledger-genesis"
 MILESTONE_TAG = re.compile(r"ledger-[a-z0-9][a-z0-9.-]*")
 PREREGISTRATION_TAG = "prereg-v1"
 LOCK_NAME = "norse-ledger.lock"
@@ -78,6 +96,9 @@ IDENTITY = {
     "GIT_COMMITTER_NAME": LEDGER_NAME,
     "GIT_COMMITTER_EMAIL": LEDGER_EMAIL,
 }
+REMOTE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+# T25's floor for the holdout key record (G1.6 commits the record; genesis pins it).
+KEY_RECORD_FLOOR = {"kdf": "scrypt", "n": 2**17, "r": 8, "p": 1, "salt_bytes": 16}
 _RETURNS_FILE = re.compile(r"ledger/returns/[0-9a-f]{64}\.csv")
 
 
@@ -90,11 +111,20 @@ class LedgerWriteError(LedgerError):
 
 
 class LedgerOutOfStep(LedgerError, PermissionError):
-    """The local ledger head is not the remote's (T3)."""
+    """The local ledger head is not the remote's, or moved since admission (T3, M2)."""
 
 
 class LedgerBusy(LedgerError, PermissionError):
     """Another process holds the ledger lock (T9)."""
+
+
+class RemoteNotPinned(LedgerError, PermissionError):
+    """The remote is not the one the genesis entry pins (H1)."""
+
+
+def normal_url(url: str) -> str:
+    url = url.strip().rstrip("/")
+    return url[: -len(".git")] if url.endswith(".git") else url
 
 
 class Git:
@@ -104,7 +134,9 @@ class Git:
         self.repo = Path(repo)
 
     def call(self, *args: str, input: bytes | None = None, env: Mapping | None = None):
-        full = None if env is None else {**os.environ, **env}
+        # Replacement objects could substitute one commit or blob for another in
+        # every local check (M5); git never honours them here.
+        full = {**os.environ, "GIT_NO_REPLACE_OBJECTS": "1", **(env or {})}
         return subprocess.run(
             ["git", *args], cwd=self.repo, input=input, capture_output=True, env=full, check=False
         )
@@ -133,14 +165,17 @@ class Git:
         proc = self.call("cat-file", "blob", f"{commit}:{path}")
         return proc.stdout if proc.returncode == 0 else None
 
-    def blobs(self, specs: Sequence[str]) -> list[bytes | None]:
-        """Many ``<rev>:<path>`` blobs in one ``cat-file --batch``."""
-        if not specs:
+    def objects(self, oids: Sequence[str]) -> list[bytes | None]:
+        """Many objects by id in one ``cat-file --batch``. Ids hold no newline, so a
+        path cannot desynchronise the batch (review L2)."""
+        if not oids:
             return []
-        out = self.run("cat-file", "--batch", input=("\n".join(specs) + "\n").encode())
+        if any(not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", o) for o in oids):
+            raise GitError("cat-file --batch is given object ids only")
+        out = self.run("cat-file", "--batch", input=("\n".join(oids) + "\n").encode())
         found: list[bytes | None] = []
         pos = 0
-        for _ in specs:
+        for _ in oids:
             end = out.index(b"\n", pos)
             header = out[pos:end].split()
             pos = end + 1
@@ -162,7 +197,9 @@ class Verified:
     snapshot: LedgerSnapshot
     head: str | None
     remote_head: str | None
-    tags: dict[str, str]  # milestone tag -> the ledger commit it marks
+    tags: dict[str, str]  # ledger-* tag on a ledger commit -> that commit
+    ignored_tags: dict[str, str] = field(default_factory=dict)  # stray ledger-* tags
+    registration: Registration | None = None
 
 
 class GitLedger:
@@ -170,16 +207,49 @@ class GitLedger:
         self,
         repo: Path,
         remote: str = "origin",
-        branch: str = LEDGER_BRANCH,
-        clock: Callable[[], str] = utc_now,
+        clock: Callable[[], str] | None = None,
     ) -> None:
+        if not REMOTE_NAME.fullmatch(remote):
+            raise ValueError(f"{remote!r} is not a remote name")  # review L10
         self.git = Git(repo)
         self.remote = remote
-        self.branch = branch
-        self.ref = f"refs/heads/{branch}"
-        self.tracking = f"refs/remotes/{remote}/{branch}"
+        self.branch = LEDGER_BRANCH  # pinned: no caller chooses another ledger (H1)
+        self.ref = f"refs/heads/{LEDGER_BRANCH}"
+        self.tracking = f"refs/remotes/{remote}/{LEDGER_BRANCH}"
         self.tag_namespace = f"refs/norse-ledger/{remote}/tags"
-        self.clock = clock
+        self._clock = clock
+
+    def clock(self) -> str:
+        # Looked up at call time, so one clock serves every caller (review L1).
+        return self._clock() if self._clock is not None else _ledger.utc_now()
+
+    # --- the remote -----------------------------------------------------------------
+
+    def remote_urls(self) -> tuple[str, list[str]]:
+        fetch = self.git.text("ls-remote", "--get-url", self.remote)
+        push = self.git.text("remote", "get-url", "--push", "--all", self.remote).splitlines()
+        return fetch, push
+
+    def check_repository(self) -> None:
+        """No replacement refs and no URL rewriting, in any configuration scope."""
+        if self.git.text("for-each-ref", "--format=%(refname)", "refs/replace/"):
+            raise RemoteNotPinned("refs/replace/ refs are refused: they substitute objects")
+        rewrites = self.git.try_text(
+            "config", "--get-regexp", r"^url\..*\.(insteadof|pushinsteadof)$"
+        )
+        if rewrites:
+            raise RemoteNotPinned(f"URL rewriting is configured, which is refused: {rewrites}")
+
+    def check_remote(self, pinned: str) -> None:
+        """The remote's resolved fetch and push URLs are the pinned one (H1)."""
+        self.check_repository()
+        fetch, push = self.remote_urls()
+        urls = [fetch, *push]
+        if not push or any(normal_url(u) != normal_url(pinned) for u in urls):
+            raise RemoteNotPinned(
+                f"remote {self.remote} resolves to {urls}, not the ledger's pinned remote "
+                f"{pinned}; a run is ledgered only on the pinned remote"
+            )
 
     # --- refs -----------------------------------------------------------------------
 
@@ -188,10 +258,12 @@ class GitLedger:
 
     def fetch(self) -> str | None:
         """Fetch the remote ledger ref; return the remote's head, or None if it has none."""
-        listed = self.git.text("ls-remote", self.remote, self.ref)
+        listed = self.git.text("ls-remote", "--", self.remote, self.ref)
         if not listed:
             return None
-        self.git.run("fetch", "--no-tags", "--quiet", self.remote, f"+{self.ref}:{self.tracking}")
+        self.git.run(
+            "fetch", "--no-tags", "--quiet", "--", self.remote, f"+{self.ref}:{self.tracking}"
+        )
         return self.git.text("rev-parse", self.tracking)
 
     def _describe(self, local: str | None, remote: str | None) -> str:
@@ -245,9 +317,13 @@ class GitLedger:
 
     def files_at(self, commit: str) -> dict[str, bytes]:
         listing = self.git.run("ls-tree", "-r", "-z", "--full-tree", commit)
-        paths = [item.split(b"\t", 1)[1].decode() for item in listing.split(b"\0") if item]
-        blobs = self.git.blobs([f"{commit}:{p}" for p in paths])
-        return {p: b for p, b in zip(paths, blobs, strict=True) if b is not None}
+        items = []
+        for item in listing.split(b"\0"):
+            if item:
+                meta, path = item.split(b"\t", 1)
+                items.append((path.decode(errors="replace"), meta.split()[2].decode()))
+        blobs = self.git.objects([oid for _, oid in items])
+        return {p: b for (p, _), b in zip(items, blobs, strict=True) if b is not None}
 
     def snapshot(self, commit: str | None) -> LedgerSnapshot:
         """The verified chain and its return series at ``commit`` (no anchors)."""
@@ -259,7 +335,7 @@ class GitLedger:
             raise VerificationError(f"{commit} holds no {LEDGER_PATH}")
         stray = [p for p in files if not _RETURNS_FILE.fullmatch(p)]
         if stray:
-            raise VerificationError(f"{commit} holds files other than the ledger: {stray}")
+            raise VerificationError(f"{commit} holds files other than the ledger: {stray!r}")
         return LedgerSnapshot.from_bytes(data, files, commit)
 
     # --- appending ------------------------------------------------------------------
@@ -270,23 +346,27 @@ class GitLedger:
         files: Mapping[str, bytes] | None = None,
         *,
         require_in_step: bool = True,
+        expected_head: str | None = None,
         attempts: int = 1,
     ) -> Entry:
-        """Append one entry, commit it and push it; return the entry as written.
+        """Append one entry, commit it, push it and read it back from the remote.
 
         ``require_in_step`` refuses unless the local head is the remote's; without
         it (for a result entry, whose open entry is already published) the local
-        ledger is first fast-forwarded to the remote's.
+        ledger is first fast-forwarded to the remote's. ``expected_head`` refuses
+        unless the ledger head is still the one the caller decided on (M2).
         """
         for attempt in range(attempts):
             try:
-                return self._append_once(body, files or {}, require_in_step)
+                return self._append_once(body, files or {}, require_in_step, expected_head)
             except LedgerWriteError:
                 if attempt == attempts - 1:
                     raise
         raise AssertionError("unreachable")  # pragma: no cover
 
-    def _append_once(self, body: Mapping, files: Mapping[str, bytes], in_step: bool) -> Entry:
+    def _append_once(
+        self, body: Mapping, files: Mapping[str, bytes], in_step: bool, expected: str | None
+    ) -> Entry:
         with self._lock():
             remote = self.fetch()
             local = self.local_head()
@@ -298,6 +378,11 @@ class GitLedger:
                     raise LedgerOutOfStep(self._describe(local, remote))
                 self.git.run("update-ref", self.ref, remote, local or "")
                 local = remote
+            if expected is not None and local != expected:
+                raise LedgerOutOfStep(
+                    f"the ledger moved from {expected} to {local} after this run was admitted; "
+                    "admit it again"
+                )
             data = self.git.blob(local, LEDGER_PATH) if local else b""
             if data is None:
                 raise VerificationError(f"{local} holds no {LEDGER_PATH}")
@@ -309,20 +394,32 @@ class GitLedger:
             full["time"] = max(self.clock(), last.body["time"]) if last else self.clock()
             entry = make_entry(full)
             new_data = data + entry.line.encode("ascii") + b"\n"
-            parse_ledger(new_data)  # the ledger as it will be must verify
+            genesis = genesis_of(parse_ledger(new_data))  # the ledger as it will be verifies
+            if genesis is None:
+                raise VerificationError("no entry may precede the genesis entry")
+            self.check_remote(genesis.body["remote"]["url"])
             try:
                 commit = self._commit(local, new_data, files, _message(entry))
                 self.git.run("update-ref", "-m", "ledger append", self.ref, commit, local or "")
             except GitError as exc:
                 raise LedgerWriteError(f"the entry could not be committed: {exc}") from None
             try:
-                self.git.run("push", "--quiet", self.remote, f"{commit}:{self.ref}")
+                self.git.run("push", "--quiet", "--", self.remote, f"{commit}:{self.ref}")
             except GitError as exc:
                 if local:
                     self.git.run("update-ref", self.ref, local, commit)
                 else:
                     self.git.run("update-ref", "-d", self.ref, commit)
                 raise LedgerWriteError(f"the entry could not be pushed: {exc}") from None
+            after = self.fetch()
+            if after is None or not self.git.is_ancestor(commit, after):
+                if local:
+                    self.git.run("update-ref", self.ref, local, commit)
+                else:
+                    self.git.run("update-ref", "-d", self.ref, commit)
+                raise LedgerWriteError(
+                    f"the remote's ledger head {after} does not hold the pushed entry {commit}"
+                )
             return entry
 
     def _commit(
@@ -361,31 +458,38 @@ class GitLedger:
             if len(parents) > 1:
                 raise VerificationError(f"ledger commit {commit} is a merge; the ledger is linear")
             commits.append(commit)
-        changes: dict[str, list[tuple[str, str]]] = {}
+        changes: dict[str, list[tuple[str, str, str]]] = {c: [] for c in commits}
         current = None
-        log = self.git.text(
-            "log", "--first-parent", "--reverse", "--format=commit %H", "--raw",
+        log = self.git.run(
+            "log", "--first-parent", "--reverse", "--format=commit %H", "--raw", "-z",
             "--no-renames", "--no-abbrev", "--root", head,
-        )
-        for line in log.splitlines():
-            if line.startswith("commit "):
-                current = line.split()[1]
-                changes[current] = []
-            elif line.startswith(":") and current is not None:
-                meta, path = line.split("\t", 1)
-                changes[current].append((meta.split()[-1], path))
-        previous = b""
-        contents = self.git.blobs([f"{c}:{LEDGER_PATH}" for c in commits])
-        for index, (commit, data) in enumerate(zip(commits, contents, strict=True)):
-            for status, path in changes.get(commit, []):
+        ).decode(errors="replace")
+        tokens = iter(log.split("\0"))
+        for token in tokens:
+            token = token.lstrip("\n")
+            if token.startswith("commit "):
+                current = token.split()[1]
+            elif token.startswith(":") and current is not None:
+                meta = token.split()
+                changes[current].append((meta[4], next(tokens, ""), meta[3]))
+        ledger_blobs = []
+        for index, commit in enumerate(commits):
+            blob = None
+            for status, path, oid in changes[commit]:
                 if path == LEDGER_PATH and status == ("A" if index == 0 else "M"):
+                    blob = oid
                     continue
                 if _RETURNS_FILE.fullmatch(path) and status == "A":
                     continue
                 raise VerificationError(
-                    f"ledger commit {commit} changes {path} ({status}); the ledger branch "
+                    f"ledger commit {commit} changes {path!r} ({status}); the ledger branch "
                     "only appends"
                 )
+            if blob is None:
+                raise VerificationError(f"ledger commit {commit} appends no entry")
+            ledger_blobs.append(blob)
+        previous = b""
+        for commit, data in zip(commits, self.git.objects(ledger_blobs), strict=True):
             if data is None or len(data) <= len(previous) or not data.startswith(previous):
                 raise VerificationError(
                     f"ledger commit {commit} does not append to the ledger before it: an "
@@ -394,30 +498,30 @@ class GitLedger:
             previous = data
         return commits
 
-    def _remote_refs(self, pattern: str) -> dict[str, str]:
-        """``refs/tags/...`` names on the remote matching ``pattern``, each with the
-        commit it points to (annotated tags peeled)."""
+    def _remote_refs(self, prefix: str) -> dict[str, str]:
+        """``refs/tags/<prefix>...`` on the remote, each with the commit it points to
+        (annotated tags peeled)."""
         out: dict[str, str] = {}
-        for line in self.git.text("ls-remote", "--tags", self.remote).splitlines():
+        for line in self.git.text("ls-remote", "--tags", "--", self.remote).splitlines():
             oid, name = line.split("\t")
             peeled = name.endswith("^{}")
             name = name.removesuffix("^{}")
-            if re.fullmatch(pattern, name.removeprefix("refs/tags/")) and (
-                peeled or name not in out
-            ):
+            if name.startswith(f"refs/tags/{prefix}") and (peeled or name not in out):
                 out[name] = oid
         return out
 
     def milestone_tags(self) -> dict[str, str]:
-        """``ledger-*`` tags on the remote, each with its tagged commit."""
-        found = self._remote_refs(MILESTONE_TAG.pattern)
+        """Every ``ledger-*`` tag on the remote, whatever its case (review L9), with
+        its tagged commit."""
+        found = self._remote_refs("ledger-")
         return {name.removeprefix("refs/tags/"): oid for name, oid in found.items()}
 
     def freeze_commit(self) -> str | None:
         return self.milestone_tags().get(FREEZE_TAG)
 
-    def verify(self, head: str | None = None) -> Verified:
+    def verify(self, head: str | None = None, *, need_genesis_tag: bool = True) -> Verified:
         """The anchored verification of the threat model's principle 1."""
+        self.check_repository()
         remote = self.fetch()
         head = self.local_head() if head is None else head
         if head is None:
@@ -425,6 +529,10 @@ class GitLedger:
                 raise VerificationError("there is no local ledger to verify; the remote has one")
             return Verified(LedgerSnapshot(()), None, None, {})
         snapshot = self.snapshot(head)
+        genesis = snapshot.genesis
+        if genesis is None:
+            raise VerificationError("the ledger has no genesis entry")
+        self.check_remote(genesis.body["remote"]["url"])
         data = snapshot.data
         if remote is None:
             raise VerificationError("the remote has no ledger ref; it was deleted or never pushed")
@@ -435,25 +543,41 @@ class GitLedger:
                 f"the remote ledger head {remote} (entry {sha256_hex(last)}) is not in the "
                 "local ledger: entries were removed or rewritten"
             )
+        tags, ignored = self._check_tags(head, data)
+        if need_genesis_tag and GENESIS_TAG not in tags:
+            raise VerificationError(
+                f"the remote has no {GENESIS_TAG} tag on a ledger commit; it anchors the "
+                "genesis entry and is written straight after it"
+            )
+        self.verify_history(head)
+        self.verify_preregistration_tag(snapshot)
+        registration = load_registration(self.git, genesis)
+        check_run_rules(snapshot.entries, registration)
+        return Verified(snapshot, head, remote, tags, ignored, registration)
+
+    def _check_tags(self, head: str, data: bytes) -> tuple[dict[str, str], dict[str, str]]:
         tags = self.milestone_tags()
         if tags:
             self.git.run(
-                "fetch", "--no-tags", "--quiet", self.remote,
+                "fetch", "--no-tags", "--quiet", "--", self.remote,
                 f"+refs/tags/ledger-*:{self.tag_namespace}/ledger-*",
             )
+        checked, ignored = {}, {}
         for name, commit in sorted(tags.items()):
+            tagged = self.git.blob(commit, LEDGER_PATH)
+            if tagged is None:
+                ignored[name] = commit  # not on a ledger commit: reported, not fatal (M6)
+                continue
             if not self.git.is_ancestor(commit, head):
                 raise VerificationError(
                     f"milestone tag {name} ({commit}) is not an ancestor of the ledger head"
                 )
-            tagged = self.git.blob(commit, LEDGER_PATH)
-            if tagged is None or not data.startswith(tagged):
+            if not data.startswith(tagged):
                 raise VerificationError(
                     f"the ledger at milestone tag {name} is not a prefix of the current ledger"
                 )
-        self.verify_history(head)
-        self.verify_preregistration_tag(snapshot)
-        return Verified(snapshot, head, remote, tags)
+            checked[name] = commit
+        return checked, ignored
 
     def verify_preregistration_tag(self, snapshot: LedgerSnapshot) -> None:
         """Flag a pre-registration tag that no longer points where the genesis entry
@@ -463,8 +587,10 @@ class GitLedger:
                 break
             tag = entry.body["preregistration"]["tag"]
             commit = entry.body["preregistration"]["commit"]
-            found = self._remote_refs(re.escape(tag)).get(f"refs/tags/{tag}")
-            local = self.git.try_text("rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}")
+            found = self._remote_refs(tag).get(f"refs/tags/{tag}")
+            local = self.git.try_text(
+                "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}"
+            )
             for where, actual in (("remote", found), ("local", local)):
                 if where == "remote" and actual is None:
                     raise VerificationError(f"the {where} has no tag {tag}, which genesis names")
@@ -476,19 +602,23 @@ class GitLedger:
 
     # --- milestones -----------------------------------------------------------------
 
-    def tag_milestone(self, name: str, message: str) -> str:
+    def tag_milestone(self, name: str, message: str, *, freeze: bool = False) -> str:
         """Mark the ledger head at a milestone with an annotated ``ledger-*`` tag on
         the remote, after full verification. Returns the tag object's id. The tag
         object is pushed straight to the remote, so a failed push leaves nothing
-        behind; an existing tag is never replaced (tags are immutable, D16)."""
+        behind; an existing tag is never replaced (tags are immutable, D16). The
+        freeze tag is refused here unless ``freeze`` is set, which only
+        ``gate.freeze`` does, after its completeness check (review M6)."""
         if not MILESTONE_TAG.fullmatch(name):
-            raise ValueError(f"{name!r} is not a ledger-* milestone tag name")
+            raise ValueError(f"{name!r} is not a lower-case ledger-* milestone tag name")
+        if name == FREEZE_TAG and not freeze:
+            raise LedgerError(f"{FREEZE_TAG} is irreversible: use gate.freeze (or the freeze command)")
         with self._lock():
             head = self.local_head()
             remote = self.fetch()
             if head is None or head != remote:
                 raise LedgerOutOfStep(self._describe(head, remote))
-            self.verify(head)
+            self.verify(head, need_genesis_tag=name != GENESIS_TAG)
             local_tag = self.git.try_text("rev-parse", "--verify", "--quiet", f"refs/tags/{name}")
             if name in self.milestone_tags() or local_tag:
                 raise LedgerError(f"tag {name} already exists; milestone tags never move")
@@ -499,7 +629,7 @@ class GitLedger:
                 f"{message.strip()}\n"
             )
             tag_object = self.git.text("mktag", input=content.encode())
-            self.git.run("push", "--quiet", self.remote, f"{tag_object}:refs/tags/{name}")
+            self.git.run("push", "--quiet", "--", self.remote, f"{tag_object}:refs/tags/{name}")
             return tag_object
 
 
@@ -512,6 +642,20 @@ def _message(entry: Entry) -> str:
 
 
 # --- the registration through the genesis entry ----------------------------------------
+
+
+def registered_ids(registration: Registration) -> dict[str, str]:
+    """Every configuration id a strategy module is pinned for, with its hypothesis."""
+    out = {cid: h for h in HYPOTHESES for cid in registration.order[h]}
+    for cid, benchmark in registration.benchmarks.items():
+        out[cid] = benchmark["window"].rsplit(".", 1)[-1]
+    for cid, control in registration.controls.items():
+        out[cid] = registration.hypothesis_of(control["base"])
+    return out
+
+
+def inside(path: str, roots: Sequence[str]) -> bool:
+    return any(path == r or path.startswith(r.rstrip("/") + "/") for r in roots)
 
 
 def load_registration(git: Git, genesis: Entry) -> Registration:
@@ -531,6 +675,14 @@ def load_registration(git: Git, genesis: Entry) -> Registration:
     registration = Registration.from_bytes(contents[PREREGISTRATION_JSON])
     if genesis.body != {**genesis.body, **genesis_fields(registration)}:
         raise VerificationError("the genesis entry disagrees with the registration it pins")
+    ids = registered_ids(registration)
+    pins = genesis.body["strategies"]
+    if set(pins) != set(ids):
+        raise VerificationError("the genesis entry does not pin one strategy per registered id")
+    paths = genesis.body["tree_paths"]
+    for cid, pin in pins.items():
+        if not inside(pin["path"], paths[ids[cid]]):
+            raise VerificationError(f"{cid}'s strategy is outside {ids[cid]}'s tree paths")
     return registration
 
 
@@ -558,32 +710,70 @@ def period_constants() -> dict:
     }
 
 
+def check_key_record(data: bytes) -> None:
+    """The holdout key record must be scrypt at or above T25's floor (review L3).
+    G1.6 writes the record; this is the contract genesis holds it to."""
+    try:
+        record = loads_strict(data)
+    except CanonicalError as exc:
+        raise LedgerError(f"the key record is not JSON: {exc}") from None
+    floor = KEY_RECORD_FLOOR
+    salt = record.get("salt") if isinstance(record, dict) else None
+    if (
+        not isinstance(record, dict)
+        or record.get("kdf") != floor["kdf"]
+        or not isinstance(record.get("n"), int) or record["n"] < floor["n"]
+        or record.get("r") != floor["r"] or record.get("p") != floor["p"]
+        or not isinstance(salt, str) or not re.fullmatch(r"[0-9a-f]+", salt)
+        or len(salt) < 2 * floor["salt_bytes"]
+    ):
+        raise LedgerError(
+            "the key record must be scrypt with n of at least 2^17, r 8, p 1 and a salt of at "
+            "least 16 bytes in hex (threat model T25)"
+        )
+
+
 def write_genesis(
     ledger: GitLedger,
     *,
     tree_paths: Mapping[str, Sequence[str]],
+    strategies: Mapping[str, Mapping[str, str]],
     key_record: tuple[str, str],
     tag: str = PREREGISTRATION_TAG,
+    remote_url: str | None = None,
 ) -> Entry:
     """Append a genesis entry pinning the pre-registration tagged ``tag`` on the
-    remote. Refused once any entry of another type exists (section 16).
+    remote, then tag it ``ledger-genesis``. Refused once any entry of another type
+    exists (section 16).
 
-    ``key_record`` is the (commit, path) of G1.6's holdout key record, which the
-    genesis entry pins (section 11, item 4 of PREREGISTRATION.md). ``tree_paths``
-    lists the harness paths and each hypothesis's strategy paths whose git trees
-    every run records (section 9, run rule 4).
+    ``remote_url`` is the canonical remote every later run must use (default: the
+    remote's resolved URL now). ``key_record`` is the (commit, path) of G1.6's holdout
+    key record, on the remote's main (section 11, item 4). ``tree_paths`` lists the
+    harness paths and each hypothesis's strategy paths whose git trees every run
+    records (run rule 4); they must exist on main and must not overlap, so the
+    harness paths exclude the strategies. ``strategies`` pins, for every registered
+    configuration, benchmark and control, the module path and function that runs it,
+    inside its hypothesis's paths (review H2).
     """
-    found = ledger._remote_refs(re.escape(tag)).get(f"refs/tags/{tag}")
+    git = ledger.git
+    ledger.check_repository()
+    pinned = remote_url or git.text("ls-remote", "--get-url", ledger.remote)
+    found = ledger._remote_refs(tag).get(f"refs/tags/{tag}")
     if found is None:
         raise LedgerError(f"the remote has no tag {tag}")
-    ledger.git.run("fetch", "--no-tags", "--quiet", ledger.remote, f"refs/tags/{tag}")
+    git.run("fetch", "--no-tags", "--quiet", "--", ledger.remote, f"refs/tags/{tag}")
+    git.run(
+        "fetch", "--no-tags", "--quiet", "--", ledger.remote,
+        f"+refs/heads/{CODE_BRANCH}:refs/remotes/{ledger.remote}/{CODE_BRANCH}",
+    )
+    main = git.text("rev-parse", f"refs/remotes/{ledger.remote}/{CODE_BRANCH}")
     files = {}
     for path in PREREGISTRATION_FILES:
-        data = ledger.git.blob(found, path)
+        data = git.blob(found, path)
         if data is None:
             raise LedgerError(f"{path} is not in {tag} ({found})")
         files[path] = sha256_hex(data)
-    registration = Registration.from_bytes(ledger.git.blob(found, PREREGISTRATION_JSON))
+    registration = Registration.from_bytes(git.blob(found, PREREGISTRATION_JSON))
     periods = period_constants()
     registered = registration.doc["periods"]
     if (
@@ -593,15 +783,43 @@ def write_genesis(
     ):
         raise LedgerError("norse_research.periods disagrees with the registration")
     key_commit, key_path = key_record
-    key_data = ledger.git.blob(key_commit, key_path)
+    key_commit = git.text("rev-parse", f"{key_commit}^{{commit}}")
+    if not git.is_ancestor(key_commit, main):
+        raise LedgerError(f"the key record's commit {key_commit} is not on the remote's main")
+    key_data = git.blob(key_commit, key_path)
     if key_data is None:
         raise LedgerError(f"no key record at {key_commit}:{key_path}")
+    check_key_record(key_data)
     if set(tree_paths) != {"harness", *HYPOTHESES}:
         raise LedgerError("tree_paths lists the harness paths and each hypothesis's paths")
+    groups = {g: list(p) for g, p in tree_paths.items()}
+    for group, listed in groups.items():
+        for path in listed:
+            if git.try_text("rev-parse", "--verify", "--quiet", f"{main}:{path}") is None:
+                raise LedgerError(f"tree path {path} ({group}) is not on the remote's main")
+            for other, other_paths in groups.items():
+                overlap = [o for o in other_paths if inside(path, [o]) or inside(o, [path])]
+                if other != group and overlap:
+                    raise LedgerError(f"tree path {path} ({group}) overlaps {other}'s {overlap}")
+    ids = registered_ids(registration)
+    if set(strategies) != set(ids):
+        raise LedgerError(f"strategies must pin exactly {sorted(ids)}")
+    pins = {}
+    for cid, pin in strategies.items():
+        path, function = pin["path"], pin["function"]
+        if not inside(path, groups[ids[cid]]):
+            raise LedgerError(f"{cid}'s strategy {path} is outside {ids[cid]}'s tree paths")
+        if git.blob(main, path) is None:
+            raise LedgerError(f"{cid}'s strategy {path} is not on the remote's main")
+        pins[cid] = {"path": path, "function": function}
     current = ledger.snapshot(ledger.local_head())
     if any(e.type != GENESIS for e in current.entries):
         raise LedgerError(
             "the registration is closed: an entry follows the genesis entry (section 16)"
+        )
+    if not current.entries and GENESIS_TAG in ledger.milestone_tags():
+        raise LedgerError(
+            f"{GENESIS_TAG} already anchors a ledger on the remote; a new one cannot start"
         )
     body = {
         "type": GENESIS,
@@ -609,14 +827,15 @@ def write_genesis(
         "preregistration": {"tag": tag, "commit": found, "files": files},
         **genesis_fields(registration),
         "periods": periods,
-        "tree_paths": {k: list(v) for k, v in tree_paths.items()},
-        "key_record": {
-            "commit": ledger.git.text("rev-parse", f"{key_commit}^{{commit}}"),
-            "path": key_path,
-            "sha256": sha256_hex(key_data),
-        },
+        "tree_paths": groups,
+        "key_record": {"commit": key_commit, "path": key_path, "sha256": sha256_hex(key_data)},
+        "remote": {"url": pinned, "branch": LEDGER_BRANCH, "code_branch": CODE_BRANCH},
+        "strategies": dict(sorted(pins.items())),
     }
-    return ledger.append(body)
+    entry = ledger.append(body)
+    if GENESIS_TAG not in ledger.milestone_tags():
+        ledger.tag_milestone(GENESIS_TAG, f"genesis entry {entry.hash}")
+    return entry
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -624,8 +843,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     ``verify`` runs the anchored verification and prints what it checked; ``sync``
     fast-forwards the local ledger to the remote's; ``tag`` marks the ledger head at
-    a milestone; ``genesis`` writes the genesis entry, a separate and deliberate step
-    taken once G1.6 has committed the holdout key record.
+    a milestone (the freeze has its own command, in ``norse_research.gate``);
+    ``genesis`` writes the genesis entry and its ``ledger-genesis`` tag, a separate and
+    deliberate step taken once G1.6 has committed the holdout key record. Never run
+    ``git push --tags`` in this repository: a stray ``ledger-*`` tag is permanent.
     """
     parser = argparse.ArgumentParser(description=main.__doc__.split("\n\n")[0])
     parser.add_argument("--repo", type=Path, default=REPO_ROOT)
@@ -639,6 +860,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     genesis = commands.add_parser("genesis")
     genesis.add_argument("--tag", default=PREREGISTRATION_TAG)
     genesis.add_argument("--key-record", required=True, help="COMMIT:PATH of G1.6's key record")
+    genesis.add_argument("--strategies", required=True, type=Path,
+                         help="a JSON file mapping every registered id to {path, function}")
     for group in ("harness", *HYPOTHESES):
         genesis.add_argument(f"--{group.lower()}", nargs="+", required=True, metavar="PATH")
     args = parser.parse_args(argv)
@@ -652,6 +875,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"{sum(1 for e in snapshot.opens(TRIAL))} trial entries; milestone tags: "
             f"{', '.join(sorted(verified.tags)) or 'none'}"
         )
+        if verified.ignored_tags:
+            print(f"ignored ledger-* tags on commits holding no ledger: {verified.ignored_tags}")
     elif args.command == "sync":
         print(f"local ledger at {ledger.sync()}")
     elif args.command == "tag":
@@ -659,8 +884,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         commit, _, path = args.key_record.partition(":")
         paths = {"harness": args.harness, **{h: getattr(args, h.lower()) for h in HYPOTHESES}}
-        entry = write_genesis(ledger, tree_paths=paths, key_record=(commit, path), tag=args.tag)
-        print(f"genesis entry {entry.seq} written: {entry.hash}")
+        strategies = json.loads(args.strategies.read_text())
+        entry = write_genesis(
+            ledger, tree_paths=paths, strategies=strategies, key_record=(commit, path),
+            tag=args.tag,
+        )
+        print(f"genesis entry {entry.seq} written and tagged {GENESIS_TAG}: {entry.hash}")
     return 0
 
 

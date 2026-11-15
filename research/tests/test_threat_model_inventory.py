@@ -5,14 +5,18 @@ tests G1.5 and G1.6 implement. For G1.5, which this package delivers, and for ev
 goal docs/ITERATION_GOALS.md marks done, each named test must exist, be collected by
 pytest, and be neither skipped nor expected to fail. The two sensitivity tests that
 section 15, item 11 of docs/PREREGISTRATION.md assigns to G1.5 are held to the same
-rule. A pull request that removes a test can also edit the table; review sees both.
+rule, and each must have run and passed, so a skip by a fixture or a hook, or a
+deselection, fails it too. A pull request that removes a test can also edit the table;
+review sees both.
 """
 
 import ast
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+from xml.etree import ElementTree
 
 TESTS = Path(__file__).resolve().parent
 RESEARCH = TESTS.parent
@@ -97,6 +101,39 @@ def skipped_or_expected_to_fail() -> set[str]:
     return found
 
 
+def outcomes_of(names: set[str]) -> dict[str, set[str]]:
+    """How each named test fared: from this session when it ran here (the full suite,
+    as CI runs it), otherwise from a separate run of just those tests. A skip by a
+    fixture, a hook or a deselection shows here, where no parse of the source sees it
+    (review L6)."""
+    from conftest import OUTCOMES
+
+    found = {n: OUTCOMES[n] for n in names if n in OUTCOMES}
+    missing = set(names) - set(found)
+    if missing:
+        found.update(run_and_report(TESTS, RESEARCH, missing))
+    return found
+
+
+def run_and_report(tests: Path, rootdir: Path, names: set[str]) -> dict[str, set[str]]:
+    """Run the named tests in a separate pytest and read each outcome from its report."""
+    found: dict[str, set[str]] = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        report = Path(tmp) / "report.xml"
+        subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+             "--rootdir", str(rootdir), f"--junitxml={report}", "-k", " or ".join(sorted(names)),
+             str(tests)],
+            capture_output=True, text=True, check=False, cwd=rootdir,
+        )
+        for case in ElementTree.parse(report).getroot().iter("testcase"):
+            name = case.get("name", "").split("[", 1)[0]
+            if name in names:
+                kinds = {child.tag for child in case} & {"skipped", "failure", "error"}
+                found.setdefault(name, set()).add(sorted(kinds)[0] if kinds else "passed")
+    return found
+
+
 def test_every_threat_model_test_exists_and_is_not_skipped():
     tables = inventory()
     assert len(tables.get("G1.5", ())) >= 50 and len(tables.get("G1.6", ())) >= 20
@@ -109,6 +146,10 @@ def test_every_threat_model_test_exists_and_is_not_skipped():
     assert not missing, f"named in the threat model but not collected: {missing}"
     skipped = sorted(required & skipped_or_expected_to_fail())
     assert not skipped, f"skipped or expected to fail: {skipped}"
+    others = required - {"test_every_threat_model_test_exists_and_is_not_skipped"}
+    results = outcomes_of(others)
+    not_passed = sorted(n for n in others if results.get(n) != {"passed"})
+    assert not not_passed, f"did not run and pass: {[(n, results.get(n)) for n in not_passed]}"
 
 
 def test_the_inventory_check_sees_a_skip():
@@ -126,3 +167,20 @@ def test_the_inventory_check_sees_a_skip():
         and (any(_skips(d) for d in n.decorator_list) or any(_skips(s) for s in n.body))
     }
     assert flagged == {"test_a", "test_b", "test_c"}
+
+
+def test_the_inventory_check_sees_a_skip_by_a_fixture(tmp_path):
+    suite = tmp_path / "suite"
+    suite.mkdir()
+    (suite / "test_example.py").write_text(
+        "import pytest\n\n\n@pytest.fixture\ndef unavailable():\n    pytest.skip('later')\n\n\n"
+        "def test_skipped_by_a_fixture(unavailable):\n    pass\n\n\n"
+        "def test_that_fails():\n    raise AssertionError\n\n\n"
+        "def test_that_passes():\n    pass\n"
+    )
+    names = {"test_skipped_by_a_fixture", "test_that_fails", "test_that_passes"}
+    assert run_and_report(suite, tmp_path, names) == {
+        "test_skipped_by_a_fixture": {"skipped"},
+        "test_that_fails": {"failure"},
+        "test_that_passes": {"passed"},
+    }

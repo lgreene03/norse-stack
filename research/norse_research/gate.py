@@ -34,9 +34,12 @@ rule 4). Once the freeze tag exists, the gate takes only the ledger at that tag
 
 from __future__ import annotations
 
+import argparse
 import math
+import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 from .block_bootstrap import BootstrapResult, block_bootstrap
 from .cscv import GATE_BLOCKS, CSCVResult, cscv
@@ -52,6 +55,7 @@ from .sharpe import (
     moments,
     null_sharpe_variance,
 )
+from .store import REPO_ROOT
 
 # Section 10: the minimum track record length's confidence (z = 1.6448536...), and the
 # reported block-bootstrap intervals, every argument explicit.
@@ -66,12 +70,41 @@ class GateRefused(LedgerError, PermissionError):
     """The gate was handed a ledger it must not compute on."""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class RegisteredLedger:
-    """A verified ledger with the registration its genesis entry pins."""
+    """A verified ledger with the registration its genesis entry pins, the ledger
+    commit it was read at and whether that commit is the freeze tag's.
+
+    Only ``gate_ledger`` issues one the gate computes on; every public function
+    refuses any other, including a copy with a shorter ledger (security review M8)."""
 
     snapshot: LedgerSnapshot
     registration: Registration
+    commit: str | None
+    frozen: bool
+
+
+_ISSUED: weakref.WeakSet = weakref.WeakSet()
+
+
+def _issue(
+    snapshot: LedgerSnapshot, registration: Registration, commit: str | None, frozen: bool
+) -> RegisteredLedger:
+    """The gate's only constructor. ``gate_ledger`` calls it after verification;
+    tests call it for ledgers built in memory (and an AST test checks no other
+    module of the package does)."""
+    ledger = RegisteredLedger(snapshot, registration, commit, frozen)
+    _ISSUED.add(ledger)
+    return ledger
+
+
+def _require(ledger: RegisteredLedger) -> RegisteredLedger:
+    if ledger not in _ISSUED:
+        raise GateRefused(
+            "the gate computes only on a ledger gate_ledger issued (verified, and the frozen "
+            "one once the freeze tag exists)"
+        )
+    return ledger
 
 
 @dataclass(frozen=True)
@@ -86,7 +119,7 @@ class SelectableRun:
 
 def trial_count(ledger: RegisteredLedger) -> int:
     """N: the ledger's trial entries, reruns and unfinished runs included."""
-    return ledger.snapshot.trial_count()
+    return _require(ledger).snapshot.trial_count()
 
 
 def daily_sharpe(returns: Sequence[float]) -> float:
@@ -99,7 +132,17 @@ def daily_sharpe(returns: Sequence[float]) -> float:
         return 0.0
 
 
+_SELECTABLE: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
 def selectable_runs(ledger: RegisteredLedger) -> dict[str, tuple[SelectableRun, ...]]:
+    cached = _SELECTABLE.get(_require(ledger))
+    if cached is None:
+        cached = _SELECTABLE[ledger] = _selectable_runs(ledger)
+    return dict(cached)
+
+
+def _selectable_runs(ledger: RegisteredLedger) -> dict[str, tuple[SelectableRun, ...]]:
     snapshot, registration = ledger.snapshot, ledger.registration
     genesis = snapshot.genesis
     if genesis is None:
@@ -139,6 +182,8 @@ def trial_sharpe_variance(ledger: RegisteredLedger, n_obs: int) -> tuple[float, 
 
 def deflated_sharpe_of(ledger: RegisteredLedger, run: SelectableRun) -> DeflatedSharpe:
     """DEV-1: the deflated Sharpe ratio of a selectable run's daily net returns."""
+    if run not in selectable_runs(ledger).get(run.hypothesis, ()):
+        raise GateRefused(f"{run.configuration_id}'s run is not a selectable run of this ledger")
     n_trials = trial_count(ledger)
     n_obs = len(run.returns)
     variance, source = trial_sharpe_variance(ledger, n_obs)
@@ -185,7 +230,7 @@ def candidates(ledger: RegisteredLedger) -> dict[str, SelectableRun | None]:
 
 def probability_of_backtest_overfitting(ledger: RegisteredLedger, hypothesis: str) -> CSCVResult:
     """DEV-3: CSCV PBO over the hypothesis's selectable runs, in registered order."""
-    columns = [list(r.returns) for r in selectable_runs(ledger)[hypothesis]]
+    columns = [list(r.returns) for r in selectable_runs(_require(ledger))[hypothesis]]
     return cscv(columns, blocks=GATE_BLOCKS)
 
 
@@ -201,8 +246,8 @@ def bootstrap_interval(run: SelectableRun) -> BootstrapResult:
 
 
 def require_frozen(given: LedgerSnapshot, frozen: LedgerSnapshot) -> LedgerSnapshot:
-    """Once the freeze tag exists the gate takes the frozen ledger and nothing else:
-    not a prefix of it, not a longer one, not another (T19)."""
+    """The gate takes the ledger it verified and nothing else: not a prefix of it, not
+    a longer one, not another (T19)."""
     if given.data != frozen.data:
         raise GateRefused(
             f"the gate takes only the frozen ledger (head {frozen.head_hash}); this ledger "
@@ -214,14 +259,58 @@ def require_frozen(given: LedgerSnapshot, frozen: LedgerSnapshot) -> LedgerSnaps
 
 def gate_ledger(git_ledger: GitLedger, given: LedgerSnapshot | None = None) -> RegisteredLedger:
     """The ledger the gate computes on: the one at the freeze tag once it exists
-    (anchored and verified), the current verified ledger before it (provisional)."""
+    (anchored and verified), the current verified ledger before it (provisional,
+    binding nothing). A ``given`` ledger that is not exactly that one is refused."""
     verified = git_ledger.verify()
     freeze = verified.tags.get(FREEZE_TAG)
-    if freeze is None:
-        snapshot = verified.snapshot if given is None else given
-    else:
-        frozen = git_ledger.snapshot(freeze)
-        snapshot = frozen if given is None else require_frozen(given, frozen)
+    commit = verified.head if freeze is None else freeze
+    snapshot = verified.snapshot if freeze is None else git_ledger.snapshot(freeze)
+    if given is not None:
+        require_frozen(given, snapshot)
     if snapshot.genesis is None:
         raise GateRefused("the ledger has no genesis entry")
-    return RegisteredLedger(snapshot, load_registration(git_ledger.git, snapshot.genesis))
+    registration = load_registration(git_ledger.git, snapshot.genesis)
+    return _issue(snapshot, registration, commit, freeze is not None)
+
+
+def missing_selectable_runs(ledger: RegisteredLedger) -> list[str]:
+    """Registered configurations without a selectable run, in registered order."""
+    runs = selectable_runs(ledger)
+    have = {r.configuration_id for found in runs.values() for r in found}
+    return [c for h in HYPOTHESES for c in ledger.registration.order[h] if c not in have]
+
+
+def freeze(git_ledger: GitLedger, message: str, *, allow_incomplete: bool = False) -> str:
+    """Tag the ledger head ``ledger-freeze``, which is irreversible (G2.7). Refused
+    while a registered configuration lacks a selectable run, unless the caller
+    states that the freeze leaves it unrun (review M6)."""
+    ledger = gate_ledger(git_ledger)
+    if ledger.frozen:
+        raise GateRefused("the ledger is already frozen")
+    missing = missing_selectable_runs(ledger)
+    if missing and not allow_incomplete:
+        raise GateRefused(
+            f"{len(missing)} registered configurations have no selectable run ({missing}); "
+            "freezing now leaves them unrun, so it needs allow_incomplete"
+        )
+    return git_ledger.tag_milestone(FREEZE_TAG, message, freeze=True)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """``python -m norse_research.gate freeze --message M [--allow-incomplete]``."""
+    parser = argparse.ArgumentParser(description=main.__doc__)
+    parser.add_argument("--repo", type=Path, default=REPO_ROOT)
+    parser.add_argument("--remote", default="origin")
+    commands = parser.add_subparsers(dest="command", required=True)
+    frozen = commands.add_parser("freeze")
+    frozen.add_argument("--message", required=True)
+    frozen.add_argument("--allow-incomplete", action="store_true")
+    args = parser.parse_args(argv)
+    tag = freeze(GitLedger(args.repo, args.remote), args.message,
+                 allow_incomplete=args.allow_incomplete)
+    print(f"{FREEZE_TAG}: tag object {tag}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

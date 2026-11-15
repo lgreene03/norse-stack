@@ -4,11 +4,12 @@ Section 10 of docs/PREREGISTRATION.md and its section 15, items 1 to 4; threat m
 T19. Synthetic returns only.
 """
 
+import dataclasses
 import inspect
 import statistics
 
 import pytest
-from ledger_fixtures import Book, lcg_returns
+from ledger_fixtures import Book, issued, lcg_returns
 from norse_research import gate, harness
 from norse_research.cscv import cscv
 from norse_research.gate import GateRefused, RegisteredLedger
@@ -38,7 +39,7 @@ def full_family(book: Book, drifts=None) -> None:
 
 
 def registered(book: Book) -> RegisteredLedger:
-    return RegisteredLedger(book.snapshot(), book.registration)
+    return issued(book)
 
 
 def test_statistics_take_n_only_from_the_ledger():
@@ -195,12 +196,13 @@ def test_the_bootstrap_interval_passes_every_registered_argument(monkeypatch):
 
 
 def test_gate_refuses_a_ledger_that_is_not_the_frozen_head(world):
-    world_strategy = world.strategy()
     for cid in ("H1-01", "B-H1", "H1-02"):
-        harness.run(world.repo, world_strategy, {"configuration": cid}, store=world.store)
+        harness.run(world.repo, {"configuration": cid}, store=world.store)
     before_freeze = gate.gate_ledger(world.ledger)  # provisional, the current ledger
-    world.ledger.tag_milestone(FREEZE_TAG, "M2: the ledger freeze")
+    assert not before_freeze.frozen
+    gate.freeze(world.ledger, "M2: the ledger freeze", allow_incomplete=True)
     frozen = gate.gate_ledger(world.ledger)
+    assert frozen.frozen and frozen.commit == world.ledger.milestone_tags()[FREEZE_TAG]
     assert frozen.snapshot.data == before_freeze.snapshot.data
     assert gate.trial_count(frozen) == 2
     entries = frozen.snapshot.entries
@@ -212,3 +214,34 @@ def test_gate_refuses_a_ledger_that_is_not_the_frozen_head(world):
     with pytest.raises(GateRefused, match="only the frozen ledger"):
         gate.gate_ledger(world.ledger, other.snapshot())
     assert gate.gate_ledger(world.ledger, frozen.snapshot).snapshot.data == frozen.snapshot.data
+
+
+def test_gate_statistics_refuse_a_ledger_the_gate_did_not_issue():
+    # After the freeze, a prefix built by hand would compute with a smaller N (M8).
+    book = Book()
+    full_family(book)
+    book.open("H1-01", rerun=FIX)
+    ledger = registered(book)
+    run = gate.selectable_runs(ledger)["H1"][0]
+    entries = ledger.snapshot.entries
+    prefix = LedgerSnapshot(entries[:-1], ledger.snapshot.series_files)
+    forged = [
+        RegisteredLedger(prefix, book.registration, None, True),
+        dataclasses.replace(ledger, snapshot=prefix),
+    ]
+    for candidate in forged:
+        for function in (gate.trial_count, gate.selectable_runs, gate.candidates,
+                         gate.missing_selectable_runs):
+            with pytest.raises(GateRefused, match="gate_ledger issued"):
+                function(candidate)
+        with pytest.raises(GateRefused):
+            gate.deflated_sharpe_of(candidate, run)
+        with pytest.raises(GateRefused):
+            gate.probability_of_backtest_overfitting(candidate, "H1")
+    assert gate.trial_count(ledger) == 15
+    # A run that is not one of the ledger's selectable runs is refused too.
+    other = Book()
+    other.run("H1-01", lcg_returns(5, days(other, "H1"), 0.01))
+    foreign = gate.selectable_runs(registered(other))["H1"][0]
+    with pytest.raises(GateRefused, match="not a selectable run"):
+        gate.deflated_sharpe_of(ledger, foreign)

@@ -2,23 +2,32 @@
 the ledger's tests (G1.5).
 
 Nothing here touches the real repository, its ledger or its tags: every test builds
-a bare "remote" and a clone under pytest's temporary directory. Returns are
-synthetic numbers from a fixed generator; no market data is read. The registration
-is the real docs/preregistration.json with one change, the development manifest's
-SHA-256, which names a small synthetic manifest instead.
+a bare "remote" and a clone under pytest's temporary directory, and the genesis entry
+pins that bare remote. The clone holds a committed copy of ``research/norse_research``,
+byte for byte the code under test, because the harness refuses to run code that is
+not the code at HEAD. Returns are synthetic numbers from a fixed generator; no market
+data is read. The registration is the real docs/preregistration.json with one change,
+the development manifest's SHA-256, which names a small synthetic manifest instead.
 """
 
 from __future__ import annotations
 
-import importlib.util
 import itertools
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+from norse_research import harness
 from norse_research.canonical import sha256_hex
-from norse_research.gitledger import GitLedger, genesis_fields, period_constants, write_genesis
+from norse_research.gitledger import (
+    GitLedger,
+    genesis_fields,
+    period_constants,
+    registered_ids,
+    write_genesis,
+)
 from norse_research.harness import Strategy
 from norse_research.ledger import (
     COMPLETED,
@@ -41,15 +50,21 @@ from synthetic_store import make_series
 
 RESEARCH = Path(__file__).resolve().parent.parent
 REPO = RESEARCH.parent
+PACKAGE = RESEARCH / "norse_research"
 REAL_PREREG_JSON = REPO / "docs" / "preregistration.json"
 REAL_PREREG_MD = REPO / "docs" / "PREREGISTRATION.md"
 MANIFEST = "research/manifests/binance-vision-development.json"
 KEY_RECORD = "research/keys/holdout-key-record.json"
-TREE_PATHS = {"harness": ["research/harness"], "H1": ["strategies/h1"], "H2": ["strategies/h2"]}
+KEY_RECORD_TEXT = json.dumps({
+    "kdf": "scrypt", "n": 2**17, "r": 8, "p": 1, "salt": "ab" * 16, "hash": "cd" * 32,
+    "synthetic": True,
+}) + "\n"
+TREE_PATHS = {"harness": ["research/norse_research"], "H1": ["strategies/h1"],
+              "H2": ["strategies/h2"]}
 
 _counter = itertools.count()
 
-# Every key any registered grid configuration holds, for a strategy that can run them all.
+# Every key any registered grid configuration holds.
 ALL_PARAMETERS = frozenset(
     k
     for h in ("H1", "H2")
@@ -63,6 +78,10 @@ STRATEGY_SOURCE = '''"""Synthetic strategies for the ledger tests: no market dat
 import dataclasses
 from datetime import date, timedelta
 
+CONFIGURATIONS = {configurations!r}
+PARAMETERS = {parameters!r}
+DEFAULTS = {defaults!r}
+MODE = ["steady"]
 CALLED = []
 SEEN_ENV = []
 TARGET = []
@@ -85,22 +104,18 @@ def steady(config, data):
     return out
 
 
-def partial(config, data):
-    return steady(config, data)[:100]
-
-
 def outside(config, data):
     return [("2026-01-01", 0.01)]
 
 
 def fails(config, data):
     CALLED.append(config["id"])
-    raise RuntimeError("synthetic failure")
+    raise RuntimeError("synthetic failure reading /Users/someone/secret/path.csv")
 
 
 def opens_file(config, data):
     CALLED.append(config["id"])
-    dataclasses.sys.modules["io"].open(__file__).read()
+    dataclasses.sys.modules["io"].open(TARGET[0] + ".read").read()
     return steady(config, data)
 
 
@@ -134,7 +149,26 @@ def loads(config, data):
                      datetime(2025, 12, 5, tzinfo=utc)).rows
     CALLED.append(len(rows))
     return steady(config, data)
+
+
+BEHAVIOURS = {{
+    "steady": steady, "outside": outside, "fails": fails, "opens_file": opens_file,
+    "writes_file": writes_file, "opens_socket": opens_socket, "records_env": records_env,
+    "exits": exits, "loads": loads,
+}}
+
+
+def run(config, data):
+    return BEHAVIOURS[MODE[0]](config, data)
 '''
+
+
+def strategy_source(configurations, defaults=None, parameters=ALL_PARAMETERS) -> str:
+    return STRATEGY_SOURCE.format(
+        configurations=sorted(configurations),
+        parameters=sorted(parameters | set(defaults or {})),
+        defaults=dict(sorted((defaults or {}).items())),
+    )
 
 
 def git(cwd: Path, *args: str, input: bytes | None = None) -> str:
@@ -152,12 +186,21 @@ def synthetic_registration_bytes(manifest_sha256: str) -> bytes:
     return (json.dumps(doc, indent=2) + "\n").encode()
 
 
-class World:
-    """A bare remote, a working clone with a committed registration, manifest,
-    key record and strategy module, ``prereg-v1`` on the remote, and (unless
-    ``genesis=False``) a genesis entry."""
+def pins_for(registration: Registration, paths: dict[str, str]) -> dict[str, dict]:
+    """One pinned module per registered id: each hypothesis's ids to its module."""
+    return {
+        cid: {"path": paths[h], "function": "run"}
+        for cid, h in sorted(registered_ids(registration).items())
+    }
 
-    def __init__(self, tmp: Path, genesis: bool = True) -> None:
+
+class World:
+    """A bare remote, a working clone with a committed copy of the package, a
+    registration, manifest, key record and two strategy modules, ``prereg-v1`` on the
+    remote, and (unless ``genesis=False``) a genesis entry and its ``ledger-genesis``
+    tag. ``configurations`` overrides which ids a strategy module says it implements."""
+
+    def __init__(self, tmp: Path, genesis: bool = True, configurations=None) -> None:
         self.tmp = tmp
         self.remote = tmp / "remote.git"
         self.repo = tmp / "work"
@@ -167,35 +210,47 @@ class World:
         series = [make_series(self.store, "spot/klines/XUSDT/1d", "2025-11", "2025-12")]
         manifest = dumps(build(self.store, DEVELOPMENT, series))
         self.manifest_sha256 = sha256_hex(manifest)
+        registration_bytes = synthetic_registration_bytes(self.manifest_sha256)
+        self.registration = Registration.from_bytes(registration_bytes)
+        ids = registered_ids(self.registration)
+        n = next(_counter)
+        self.paths = {"H1": f"strategies/h1/synthetic_h1_{n}.py",
+                      "H2": f"strategies/h2/synthetic_h2_{n}.py"}
         self.write(".gitignore", "data/\n*.py[cod]\n__pycache__/\n.env\n")
         self.write("docs/PREREGISTRATION.md", REAL_PREREG_MD.read_bytes())
-        self.write("docs/preregistration.json", synthetic_registration_bytes(self.manifest_sha256))
+        self.write("docs/preregistration.json", registration_bytes)
         self.write(MANIFEST, manifest)
-        self.write(KEY_RECORD, '{"kdf": "scrypt", "synthetic": true}\n')
-        self.module_name = f"synthetic_strategy_{next(_counter)}"
-        self.module_path = f"strategies/h1/{self.module_name}.py"
-        self.write(self.module_path, STRATEGY_SOURCE)
-        self.write("research/harness/README", "harness paths\n")
-        self.write("strategies/h2/README", "H2 strategy paths\n")
+        self.write(KEY_RECORD, KEY_RECORD_TEXT)
+        for source in sorted(PACKAGE.rglob("*.py")):
+            if "__pycache__" not in source.parts:
+                self.write(f"research/norse_research/{source.relative_to(PACKAGE).as_posix()}",
+                           source.read_bytes())
+        for h, path in self.paths.items():
+            implements = (configurations or {}).get(h, {c for c, k in ids.items() if k == h})
+            self.write(path, strategy_source(implements))
         self.commit("code, registration and manifest")
         self.push()
         git(self.repo, "tag", "-a", "prereg-v1", "-m", "synthetic registration")
         git(self.repo, "push", "--quiet", "origin", "refs/tags/prereg-v1")
         self.prereg_commit = git(self.repo, "rev-parse", "HEAD")
+        self.pins = pins_for(self.registration, self.paths)
         self.ledger = GitLedger(self.repo)
-        spec = importlib.util.spec_from_file_location(
-            self.module_name, self.repo / self.module_path
-        )
-        self.module = importlib.util.module_from_spec(spec)
-        sys.modules[self.module_name] = self.module
-        spec.loader.exec_module(self.module)
         if genesis:
             self.write_genesis()
 
-    def write_genesis(self) -> Entry:
-        return write_genesis(
-            self.ledger, tree_paths=TREE_PATHS, key_record=(self.prereg_commit, KEY_RECORD)
-        )
+    def write_genesis(self, **overrides) -> Entry:
+        arguments = {"tree_paths": TREE_PATHS, "strategies": self.pins,
+                     "key_record": (self.prereg_commit, KEY_RECORD), **overrides}
+        return write_genesis(self.ledger, **arguments)
+
+    def module(self, h: str = "H1"):
+        """The strategy module the harness runs for hypothesis ``h``, as at HEAD."""
+        return harness.load_strategy_module(self.repo, self.paths[h])
+
+    def mode(self, behaviour: str, h: str = "H1"):
+        module = self.module(h)
+        module.MODE[:] = [behaviour]
+        return module
 
     def write(self, rel: str, content: str | bytes) -> Path:
         path = self.repo / rel
@@ -213,14 +268,6 @@ class World:
     def push(self) -> None:
         git(self.repo, "push", "--quiet", "origin", "HEAD:refs/heads/main")
 
-    def strategy(self, function: str = "steady", parameters=ALL_PARAMETERS, defaults=None):
-        return Strategy(
-            module=self.module_name,
-            run=getattr(self.module, function),
-            parameters=frozenset(parameters),
-            defaults=dict(defaults or {}),
-        )
-
     def clone(self, name: str) -> GitLedger:
         path = self.tmp / name
         git(self.tmp, "clone", "--quiet", str(self.remote), str(path))
@@ -236,7 +283,14 @@ class World:
         ).stdout
 
     def close(self) -> None:
-        sys.modules.pop(self.module_name, None)
+        for name, module in list(sys.modules.items()):
+            location = getattr(module, "__file__", None)
+            if isinstance(location, str) and location.startswith(str(self.tmp)):
+                sys.modules.pop(name, None)
+
+
+def remove_tree(path: Path) -> None:
+    shutil.rmtree(path, ignore_errors=True)
 
 
 # --- a ledger built in memory, for the pure tests --------------------------------------
@@ -268,6 +322,9 @@ class Book:
             "periods": period_constants(),
             "tree_paths": self.tree_paths,
             "key_record": {"commit": "a" * 40, "path": KEY_RECORD, "sha256": "f" * 64},
+            "remote": {"url": "/synthetic/remote.git", "branch": "ledger", "code_branch": "main"},
+            "strategies": pins_for(self.registration, {"H1": "strategies/h1/s.py",
+                                                       "H2": "strategies/h2/s.py"}),
         }
 
     def add(self, body: dict, time: str = "2026-11-20T00:00:00Z") -> Entry:
@@ -312,6 +369,13 @@ class Book:
 
     def snapshot(self) -> LedgerSnapshot:
         return LedgerSnapshot.from_bytes(self.data, self.files)
+
+
+def issued(book: Book, frozen: bool = False):
+    """The gate's ledger for an in-memory book, issued as gate_ledger would."""
+    from norse_research import gate
+
+    return gate._issue(book.snapshot(), book.registration, None, frozen)
 
 
 def open_body(registration: Registration, cid: str, *, seed=None, cost=None, rerun=None,

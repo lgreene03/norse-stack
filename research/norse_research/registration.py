@@ -170,8 +170,10 @@ class Registration:
     def resolve(self, request: Mapping[str, Any], strategy) -> Resolved:
         """Resolve a run request with the strategy that will run it.
 
-        ``strategy`` supplies ``module`` (its dotted name), ``parameters`` (the
-        configuration keys it reads) and ``defaults`` (its defaults in code).
+        ``strategy`` supplies ``module`` (the pinned path and function that runs it),
+        ``parameters`` (the configuration keys it reads) and ``defaults`` (its defaults
+        in code). The harness builds it from the strategy module committed at HEAD,
+        never from the caller (security review M4).
         """
         unknown = set(request) - REQUEST_KEYS
         if unknown:
@@ -229,8 +231,10 @@ class Registration:
         else:
             raise RunNotRegistered(f"{cid} is not a registered configuration")
 
-        if kind in (BENCHMARK, CONTROL, SENSITIVITY) and (rerun or reserve_reason):
-            raise RunNotRegistered("only a trial carries a rerun record or a reserve reason")
+        if kind == SENSITIVITY and rerun is not None:
+            raise RunNotRegistered("a sensitivity run carries no rerun record")
+        if kind != TRIAL and reserve_reason is not None:
+            raise RunNotRegistered("only a trial carries a reserve reason")
         if rerun is not None:
             rerun = self._rerun(rerun)
         if reserve_reason is not None and (

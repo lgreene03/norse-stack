@@ -38,17 +38,41 @@ def hermetic_git(tmp_path_factory):
         yield
 
 
+def clear_overrides(monkeypatch) -> None:
+    """Remove every variable the harness refuses (NORSE_*, RISK_*, PYTHON* overrides and
+    GIT_* outside its allowlist) that the caller's shell may hold."""
+    from norse_research.harness import ENV_ALLOWED, ENV_REFUSED
+
+    for key in list(os.environ):
+        if ENV_REFUSED.match(key) and key not in ENV_ALLOWED:
+            monkeypatch.delenv(key)
+
+
 @pytest.fixture
 def world(tmp_path, monkeypatch):
     """A temporary bare remote and clone holding a synthetic registration, with a
-    genesis entry (tests/ledger_fixtures.py). The harness refuses NORSE_* and RISK_*
-    overrides, so none from the caller's shell reaches these tests."""
+    genesis entry (tests/ledger_fixtures.py), and none of the overrides the harness
+    refuses in the environment."""
     from ledger_fixtures import World
 
-    for key in list(os.environ):
-        if key.startswith(("NORSE_", "RISK_")):
-            monkeypatch.delenv(key)
+    clear_overrides(monkeypatch)
     built = World(tmp_path)
     yield built
     built.close()
     shutil.rmtree(tmp_path / "work", ignore_errors=True)
+
+
+# --- outcomes, for the threat model's inventory test (T28, review L6) -------------------
+
+OUTCOMES: dict[str, set[str]] = {}
+
+
+def pytest_runtest_logreport(report):
+    """Record each test function's outcome, whatever skipped it: a marker, a fixture or
+    a hook. A parametrised test passes only if every case passed."""
+    name = report.nodeid.rsplit("::", 1)[-1].split("[", 1)[0]
+    outcome = report.outcome
+    if hasattr(report, "wasxfail"):
+        outcome = "xfailed"
+    if report.when == "call" or outcome != "passed":
+        OUTCOMES.setdefault(name, set()).add(outcome)

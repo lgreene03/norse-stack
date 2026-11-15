@@ -5,10 +5,12 @@ applied, as canonical JSON with full SHA-256, so two different runs never look l
 one and one run never looks like two.
 """
 
+import inspect
 import json
 
 import pytest
-from ledger_fixtures import ALL_PARAMETERS, synthetic_registration_bytes
+from ledger_fixtures import ALL_PARAMETERS, strategy_source, synthetic_registration_bytes
+from norse_research import harness
 from norse_research.canonical import CanonicalError, dumps, loads_canonical, value_hash
 from norse_research.harness import Strategy
 from norse_research.registration import Registration, RunNotRegistered
@@ -134,3 +136,28 @@ def test_unknown_configuration_keys_are_refused():
         reg.resolve({"configuration": "H1-01"}, strategy(ALL_PARAMETERS, {"hidden_knob": 1}))
     with pytest.raises(RunNotRegistered, match="names its registered configuration"):
         reg.resolve({"label": "no configuration"}, strategy())
+
+
+def test_parameters_and_defaults_come_from_the_committed_module(world):
+    """A changed default in code changes the hash through the harness itself, and only
+    once committed: no caller can add a parameter or a default (review M4)."""
+    signature = inspect.signature(harness.run).parameters
+    assert not {"strategy", "parameters", "defaults"} & set(signature)
+    first = harness.run(world.repo, {"configuration": "H1-01"}, store=world.store)
+    assert first.open_entry.body["configuration"]["parameters"].get("fill_reference") is None
+    implements = sorted(world.registration.order["H1"] + ["B-H1", "C-H1"])
+    world.write(world.paths["H1"], strategy_source(implements, {"fill_reference": "vwap_15m"}))
+    with pytest.raises(harness.RunRefused):
+        harness.run(world.repo, {"configuration": "H1-01", "rerun": None}, store=world.store)
+    fix = world.commit("a default in code")
+    world.push()
+    rerun = {"defect": "the fill reference was missing", "fix_commit": fix, "section": "5"}
+    second = harness.run(world.repo, {"configuration": "H1-01", "rerun": rerun},
+                         store=world.store)
+    parameters = second.open_entry.body["configuration"]["parameters"]
+    assert parameters["fill_reference"] == "vwap_15m"
+    assert second.open_entry.body["configuration_sha256"] != (
+        first.open_entry.body["configuration_sha256"]
+    )
+    with pytest.raises(RunNotRegistered, match="unknown request keys"):
+        harness.run(world.repo, {"configuration": "H1-01", "extra_lookback": 3})
