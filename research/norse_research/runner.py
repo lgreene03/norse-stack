@@ -7,12 +7,15 @@ strategy paths and the registered manifest. So the code that computes a result i
 committed code, executed from its source (never a cached ``.pyc``), in a process no
 caller has touched, and nothing it does survives the run.
 
-Before the strategy module is executed, an audit hook is installed with no way to
-turn it off: the process may read the interpreter's own library, the committed code
-it was given, and the dataset files the registered manifest pins, read-only, and
-nothing else; it may open no socket and start no process. The strategy's module-level
-code runs under the hook too. The result goes back over standard output as one JSON
-line, the last.
+Before the strategy module is executed, an audit hook is installed: the process may
+read the interpreter's own library, the committed code it was given, and the dataset
+files the registered manifest pins, read-only, and nothing else; it may open no socket
+and start no process. The strategy's module-level code runs under the hook too. The
+hook deters accidents, not intent: committed strategy code that reaches the hook's
+state through frames or the garbage collector can disable it (security review round 3,
+R1), so it is not a sandbox, and the control against a deliberate escape is that the
+code is committed, recorded in the ledger and reviewed (threat T13). The result goes
+back over standard output as one JSON line, the last.
 """
 
 from __future__ import annotations

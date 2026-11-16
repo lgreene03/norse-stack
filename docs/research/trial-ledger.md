@@ -62,9 +62,12 @@ entry is pushed, it runs the pinned function in a fresh `python -I -B -X
 pycache_prefix=<an empty folder>` process with an empty environment, built from the files
 committed at HEAD (the package, the hypothesis's strategy paths and the manifest), and
 reads the daily returns back over a pipe. In that process an audit hook, installed before
-the strategy's module-level code runs and with no way to turn it off, lets it read the
-interpreter's own library, the committed code it was given and the dataset files the
-registered manifest pins, read-only, and nothing else: no other file, socket or process.
+the strategy's module-level code runs, lets it read the interpreter's own library, the
+committed code it was given and the dataset files the registered manifest pins, read-only,
+and nothing else: no other file, socket or process. The hook deters accidents, not intent:
+the round 3 security review (R1) showed that committed strategy code reaching the hook's
+state through frames or the garbage collector can disable it, so the control against a
+deliberate escape remains that the code is committed, ledgered and reviewed (T13).
 Nothing survives from one run to the next.
 
 Before it writes anything the harness refuses on any of these:
