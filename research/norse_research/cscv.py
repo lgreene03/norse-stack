@@ -33,9 +33,12 @@ The performance statistic is the Sharpe ratio, the paper's own example. Because 
 and J-bar have the same length for every trial, the choice of divisor in the
 standard deviation cannot change a rank.
 
-Where the matrix comes from. G1.5 must build it from the ledger: one column per
-trial counted in N, each the trial's joined daily out-of-sample returns, aligned
-on the same dates. This module only computes.
+Where the matrix comes from. ``norse_research.gate.probability_of_backtest_overfitting``
+builds it from the ledger as section 10 of docs/PREREGISTRATION.md registers it: one
+column per selectable run of the hypothesis, in registered order, and one row per day
+of its window. It is not one column per trial counted in N: a failed entry has no
+returns and a rerun would duplicate a column (section 15, item 2). This module only
+computes.
 """
 
 from __future__ import annotations

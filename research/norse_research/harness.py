@@ -1,0 +1,617 @@
+"""The research harness: every run is ledgered before it computes (G1.5).
+
+``run(repo, request)`` is the only sanctioned way to compute an out-of-sample result.
+The caller names a registered configuration and nothing else. The strategy that runs
+it is the module and function the genesis entry pins for that configuration, as
+committed at HEAD; the harness never imports or executes it. Its declared
+``CONFIGURATIONS``, ``PARAMETERS`` and ``DEFAULTS`` are read by parsing the committed
+source, and after the open entry is pushed it runs in a fresh interpreter built from
+HEAD's bytes (``norse_research.runner``; security review N1, N4). In order, the
+harness:
+
+1. refuses environment overrides and a ``git`` inside the repository
+   (``norse_research.environment``; T15, M5, N10);
+2. refuses unless the local ledger head is the remote's (T3), then verifies the
+   ledger on the pinned remote: the chain, the append-only history, the remote head,
+   the anchors and milestone tags, the pre-registration tag, the run rules and every
+   entry against its registration (T4 to T6, T10, T24, H1, M2, N7);
+3. refuses without a genesis entry, and reads the registration from the commit it
+   pins, checked against its hashes (T24);
+4. refuses a dataset manifest that is not the file committed at HEAD, or whose
+   SHA-256 is not the registered one (T12, T14, T20);
+5. refuses a dirty tree: a changed tracked file, any untracked file, or a file git
+   is told to ignore changes to (T15, M1);
+6. refuses a HEAD that is not on the remote's main (T15, M9);
+7. parses the pinned module and every module under the hypothesis's strategy paths
+   against the allowlist, before anything executes; a strategy may import only the
+   allowlist and modules inside its own hypothesis's paths (T13, H2, L4, N4, N9, N12);
+8. refuses when any ``norse_research`` module this process runs, or any module
+   loaded from the repository, is not byte for byte the file at HEAD (T15, M3);
+9. resolves the request against the registration (T16 to T18) and applies the run
+   rules, a rerun's fix commit being new since the run it repeats (section 9; L8),
+   the freeze and the bounded sensitivity runs (section 15, item 11; N13);
+10. appends the open entry, commits it and pushes it, refusing if the ledger moved
+    since step 2 or the freeze was tagged meanwhile (M2, N2). If any of that fails the
+    run is refused and nothing of the strategy has run (T8);
+11. runs the strategy in the fresh interpreter, inside the open entry, with the
+    resolved configuration and a view that loads rows through the registered loader,
+    under an audit hook that lets it read only its own code, the interpreter's library
+    and the files the registered manifest pins (T13). A strategy that fails or exits
+    still gets a result entry, with local paths removed from its error (L11, N11); a
+    harness killed while the strategy runs leaves the open entry, which counts (T1, T8);
+12. appends the result entry with the committed daily return series and its hash
+    (T7).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import platform
+import re
+import statistics
+import subprocess
+import sys
+import tempfile
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from .canonical import sha256_hex
+from .environment import ENV_ALLOWED, ENV_REFUSED, check_environment, git_version
+from .gate import RegisteredLedger, candidates, gate_ledger
+from .gitledger import (
+    Git,
+    GitLedger,
+    period_constants,
+    registered_ids,
+    tree_digests,
+)
+from .ledger import (
+    CODE_BRANCH,
+    COMPLETED,
+    FAILED,
+    OPEN,
+    RESULT,
+    Entry,
+    LedgerError,
+    LedgerSnapshot,
+    consecutive_days,
+    encode_returns,
+    returns_path,
+)
+from .manifest import Manifest
+from .registration import (
+    CONTROL,
+    HOLDOUT,
+    SENSITIVITY,
+    Registration,
+    Resolved,
+    RunNotRegistered,
+    Window,
+)
+from .rules import run_rule_error
+from .runner import RESULT_PREFIX
+from .sources import (
+    ALLOWED_IMPORTS,
+    StrategySourceRefused,
+    check_strategy_sources,
+    disallowed_imports,
+    module_name_for,
+    strategy_declarations,
+)
+from .store import ArchiveStore
+
+DEVELOPMENT_MANIFEST = "research/manifests/binance-vision-development.json"
+PACKAGE_PATH = "research/norse_research"  # where this package lives in the repository
+PACKAGE_DIR = Path(__file__).resolve().parent
+STRATEGIES_DIR = PACKAGE_DIR / "strategies"
+STRATEGIES_PATH = f"{PACKAGE_PATH}/strategies"
+
+_PATHS = re.compile(r"(?<![\w.])/(?:[\w.@~+-]+/)*[\w.@~+-]+")
+_VOLUME = re.compile(r"/Volumes/[^/\n'\"]+")
+_RUNNER = (
+    "import sys; sys.path[:0] = [sys.argv[1], sys.argv[2]]; "
+    "from norse_research.runner import main; main()"
+)
+
+
+class RunRefused(LedgerError, PermissionError):
+    """The harness refuses the run. Nothing was computed."""
+
+
+class UnmanifestedData(RunRefused):
+    """The dataset manifest is not the registered, committed one (T12)."""
+
+
+class StrategyFailed(RuntimeError):
+    """The strategy process returned no result."""
+
+
+@dataclass(frozen=True)
+class Strategy:
+    """A strategy as the harness resolves it: its pinned ``path:function`` and the
+    ``PARAMETERS`` and ``DEFAULTS`` its committed module declares, which enter the
+    configuration hash (T16). The harness never holds its code."""
+
+    module: str
+    run: Any = None
+    parameters: frozenset[str] = frozenset()
+    defaults: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RunRecord:
+    status: str
+    open_entry: Entry
+    result_entry: Entry
+    error: str | None
+
+
+# --- the strategy's source, checked before anything runs (T13, N4, N9, N12) -------------
+
+
+def strategy_modules() -> list[tuple[str, Path]]:
+    """Every module of the ``norse_research.strategies`` package, by dotted name."""
+    out = []
+    for path in sorted(STRATEGIES_DIR.rglob("*.py")):
+        parts = path.relative_to(STRATEGIES_DIR.parent.parent).with_suffix("").parts
+        out.append((".".join(parts[:-1] if parts[-1] == "__init__" else parts), path))
+    return out
+
+
+def load_strategy(
+    git: Git, head: str, genesis: Entry, registration: Registration, cid: Any
+) -> Strategy:
+    """The strategy the genesis entry pins for configuration ``cid``, read from its
+    committed source and never executed here (review H2, N1, N4)."""
+    if cid == HOLDOUT:
+        raise RunNotRegistered("the holdout run needs the unseal, which G1.6 builds")
+    pins = genesis.body["strategies"]
+    if not isinstance(cid, str) or cid not in pins:
+        raise RunNotRegistered(f"{cid!r} is not a registered configuration")
+    pin = pins[cid]
+    paths = genesis.body["tree_paths"][registered_ids(registration)[cid]]
+    source = git.blob(head, pin["path"])
+    if source is None:
+        raise RunRefused(f"{pin['path']} is not committed at HEAD")
+    try:
+        check_strategy_sources(git, head, paths)
+        configurations, parameters, defaults = strategy_declarations(
+            source.decode(), pin["function"]
+        )
+    except StrategySourceRefused as exc:
+        raise RunRefused(str(exc)) from None
+    if cid not in configurations:
+        raise RunRefused(f"{pin['path']} does not implement {cid}, which genesis pins to it")
+    return Strategy(f"{pin['path']}:{pin['function']}", None, parameters, defaults)
+
+
+# --- running the strategy, in a fresh interpreter from HEAD's bytes (N1) ----------------
+
+
+def export(git: Git, commit: str, paths: Sequence[str], dest: Path) -> None:
+    """Write the regular files under ``paths`` at ``commit`` into ``dest``."""
+    listing = git.run("ls-tree", "-r", "-z", "--full-tree", commit, "--", *paths)
+    items = []
+    for item in listing.split(b"\0"):
+        if item:
+            meta, path = item.split(b"\t", 1)
+            mode, _, oid = meta.split()
+            if mode in (b"100644", b"100755"):
+                items.append((path.decode(), oid.decode()))
+    for (path, _), data in zip(items, git.objects([oid for _, oid in items]), strict=True):
+        target = dest / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+
+
+def _run_strategy(
+    git: Git,
+    head: str,
+    pin: Mapping[str, str],
+    code_paths: Sequence[str],
+    manifest: str,
+    configuration: Mapping,
+    entry: str,
+    store: ArchiveStore | None,
+) -> list:
+    """The strategy's daily returns, computed in a fresh ``python -I -B`` process with
+    an empty environment from the files committed at ``head``."""
+    with tempfile.TemporaryDirectory(prefix="norse-strategy-") as tmp:
+        code_root, pycache = Path(tmp) / "code", Path(tmp) / "pycache"
+        pycache.mkdir()
+        export(git, head, [PACKAGE_PATH, *code_paths, manifest], code_root)
+        payload = {
+            "code_root": str(code_root),
+            "pycache": str(pycache),
+            "module_path": pin["path"],
+            "module_name": module_name_for(pin["path"]),
+            "function": pin["function"],
+            "configuration": configuration,
+            "entry": entry,
+            "manifest": manifest,
+            "store_root": str(store.root) if store is not None else None,
+        }
+        proc = subprocess.run(
+            [sys.executable, "-I", "-B", "-X", f"pycache_prefix={pycache}", "-c", _RUNNER,
+             str(code_root / "research"), str(code_root)],
+            input=json.dumps(payload).encode(), capture_output=True, env={}, cwd=tmp,
+            check=False,
+        )
+    lines = [
+        line for line in proc.stdout.decode(errors="replace").splitlines()
+        if line.startswith(RESULT_PREFIX)
+    ]
+    if not lines:
+        raise StrategyFailed(f"the strategy process exited with {proc.returncode} and no result")
+    result = json.loads(lines[-1][len(RESULT_PREFIX):])
+    if not result.get("ok"):
+        raise StrategyFailed(result.get("error", "the strategy failed"))
+    return result["returns"]
+
+
+def public_error(exc: BaseException, repo: Path | None = None, store=None) -> str:
+    """A failure as the public ledger records it: the type and message, with the
+    repository, the dataset store, the home folder and every other absolute local path
+    replaced, spaces in folder names included (review L11, N11)."""
+    text = f"{type(exc).__name__}: {exc}" if not isinstance(exc, StrategyFailed) else str(exc)
+    known = [(repo, "<repo>"), (getattr(store, "root", None), "<store>"),
+             (Path.home(), "<home>"), (Path(tempfile.gettempdir()), "<tmp>")]
+    for path, label in known:
+        if path is not None:
+            for form in {str(Path(path)), str(Path(path).resolve())}:
+                text = text.replace(form, label)
+    text = _VOLUME.sub("<volume>", text)
+    return _PATHS.sub("<path>", text)[:500]
+
+
+# --- preconditions ---------------------------------------------------------------------
+
+
+def check_manifest(
+    git: Git, repo: Path, manifest_path: str | Path, genesis: Entry
+) -> tuple[Manifest, str]:
+    """The registered development manifest, exactly as committed at HEAD (T12)."""
+    path = Path(manifest_path)
+    path = (path if path.is_absolute() else repo / path).resolve()
+    try:
+        rel = path.relative_to(repo.resolve()).as_posix()
+    except ValueError:
+        raise UnmanifestedData(f"{path} is outside the repository, so in no commit") from None
+    committed = git.blob("HEAD", rel)
+    if committed is None:
+        raise UnmanifestedData(f"{rel} is not committed at HEAD")
+    if not path.is_file() or path.read_bytes() != committed:
+        raise UnmanifestedData(f"{rel} differs from the file committed at HEAD")
+    if sha256_hex(committed) != genesis.body["manifests"]["development"]:
+        raise UnmanifestedData(
+            f"{rel} (sha256 {sha256_hex(committed)}) is not the development manifest the "
+            f"genesis entry registers ({genesis.body['manifests']['development']})"
+        )
+    return Manifest.load(path), rel
+
+
+def check_clean_tree(git: Git) -> None:
+    """Refuse a changed or untracked file, read without the filesystem monitor, and
+    any file git is told not to look at (review M1)."""
+    status = git.run(
+        "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+        "status", "--porcelain=v1", "-z", "--untracked-files=all",
+    )
+    changed = [item[3:].decode(errors="replace") for item in status.split(b"\0") if item]
+    if changed:
+        raise RunRefused(f"the tree is dirty ({len(changed)} paths, e.g. {changed[:5]})")
+    hidden = [
+        item[2:].decode(errors="replace")
+        for item in git.run("ls-files", "-v", "-z").split(b"\0")
+        if item and (item[:1].islower() or item[:1] == b"S")
+    ]
+    if hidden:
+        raise RunRefused(
+            f"git is told to ignore changes to {hidden[:5]} (assume-unchanged or "
+            "skip-worktree); clear the flags"
+        )
+
+
+def _head_blobs(git: Git, head: str) -> tuple[dict[str, str], str]:
+    """Every file at ``head`` with its blob id, and the repository's hash algorithm,
+    in one call, so a file's bytes can be checked against HEAD without reading it."""
+    listing = git.run("ls-tree", "-r", "-z", "--full-tree", head)
+    blobs = {}
+    for item in listing.split(b"\0"):
+        if item:
+            meta, path = item.split(b"\t", 1)
+            blobs[path.decode(errors="replace")] = meta.split()[2].decode()
+    return blobs, git.text("rev-parse", "--show-object-format")
+
+
+def _blob_id(data: bytes, algorithm: str) -> str:
+    header = f"blob {len(data)}\0".encode()
+    return (hashlib.sha1 if algorithm == "sha1" else hashlib.sha256)(header + data).hexdigest()
+
+
+def check_loaded_modules(git: Git, repo: Path, head: str) -> None:
+    """Refuse when the code this process runs is not the code at HEAD (T15, review
+    M3): every ``norse_research`` module must be byte for byte its file under
+    ``research/norse_research`` at HEAD, wherever it was imported from, and every module
+    loaded from inside the repository must be tracked and unchanged."""
+    root = repo.resolve()
+    blobs, algorithm = _head_blobs(git, head)
+
+    def at_head(rel: str, file: Path) -> bool:
+        return rel in blobs and _blob_id(file.read_bytes(), algorithm) == blobs[rel]
+
+    bad = []
+    for name, module in list(sys.modules.items()):
+        location = getattr(module, "__file__", None)
+        if not isinstance(location, str):
+            continue
+        file = Path(location).resolve()
+        if name == "norse_research" or name.startswith("norse_research."):
+            try:
+                rel = f"{PACKAGE_PATH}/{file.relative_to(PACKAGE_DIR).as_posix()}"
+            except ValueError:
+                bad.append(f"{name} (loaded from outside the package)")
+                continue
+            if not rel.endswith(".py") or not at_head(rel, file):
+                bad.append(f"{name} (not {rel} as at HEAD)")
+            continue
+        try:
+            rel_path = file.relative_to(root)
+        except ValueError:
+            continue
+        if "__pycache__" in rel_path.parts and rel_path.suffix == ".pyc":
+            rel_path = rel_path.parent.parent / (rel_path.name.split(".", 1)[0] + ".py")
+        rel = rel_path.as_posix()
+        if rel not in blobs:
+            bad.append(f"{name} ({rel})")
+        elif not at_head(rel, root / rel):
+            bad.append(f"{name} ({rel} differs from HEAD)")
+    if bad:
+        raise RunRefused(f"modules loaded from files not tracked or not as at HEAD: {sorted(bad)}")
+
+
+def check_head_on_main(git: Git, remote: str, head: str) -> None:
+    """HEAD must be on the remote's main, which nobody deletes or force pushes, so the
+    run can be reproduced from its commit at G2.7 and G3.4 (review M9)."""
+    git.run(
+        "fetch", "--quiet", "--no-tags", "--", remote,
+        f"+refs/heads/{CODE_BRANCH}:refs/remotes/{remote}/{CODE_BRANCH}",
+    )
+    main = git.text("rev-parse", f"refs/remotes/{remote}/{CODE_BRANCH}")
+    if not git.is_ancestor(head, main):
+        raise RunRefused(
+            f"HEAD {head} is not on {remote}'s {CODE_BRANCH}, so the run could not be "
+            "reproduced from it"
+        )
+
+
+def check_periods(genesis: Entry, registration: Registration) -> None:
+    constants = period_constants()
+    if genesis.body["periods"] != constants:
+        raise RunRefused(
+            f"norse_research.periods {constants} differs from the genesis entry's "
+            f"{genesis.body['periods']}"
+        )
+    if constants["out_of_sample_start"] != registration.out_of_sample_start:
+        raise RunRefused("the loader's out-of-sample start is not the registered one")
+
+
+def _previous_run(snapshot: LedgerSnapshot, resolved: Resolved) -> Entry | None:
+    found = None
+    for entry in snapshot.opens(resolved.kind):
+        same = entry.body["configuration_id"] == resolved.configuration_id
+        if resolved.kind in (CONTROL, SENSITIVITY):
+            same = same and entry.body["configuration"] == {
+                **entry.body["configuration"],
+                "seed": resolved.configuration["seed"],
+                "costs": resolved.configuration["costs"],
+            }
+        if same:
+            found = entry
+    return found
+
+
+def check_rerun_commit(git: Git, snapshot: LedgerSnapshot, resolved: Resolved, head: str) -> None:
+    """A rerun's fix is in the code that runs, and is new since the run it repeats
+    (review L8): an older commit cannot be named as the fix."""
+    if resolved.rerun is None:
+        return
+    fix = resolved.rerun["fix_commit"]
+    if git.try_text("cat-file", "-t", fix) != "commit" or not git.is_ancestor(fix, head):
+        raise RunRefused("a rerun's fix commit must be in the code that runs")
+    previous = _previous_run(snapshot, resolved)
+    if previous is not None and git.is_ancestor(fix, previous.body["commit"]):
+        raise RunRefused(
+            f"the fix commit {fix} was already in the code of the run it repeats "
+            f"(entry {previous.seq}); name the commit that fixes the defect"
+        )
+
+
+# --- the run rules (section 9) ---------------------------------------------------------
+
+
+def admit(
+    snapshot: LedgerSnapshot,
+    registration: Registration,
+    resolved: Resolved,
+    frozen: RegisteredLedger | None,
+) -> None:
+    """Refuse a run the registered rules do not allow. Reads the ledger, never the
+    clock: "after the freeze" means the freeze anchor exists (T11)."""
+    kind, h, cid = resolved.kind, resolved.hypothesis, resolved.configuration_id
+    if kind == SENSITIVITY:
+        if frozen is None or not frozen.frozen:
+            raise RunRefused("a sensitivity run comes only after the ledger freeze (section 8)")
+        candidate = candidates(frozen).get(h)
+        if candidate is None or candidate.configuration_id != cid:
+            chosen = candidate.configuration_id if candidate else "none"
+            raise RunRefused(
+                f"{cid} is not {h}'s candidate ({chosen}); only a candidate is re-costed "
+                "(section 8)"
+            )
+    elif frozen is not None:
+        raise RunRefused("the ledger is frozen: only the candidates' sensitivity runs remain")
+    error = run_rule_error(
+        snapshot.entries,
+        registration,
+        {
+            "kind": kind,
+            "hypothesis": h,
+            "configuration_id": cid,
+            "seed": resolved.configuration["seed"],
+            "costs": resolved.configuration["costs"],
+            "rerun": resolved.rerun,
+            "reserve_reason": resolved.reserve_reason,
+        },
+    )
+    if error:
+        raise RunRefused(error)
+
+
+# --- the run ---------------------------------------------------------------------------
+
+
+def _summary(series: list, window: Window) -> tuple[list[tuple[str, float]], dict]:
+    pairs = [(str(day), float(value)) for day, value in series]
+    if not pairs:
+        raise ValueError("the strategy returned no returns")
+    allowed = set(window.day_list())
+    outside = [d for d, _ in pairs if d not in allowed]
+    if outside:
+        raise ValueError(f"returns outside the registered window, e.g. {outside[0]}")
+    if not consecutive_days(pairs):
+        raise ValueError("the returns are not one value per consecutive day")
+    values = [v for _, v in pairs]
+    mean = statistics.fmean(values)
+    sd = statistics.stdev(values) if len(values) > 1 else 0.0
+    return pairs, {
+        "days": len(pairs),
+        "first_day": pairs[0][0],
+        "last_day": pairs[-1][0],
+        "covers_window": [d for d, _ in pairs] == window.day_list(),
+        "mean": mean,
+        "sd": sd,
+        "sharpe": mean / sd if sd > 0 else 0.0,
+    }
+
+
+def run(
+    repo: Path,
+    request: Mapping[str, Any],
+    *,
+    store: ArchiveStore | None = None,
+    remote: str = "origin",
+    manifest_path: str | Path = DEVELOPMENT_MANIFEST,
+) -> RunRecord:
+    """Run one registered configuration through the ledger. See the module docstring."""
+    repo = Path(repo)
+    try:
+        check_environment(os.environ, repo)
+    except PermissionError as exc:
+        raise RunRefused(str(exc)) from None
+    ledger = GitLedger(repo, remote)
+    git = ledger.git
+    admitted_on = ledger.require_in_step()
+    verified = ledger.verify(admitted_on)
+    snapshot = verified.snapshot
+    genesis = snapshot.genesis
+    if genesis is None or verified.registration is None:
+        raise RunRefused(
+            "the ledger has no genesis entry naming the pre-registration, so no run may start"
+        )
+    registration = verified.registration
+    check_periods(genesis, registration)
+    manifest, manifest_rel = check_manifest(git, repo, manifest_path, genesis)
+    check_clean_tree(git)
+    head = git.text("rev-parse", "HEAD")
+    check_head_on_main(git, remote, head)
+    cid = request.get("configuration")
+    strategy = load_strategy(git, head, genesis, registration, cid)
+    check_loaded_modules(git, repo, head)
+    resolved = registration.resolve(request, strategy)
+    check_rerun_commit(git, snapshot, resolved, head)
+    frozen = gate_ledger(ledger) if verified.freeze is not None else None
+    admit(snapshot, registration, resolved, frozen)
+
+    opened = ledger.append(
+        {
+            "type": OPEN,
+            "kind": resolved.kind,
+            "hypothesis": resolved.hypothesis,
+            "configuration_id": resolved.configuration_id,
+            "configuration": resolved.configuration,
+            "configuration_sha256": resolved.configuration_sha256,
+            "commit": head,
+            "trees": tree_digests(git, head, genesis.body["tree_paths"]),
+            "manifest_sha256": manifest.sha256,
+            "cost_basis": resolved.cost_basis,
+            "window": resolved.window.as_dict(),
+            "label": resolved.label,
+            "rerun": resolved.rerun,
+            "reserve_reason": resolved.reserve_reason,
+            "strategy": strategy.module,
+            "environment": {
+                "python": platform.python_version(),
+                "implementation": platform.python_implementation(),
+                "platform": sys.platform,
+                "git": git_version(),
+            },
+        },
+        expected_head=admitted_on,
+    )
+
+    error = None
+    files: dict[str, bytes] = {}
+    pin = genesis.body["strategies"][cid]
+    try:
+        returned = _run_strategy(
+            git, head, pin, genesis.body["tree_paths"][resolved.hypothesis], manifest_rel,
+            resolved.configuration, opened.hash, store,
+        )
+        pairs, summary = _summary(returned, resolved.window)
+        data = encode_returns(pairs)
+        digest = sha256_hex(data)
+        files[returns_path(digest)] = data
+        status = COMPLETED
+    except Exception as exc:  # a failed run is still a ledgered run
+        error = public_error(exc, repo, store)
+        status, summary, digest = FAILED, {"error": error}, None
+    closed = ledger.append(
+        {
+            "type": RESULT,
+            "opens": opened.hash,
+            "open_seq": opened.seq,
+            "status": status,
+            "configuration_sha256": resolved.configuration_sha256,
+            "commit": head,
+            "manifest_sha256": manifest.sha256,
+            "cost_basis": resolved.cost_basis,
+            "result": summary,
+            "result_sha256": digest,
+            "returns_path": returns_path(digest) if digest else None,
+        },
+        files,
+        require_in_step=False,
+        attempts=3,
+    )
+    return RunRecord(status, opened, closed, error)
+
+
+__all__ = [
+    "ALLOWED_IMPORTS",
+    "ENV_ALLOWED",
+    "ENV_REFUSED",
+    "RunRecord",
+    "RunRefused",
+    "Strategy",
+    "UnmanifestedData",
+    "admit",
+    "disallowed_imports",
+    "run",
+    "strategy_declarations",
+    "strategy_modules",
+]

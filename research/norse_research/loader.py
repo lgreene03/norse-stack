@@ -18,6 +18,13 @@ The only way research code receives rows is ``DatasetLoader.load``. It:
   cross a known exchange outage passes ``accept_recorded_gaps=True``: gaps recorded
   in the committed manifest are then allowed and returned with the rows, so the
   run can record them, and any gap the manifest does not record still fails.
+* returns rows from a registered out-of-sample window (from 2018-05-01, the first
+  return day of H1's window) only inside an open ledger entry, which the harness
+  sets after the entry is pushed (G1.5). This is the threat model's speed bump for
+  T2: a script calling the loader directly is stopped and told why, though nothing
+  stops it reading files itself. The REST comparison of G1.1, which checks archive
+  bars against the exchange and computes no return, passes ``integrity_audit=True``
+  and is the only caller that may (a test checks this).
 
 Every result carries the manifest's SHA-256 and the files read, which is what a
 ledger entry cites (G1.5).
@@ -25,12 +32,23 @@ ledger entry cites (G1.5).
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from .formats import DataIntegrityError, DatasetSpec, Gap
 from .manifest import Manifest, ManifestError, gap_record, on_grid_and_gaps, read_series_file
-from .periods import DEVELOPMENT, HOLDOUT_START, HOLDOUT_START_MS, HoldoutSealed, iso_time
+from .periods import (
+    DEVELOPMENT,
+    HOLDOUT_START,
+    HOLDOUT_START_MS,
+    OUT_OF_SAMPLE_START,
+    OUT_OF_SAMPLE_START_MS,
+    HoldoutSealed,
+    iso_time,
+)
 from .store import ArchiveStore
 from .universe import months_between
 
@@ -43,6 +61,28 @@ class MissingData(LookupError):
 
 class GapError(DataIntegrityError):
     """The requested range contains a gap that the caller has not accepted."""
+
+
+class OutOfSampleUnledgered(PermissionError):
+    """Rows of a registered out-of-sample window were requested outside an open
+    ledger entry (G1.5, threat T2)."""
+
+
+# The open ledger entry the current run belongs to; set only by the harness.
+_OPEN_ENTRY: ContextVar[str | None] = ContextVar("norse_open_ledger_entry", default=None)
+
+
+@contextmanager
+def inside_ledger_entry(entry_hash: str) -> Iterator[None]:
+    """Loads in this block belong to the open ledger entry ``entry_hash``. The
+    harness enters it only after the entry is committed and pushed."""
+    if not isinstance(entry_hash, str) or len(entry_hash) != 64:
+        raise ValueError("an open entry is named by its full SHA-256")
+    token = _OPEN_ENTRY.set(entry_hash)
+    try:
+        yield
+    finally:
+        _OPEN_ENTRY.reset(token)
 
 
 @dataclass(frozen=True)
@@ -68,7 +108,9 @@ def _month(ms: int) -> str:
 
 
 class DatasetLoader:
-    def __init__(self, manifest: Manifest, store: ArchiveStore) -> None:
+    def __init__(
+        self, manifest: Manifest, store: ArchiveStore, integrity_audit: bool = False
+    ) -> None:
         if manifest.period != DEVELOPMENT:
             raise HoldoutSealed(
                 f"{manifest.path.name} is the {manifest.period} manifest; holdout data "
@@ -76,6 +118,7 @@ class DatasetLoader:
             )
         self.manifest = manifest
         self.store = store
+        self.integrity_audit = integrity_audit
 
     def load(
         self,
@@ -93,6 +136,13 @@ class DatasetLoader:
             )
         if start_ms >= end_ms:
             raise ValueError("start must be before end")
+        if end_ms > OUT_OF_SAMPLE_START_MS and not self.integrity_audit:
+            if _OPEN_ENTRY.get() is None:
+                raise OutOfSampleUnledgered(
+                    f"{series}: rows from {OUT_OF_SAMPLE_START.date()} on overlap a "
+                    "registered out-of-sample window, and load only inside an open trial "
+                    "ledger entry: run through the harness (G1.5)"
+                )
         spec = DatasetSpec.from_name(series)
         entry = self.manifest.entry(series)
         pinned = {f[0]: f for f in entry["files"]}

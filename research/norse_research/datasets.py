@@ -97,7 +97,13 @@ def load_register(path: Path = REST_REGISTER) -> dict[str, set[tuple[str, str]]]
 
 
 def _loader() -> DatasetLoader:
-    return DatasetLoader(Manifest.load(MANIFEST_FILES[DEVELOPMENT]), ArchiveStore(datasets_root()))
+    # The REST comparison checks archive bars against the exchange and computes no
+    # return, so it reads outside a ledger entry: the loader's only integrity audit.
+    return DatasetLoader(
+        Manifest.load(MANIFEST_FILES[DEVELOPMENT]),
+        ArchiveStore(datasets_root()),
+        integrity_audit=True,
+    )
 
 
 def _compare_window(loader, fetch, name: str, start_ms: int, end_ms: int, now_ms: int):
