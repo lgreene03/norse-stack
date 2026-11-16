@@ -701,28 +701,18 @@
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:8px">
         <div style="display:flex;align-items:center;gap:10px">
           <span style="font-size:13px;font-weight:700;letter-spacing:.06em;color:#cdd7e6">RESEARCH GATEWAY</span>
-          <span style="font-size:10px;color:#5b6a82;letter-spacing:.06em">research:8094 · walk-forward as a service</span>
+          <span style="font-size:10px;color:#5b6a82;letter-spacing:.06em">research:8094 · read-only</span>
         </div>
-        <span style="font-size:10.5px;color:#6b7c95">re-runs the validation rigor on demand · off the live trading process</span>
+        <span style="font-size:10.5px;color:#6b7c95">earlier runs only · trials run through the ledgered harness</span>
       </div>
 
       <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px">
-        <!-- run control + recent runs -->
+        <!-- runs disabled notice + recent runs -->
         <div style="flex:1 1 300px;min-width:280px;display:flex;flex-direction:column;gap:14px">
+          <!-- G1.2: the gateway runs nothing, so there is no run control here. -->
           <div style="background:#070d17;border:1px solid #16233a;border-radius:10px;padding:14px">
-            <div style="font-size:10.5px;color:#7787a0;font-weight:600;letter-spacing:.06em;margin-bottom:10px">RUN A WALK-FORWARD</div>
-            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
-              <label style="display:flex;flex-direction:column;gap:5px;flex:1 1 130px">
-                <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">STRATEGY</span>
-                <select data-nc="rg-strategy" style="background:#0c1726;border:1px solid #23344c;color:#dbe4f0;font-family:'JetBrains Mono',monospace;font-size:12.5px;padding:8px 10px;border-radius:7px;cursor:pointer">
-                  <option value="obi">obi</option>
-                  <option value="ou">ou</option>
-                  <option value="composite">composite</option>
-                </select>
-              </label>
-              <button data-nc="rg-run-btn" style="cursor:pointer;border:1px solid #23436e;background:#0e1a30;color:#7fa6f0;font-family:'Public Sans',sans-serif;font-size:12.5px;font-weight:700;letter-spacing:.06em;padding:9px 18px;border-radius:8px;transition:all .15s">RUN</button>
-            </div>
-            <div data-nc="rg-run-state" style="margin-top:10px;font-size:11px;font-family:'JetBrains Mono',monospace;color:#4f5e75">no walk-forward run yet</div>
+            <div style="font-size:10.5px;color:#7787a0;font-weight:600;letter-spacing:.06em;margin-bottom:8px">RUNS DISABLED</div>
+            <div style="font-size:12px;color:#9fb0c8;line-height:1.5">The gateway starts no runs. H1 and H2 trials run only through research/norse_research's harness, which writes every run to the trial ledger. Earlier runs are listed read-only.</div>
           </div>
 
           <div style="background:#070d17;border:1px solid #16233a;border-radius:10px;overflow:hidden;display:flex;flex-direction:column;flex:1;max-height:280px">

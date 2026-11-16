@@ -119,7 +119,7 @@ The quick ASCII view:
 | **Bragi** | Python | Trade explainability engine with human-readable decision logs |
 | **Huginn-AI** | Python | XGBoost signal-quality model, served with versioning, provenance and online retraining; not a live signal in the shipped config (OBI ML gate off by default) |
 | **News Sentinel** | Python | LLM-powered crypto news sentiment via Ollama |
-| **Research Gateway** | Go 1.25 | Walk-forward + PBO + Deflated-Sharpe validation as a service, out of the live trading process |
+| **Research Gateway** | Go 1.25 | Read-only since G1.2: serves earlier walk-forward runs behind a bearer token and starts none; trials run through `research/norse_research` |
 | **Mimir** | Python | Point-in-time (no-lookahead) feature store: event_time + ingest_time, as-of queries |
 | **Forseti** | Python | Execution TCA from real fills, plus market-impact (square-root law) and strategy-capacity modelling |
 | **Heimdall** | Python | Market-regime detector: Gaussian HMM fit with Baum-Welch, causal forward-filtered state |
@@ -279,12 +279,10 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 - Cross-asset correlation matrix
 - Per-instrument P&L breakdown with win rate and profit factor
 
-### Research Gateway (validation as a service)
-- `POST /api/research/runs` — submit a walk-forward + PBO + Deflated-Sharpe validation job
-- `GET /api/research/runs` — list submitted runs
-- `GET /api/research/runs/{id}` — fetch a run's status and verdict
-- Reuses `huginn/internal/research` — the same engine `cmd/walkforward` uses — so a gateway run and a CLI run share one code path, and it reproduces the honest result (24h fixture: OBI 0/4 OOS folds, PBO = 1.00, total OOS PnL −146.11; six-month run, 2026-09-10: 0/4 OOS folds, PBO = 0.00, total OOS PnL −18,845.07 — see [docs/EDGE_VERDICT.md](docs/EDGE_VERDICT.md))
-- **What it demonstrates:** validation rigor is a first-class, self-serve capability run out-of-process, not a one-off script
+### Research Gateway (read-only since G1.2)
+- Runs nothing. `POST /api/research/runs` is refused with or without a token, because H1 and H2 trials run only through `research/norse_research`'s harness, which writes every run to the trial ledger.
+- `GET /api/research/runs` lists, and `GET /api/research/runs/{id}` returns, runs that earlier versions persisted. Both need `Authorization: Bearer <token>`, with the token in the untracked `secrets/research_token` ([RUNBOOK, section 1.1](docs/RUNBOOK.md)); the console adds it for you. CORS goes only to the console's own origin.
+- Walk-forward itself still runs offline through huginn's `cmd/walkforward`; the published results are in [docs/EDGE_VERDICT.md](docs/EDGE_VERDICT.md).
 
 ### Mimir (point-in-time feature store)
 - `GET /api/features?as_of=<t>` — as-of query returning only data known at instant `t` (no lookahead)

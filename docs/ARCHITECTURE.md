@@ -93,8 +93,8 @@ flowchart LR
     redpanda -->|"features.obi.v1"| heimdall
     redpanda -->|"executions.fills.v1"| forseti
     heimdall -.->|"warm-start /api/features/history"| mimir
-    %% research-gateway is a standalone sidecar: it replays a JSONL dataset over
-    %% HTTP (POST /api/research/runs), off the live Kafka path, so it has no topic edge.
+    %% research-gateway is a standalone sidecar: it serves earlier runs read-only
+    %% over HTTP and starts none (G1.2), off the live Kafka path, so it has no topic edge.
 
     %% ── Synchronous deps (dashed) ───────────────────────────────────
     muninn -.->|JDBC| pgmuninn

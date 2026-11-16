@@ -1436,66 +1436,6 @@
   }
 
   // ====================================================================
-  // Research run submission — POST then poll the run by id until terminal.
-  // ====================================================================
-  var rgPolling = false;
-  function onResearchRun() {
-    if (rgPolling) return;
-    var sel = $('rg-strategy');
-    var strategy = sel ? sel.value : 'obi';
-    var btn = $('rg-run-btn');
-    if (DEMO_MODE) { setText('rg-run-state', 'demo mode — run disabled'); setColor('rg-run-state', C.amber); return; }
-    rgPolling = true;
-    if (btn) { btn.disabled = true; btn.style.opacity = '0.55'; btn.style.cursor = 'default'; }
-    setText('rg-run-state', 'submitting ' + strategy + ' walk-forward…'); setColor('rg-run-state', C.blue);
-    var body = JSON.stringify({ strategy: strategy, thresholds: [0.5, 0.6, 0.7, 0.8], folds: 4 });
-    fetchWithTimeout('/api/research/runs', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body
-    }).then(function (r) {
-      if (!r.ok) throw new Error('submit ' + r.status);
-      return r.json();
-    }).then(function (j) {
-      var id = j && j.id;
-      if (id == null) throw new Error('no run id');
-      setText('rg-run-state', 'running ' + strategy + ' · ' + id); setColor('rg-run-state', C.blue);
-      pollResearchRun(id, 0);
-    }).catch(function (e) {
-      setText('rg-run-state', 'run submit failed: ' + (e && e.message || 'error')); setColor('rg-run-state', C.red);
-      finishResearchRun();
-    });
-  }
-  function finishResearchRun() {
-    rgPolling = false;
-    var btn = $('rg-run-btn');
-    if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.style.cursor = 'pointer'; }
-  }
-  function pollResearchRun(id, attempt) {
-    if (attempt > 150) { // ~5 min ceiling at 2s
-      setText('rg-run-state', 'still running — see recent runs'); setColor('rg-run-state', C.amber);
-      finishResearchRun(); return;
-    }
-    getJSON('/api/research/runs/' + encodeURIComponent(id)).then(function (det) {
-      if (det && det.status === 'running') {
-        setTimeout(function () { pollResearchRun(id, attempt + 1); }, 2000);
-        return;
-      }
-      // terminal: render immediately and let the next poll refresh the list.
-      if (det && det.status === 'done') {
-        var doneStrat = det.strategy || (det.request && det.request.strategy) || '';
-        setText('rg-run-state', doneStrat ? ('done · ' + doneStrat) : 'done'); setColor('rg-run-state', C.green);
-      }
-      else if (det && det.status === 'error') { setText('rg-run-state', 'error: ' + (det.error || 'run failed')); setColor('rg-run-state', C.red); }
-      else { setText('rg-run-state', String(det && det.status || 'finished')); setColor('rg-run-state', C.mut); }
-      // Patch the latest-result panel directly so the operator sees it without
-      // waiting for the next poll cadence.
-      try { applyResearch({ runs: [{ id: id, status: det.status, strategy: det.strategy, submittedAt: det.submittedAt }], latest: det }); } catch (e) {}
-      finishResearchRun();
-    }).catch(function () {
-      setTimeout(function () { pollResearchRun(id, attempt + 1); }, 2000);
-    });
-  }
-
-  // ====================================================================
   // Bootstrap
   // ====================================================================
   function tick() {
@@ -1532,9 +1472,6 @@
     if (btn) btn.addEventListener('click', onHaltClick);
     var tokenBtn = $('token-btn');
     if (tokenBtn) tokenBtn.addEventListener('click', onTokenClick);
-    // Research gateway: Run button kicks off a walk-forward + polls to terminal.
-    var rgBtn = $('rg-run-btn');
-    if (rgBtn) rgBtn.addEventListener('click', onResearchRun);
     // Feature store: default the as-of input to "now" and re-query on change.
     ensureAsOfDefault();
     var asOfEl = $('fs-asof');

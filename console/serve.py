@@ -14,7 +14,8 @@ Proxied paths (browser → console origin → backend):
     /api/portfolio     → odin    :8086/api/portfolio
     /api/equity        → odin    :8086/api/equity
     /api/breaker       → huginn  :8083/api/breaker/{trigger,reset}  (POST, HALT)
-    /api/research[/*]  → research:8094/api/research[/*]  (GET + POST run submission)
+    /api/research[/*]  → research:8094/api/research[/*]  (GET only, with the
+                         gateway's bearer token; run submission is disabled)
     /api/features      → mimir   :8095/api/features
     /api/features/history → mimir:8095/api/features/history
     /api/sources       → mimir   :8095/api/sources
@@ -32,6 +33,14 @@ RESEARCH_HOST, MIMIR_HOST, FORSETI_HOST, HEIMDALL_HOST).
 A backend being down NEVER crashes the console: the proxy returns 502 with a
 JSON {"error": ...} body and short timeouts so a hung backend can't wedge the
 server.
+
+The research gateway needs a bearer token on every route but /healthz (G1.2).
+The console reads it from the file whose path is in RESEARCH_TOKEN_FILE
+(default: secrets/research_token at the repo root, the same untracked file
+docker-compose.yml mounts into the gateway) and adds it to the requests it
+proxies there, so the browser never sees it. The token is never logged. The
+gateway runs nothing, so POST /api/research[/*] is refused here and never
+forwarded. docs/RUNBOOK.md, section 1.1.
 
 Usage:
     python3 serve.py            # serves on http://localhost:8090
@@ -62,6 +71,17 @@ RESEARCH_HOST = os.environ.get("RESEARCH_HOST", "127.0.0.1")
 MIMIR_HOST = os.environ.get("MIMIR_HOST", "127.0.0.1")
 FORSETI_HOST = os.environ.get("FORSETI_HOST", "127.0.0.1")
 HEIMDALL_HOST = os.environ.get("HEIMDALL_HOST", "127.0.0.1")
+
+# Research gateway bearer token: a file named by path, never an env value or a
+# command-line argument (G0.4). Read on each proxied request, so creating the
+# file needs no console restart.
+RESEARCH_TOKEN_FILE = os.environ.get(
+    "RESEARCH_TOKEN_FILE",
+    os.path.join(os.path.dirname(DIRECTORY), "secrets", "research_token"))
+
+RESEARCH_RUNS_DISABLED = (
+    "run submission is disabled: H1 and H2 trials run only through "
+    "research/norse_research's harness, which writes every run to the trial ledger")
 
 HUGINN = (HUGINN_HOST, 8083)
 ODIN = (ODIN_HOST, 8086)
@@ -107,18 +127,35 @@ GET_ROUTES = {
 }
 
 
+def research_auth_headers():
+    """Return the gateway's Authorization header, or {} without a token.
+
+    With the file absent, unreadable or empty the request goes without one and
+    the gateway answers 401 (or 503 if it has no token either), which the
+    research panel shows as not connected. Never raises.
+    """
+    try:
+        with open(RESEARCH_TOKEN_FILE, encoding="utf-8") as fh:
+            token = fh.read().strip()
+    except OSError:
+        return {}
+    return {"Authorization": "Bearer " + token} if token else {}
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=DIRECTORY, **kwargs)
 
     # ---- helpers --------------------------------------------------------
-    def _send_json(self, status, obj):
+    def _send_json(self, status, obj, headers=None):
         # No-cache headers are injected by the end_headers() override below, so
         # every response (static or API) stays uncached during development.
         body = json.dumps(obj).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -225,9 +262,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._proxy("GET", host, port, backend + qs)
             return True
         # Research gateway: exact /api/research plus any /api/research/<...>
-        # subpath (e.g. /runs, /runs/{id}) → research:8094, query preserved.
+        # subpath (e.g. /runs, /runs/{id}) → research:8094, query preserved,
+        # with the gateway's bearer token added here (never from the browser).
         if path == "/api/research" or path.startswith("/api/research/"):
-            self._proxy("GET", RESEARCH[0], RESEARCH[1], path + qs)
+            self._proxy("GET", RESEARCH[0], RESEARCH[1], path + qs,
+                        headers=research_auth_headers())
             return True
         if path.startswith("/api/health/"):
             svc = path[len("/api/health/"):].strip("/")
@@ -266,19 +305,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             headers["Content-Type"] = "application/json"
             self._proxy("POST", HUGINN[0], HUGINN[1], backend, body=b"", headers=headers)
             return
-        # Research run submission: forward method + body verbatim to research.
-        # POST /api/research/runs (and any /api/research[/*]) is proxied through
-        # so a walk-forward can be kicked off from the console.
+        # Research run submission is disabled (G1.2): refused here rather than
+        # forwarded, so the console never carries a POST to the gateway with
+        # the token attached.
         if path == "/api/research" or path.startswith("/api/research/"):
-            qs = self.path.split("?", 1)
-            backend = path + (("?" + qs[1]) if len(qs) == 2 and qs[1] else "")
-            length = int(self.headers.get("Content-Length", 0) or 0)
-            raw = self.rfile.read(length) if length else b""
-            headers = {"Content-Type": self.headers.get("Content-Type", "application/json")}
-            auth = self.headers.get("Authorization")
-            if auth:
-                headers["Authorization"] = auth
-            self._proxy("POST", RESEARCH[0], RESEARCH[1], backend, body=raw, headers=headers)
+            self._send_json(405, {"error": RESEARCH_RUNS_DISABLED},
+                            headers={"Allow": "GET, HEAD"})
             return
         self._send_json(404, {"error": "not found", "path": path})
 
@@ -311,6 +343,11 @@ def main():
         print("  proxy: huginn=%s:8083  odin=%s:8086" % (HUGINN_HOST, ODIN_HOST))
         print("  proxy: research=%s:8094  mimir=%s:8095  forseti=%s:8096  heimdall=%s:8097"
               % (RESEARCH_HOST, MIMIR_HOST, FORSETI_HOST, HEIMDALL_HOST))
+        # Say whether the research token is present; never print the token.
+        print("  research token: %s (%s)"
+              % (RESEARCH_TOKEN_FILE,
+                 "present" if research_auth_headers()
+                 else "MISSING or empty: the research panel will not connect"))
         print("  (Ctrl-C to stop)")
         try:
             httpd.serve_forever()

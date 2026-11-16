@@ -19,6 +19,7 @@ design), see [SECURITY.md](SECURITY.md).
 | Where the recordings are | `MINIO_DATA_DIR`, default `./data/minio` (§6) |
 | Recording gap audit | `RECORDING_AUDIT_DIR`, default `./data/recording-audit`; metrics on http://127.0.0.1:8098/metrics (§6.3) |
 | Notification when recording stops | `make heartbeat-install` / `make heartbeat-uninstall` (macOS, §6.4) |
+| Research gateway token | `secrets/research_token`, created by `make up` when absent (§1.1) |
 | End-to-end smoke test | `./scripts/smoke.sh --teardown` |
 | Provision Kafka topics | `./scripts/provision-topics.sh` |
 | Grafana | http://localhost:3001 (board: **Norse Stack — Trading Pipeline**) |
@@ -34,6 +35,51 @@ via `.env` (template: [`.env.example`](../.env.example)) — `HUGINN_API_TOKEN`
 for Huginn, `SLEIPNIR_ADMIN_TOKEN` for Sleipnir. Auth **fails closed**: if the
 token env var is unset, the mutating endpoint returns `503 Control plane locked`
 rather than executing unauthenticated.
+
+### 1.1 The research gateway token (G1.2)
+
+The research gateway (huginn's `cmd/research`, port 8094) runs nothing. It
+refuses every run submission, with or without a token, because H1 and H2 trials
+run only through `research/norse_research`'s harness, which writes every run to
+the trial ledger. It still serves earlier runs, and every route except `/healthz`
+needs a bearer token; without one configured it answers `503`.
+
+The token is a file, never a command-line argument or an `.env` value (G0.4):
+`secrets/research_token`, which `.gitignore` keeps out of git. Compose mounts it
+read-only into the `research` container at `/run/secrets/research_token` and
+names it by path in `HUGINN_RESEARCH_TOKEN_FILE`. The console server
+(`console/serve.py`) reads the same file, or the one named by
+`RESEARCH_TOKEN_FILE`, and adds the token to the requests it proxies to the
+gateway, so the browser never sees it.
+
+`make up` and `scripts/smoke.sh` create the file when it is absent. To create it
+by hand before `docker compose up`:
+
+```bash
+mkdir -p secrets
+openssl rand -hex 32 > secrets/research_token
+chmod 644 secrets/research_token
+```
+
+The file has to exist before the stack starts, because Compose bind-mounts it
+into the container. Mode 644 lets the gateway's unprivileged container user read
+it through that mount. On this single-user Mac the token authenticates the
+machine, not a person, as the threat model already says for T26
+([ledger-threat-model.md](research/ledger-threat-model.md)).
+
+The gateway reads the token once, at startup. After creating or replacing the
+file, recreate it with `docker compose up -d --force-recreate research`; the
+console picks the new file up on its next request. To call the gateway directly:
+
+```bash
+curl -fsS -H "Authorization: Bearer $(cat secrets/research_token)" \
+  http://127.0.0.1:8094/api/research/runs
+```
+
+If the research panel stays on "connecting to research…", check
+`docker compose logs --tail=20 research` for "No research token configured" or
+"Research token unreadable", and the console's startup line `research token:`,
+which says whether it found the file.
 
 ---
 

@@ -72,6 +72,18 @@ for repo in muninn huginn sleipnir; do
 done
 pass "Sibling repos found (muninn, huginn, sleipnir)"
 
+# The research gateway's bearer token (G1.2) is an untracked secret file that
+# docker-compose.yml mounts into the research service, so it must exist before
+# `up`. Create one if absent; it is never printed. docs/RUNBOOK.md, section 1.1.
+RESEARCH_TOKEN="$PROJECT_DIR/secrets/research_token"
+if [ ! -s "$RESEARCH_TOKEN" ]; then
+  mkdir -p "$PROJECT_DIR/secrets"
+  openssl rand -hex 32 > "$RESEARCH_TOKEN.tmp"
+  chmod 644 "$RESEARCH_TOKEN.tmp"
+  mv "$RESEARCH_TOKEN.tmp" "$RESEARCH_TOKEN"
+  pass "Created secrets/research_token (research gateway token, not printed)"
+fi
+
 info "Starting docker compose (this may take a while on first build)..."
 docker compose -f "$COMPOSE_FILE" up -d --build 2>&1 | tail -5
 

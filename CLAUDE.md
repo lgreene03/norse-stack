@@ -110,11 +110,10 @@ Served with versioning, provenance and online retraining; the score is provenanc
 - `GET /api/headlines` — recent headlines with individual sentiment scores
 - `GET /api/status` — service status, feed health, Ollama connectivity
 
-### Research Gateway (validation as a service, `huginn` cmd/research)
-- `POST /api/research/runs` — submit a walk-forward + PBO + Deflated-Sharpe validation job
-- `GET /api/research/runs` — list runs
-- `GET /api/research/runs/{id}` — run status and verdict
-- Reuses `huginn/internal/research` (same engine as `cmd/walkforward`), runs out of the live trading process; reproduces the honest result (OBI 0/4 OOS folds, PBO = 1.00, total OOS PnL −146.11)
+### Research Gateway (read-only since G1.2, `huginn` cmd/research)
+- Runs nothing: `POST /api/research/runs` is refused with or without a token, because H1 and H2 trials run only through `research/norse_research`'s ledgered harness. Do not re-enable it without the ledgered path G1.2 describes.
+- `GET /api/research/runs` and `GET /api/research/runs/{id}` serve runs earlier versions persisted.
+- Every route but `/healthz` needs `Authorization: Bearer <token>`; the token is the untracked file `secrets/research_token`, mounted as a compose secret and read by `console/serve.py` (docs/RUNBOOK.md, section 1.1). CORS goes only to the console's origin.
 
 ### Mimir (Point-in-Time Feature Store)
 - `GET /api/features?as_of=<t>` — as-of query returning only data known at instant `t` (no lookahead)
