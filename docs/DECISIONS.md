@@ -201,3 +201,25 @@ and every agent, so neither a signature row nor a tag could prove who acted. Wha
 freeze must achieve is unchanged, namely that the rules are fixed before the ledger's
 genesis entry and before any trial. Any later `prereg-*` tag still needs the owner's
 explicit instruction for that tag.
+
+## 2026-11-15
+
+**D19. The `ledger` branch is append-only.** Decided by the owner on 2026-11-15. G1.5
+keeps the trial ledger on its own `ledger` branch, which main's rulesets do not cover
+because they target the default branch only. The owner approved a ruleset for it, active
+since 2026-11-15 as "Ledger branch is append-only" (ruleset 27314544): `refs/heads/ledger`
+cannot be deleted or force pushed and must keep a linear history, with no bypass. Appends
+are still allowed, so the harness can push each entry; nothing can rewrite one once it is
+pushed. Like D16, it binds agents only while nobody with admin rights lifts it.
+
+## 2026-11-16
+
+**D20. No ledger freeze in development.** Decided by the owner on 2026-11-16, on the
+round 3 security review of G1.5 ([#56](https://github.com/lgreene03/norse-stack/pull/56)),
+whose one Medium finding (N2b) is that a freeze tagged while a run from a second clone is
+appending breaks verification for ever. The owner's view is that the project is in
+development and needs no freezes, so the finding blocks nothing now and no code is written
+for it. The pre-registration still defines N on the frozen ledger (its section 10), so the
+one registered freeze at G2.7 stands until a superseding pre-registration says otherwise;
+when it is taken, no run starts from any clone other than the one taking it, which closes
+N2b by process. Making the freeze a chain entry stays a follow-up in the register.
