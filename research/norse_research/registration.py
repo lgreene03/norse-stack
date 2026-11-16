@@ -14,7 +14,10 @@ docs/PREREGISTRATION.md, threat T18). A run resolves to one registered configura
   range), ledgered but outside N;
 * a sensitivity run: a hypothesis's candidate re-costed at a registered total cost,
   after the freeze only;
-* the holdout run, which G1.6 builds; until then it is refused.
+* the holdout run (G1.6), never resolved from a request: it is the unseal's candidate
+  configuration with its window carried from the start of the development window
+  through 2026-10-31, the candidate's configuration hash and the holdout manifest's
+  hash added (``holdout_configuration``; section 11, item 5).
 
 Anything else is refused. The resolved configuration is everything that decides the
 run's result: the registered parameters, the strategy's defaults in code, the costs,
@@ -114,7 +117,11 @@ class Registration:
             h: Window(h, w["first_return_day"], w["last_return_day"], int(w["days"]))
             for h, w in ((h, windows[h]) for h in HYPOTHESES)
         }
-        for window in self.windows.values():
+        held = windows[HOLDOUT]
+        self.holdout_window = Window(
+            HOLDOUT, held["first_return_day"], held["last_return_day"], int(held["days"])
+        )
+        for window in (*self.windows.values(), self.holdout_window):
             if len(window.day_list()) != window.days or window.day_list()[-1] != (
                 window.last_return_day
             ):
@@ -227,7 +234,9 @@ class Registration:
             kind, costs = CONTROL, self._costs(self.fee_bps + self.slippage_bps)
             extra = {"base": base}
         elif cid == HOLDOUT:
-            raise RunNotRegistered("the holdout run needs the unseal, which G1.6 builds")
+            raise RunNotRegistered(
+                "the holdout run is resolved from the unseal entry, never from a request"
+            )
         else:
             raise RunNotRegistered(f"{cid} is not a registered configuration")
 
@@ -263,6 +272,57 @@ class Registration:
             rerun=rerun,
             reserve_reason=reserve_reason,
             strategy=strategy.module,
+        )
+
+    # --- the holdout run (G1.6; section 11, item 5) ---------------------------------
+
+    def holdout_run_window(self, hypothesis: str) -> Window:
+        """One simulation from the start of the hypothesis's development window
+        through the holdout's last day, positions carried across the boundary."""
+        development, holdout = self.windows[hypothesis], self.holdout_window
+        after = date.fromisoformat(development.last_return_day) + timedelta(days=1)
+        if after.isoformat() != holdout.first_return_day:
+            raise RegistrationError(f"{hypothesis}'s window does not end where the holdout starts")
+        return Window(
+            HOLDOUT, development.first_return_day, holdout.last_return_day,
+            development.days + holdout.days,
+        )
+
+    def holdout_configuration(
+        self, candidate: Mapping, candidate_sha256: str, holdout_manifest_sha256: str
+    ) -> dict:
+        """The holdout run's resolved configuration: the candidate's, unchanged but
+        for its kind and its window, with the candidate's configuration hash, which
+        the unseal names, and the frozen holdout manifest's hash added."""
+        if candidate.get("kind") != TRIAL or value_hash(candidate) != candidate_sha256:
+            raise RunNotRegistered("the holdout run takes a trial configuration and its hash")
+        h = candidate["hypothesis"]
+        return {
+            **candidate,
+            "kind": HOLDOUT,
+            "window": self.holdout_run_window(h).as_dict(),
+            "candidate_sha256": candidate_sha256,
+            "holdout_manifest_sha256": holdout_manifest_sha256,
+        }
+
+    def resolve_holdout(self, candidate_open: Mapping, holdout_manifest_sha256: str) -> Resolved:
+        """The holdout run of the candidate whose open entry body is ``candidate_open``."""
+        configuration = self.holdout_configuration(
+            candidate_open["configuration"], candidate_open["configuration_sha256"],
+            holdout_manifest_sha256,
+        )
+        h = configuration["hypothesis"]
+        return Resolved(
+            kind=HOLDOUT,
+            hypothesis=h,
+            configuration_id=configuration["id"],
+            configuration=configuration,
+            configuration_sha256=value_hash(configuration),
+            window=self.holdout_run_window(h),
+            label=None,
+            rerun=None,
+            reserve_reason=None,
+            strategy=configuration["strategy"],
         )
 
     @staticmethod

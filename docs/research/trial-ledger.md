@@ -48,6 +48,10 @@ informative only: no trust decision reads the clock, and a test fails if code ou
 * **Result** closes an open entry: the status, a summary, and for a completed run the
   SHA-256 of its committed return series. It repeats the open entry's configuration hash,
   commit, manifest hash and cost basis, so each result entry holds every field G1.5 names.
+* **Unseal** (G1.6) is written at most once, after the freeze anchor, when the owner's
+  passphrase verifies. It names the pre-registration genesis names, the holdout candidate
+  the registered rule selects on the frozen ledger, and the hashes of the holdout manifest
+  and the key record; the holdout run follows it. See [holdout-seal.md](holdout-seal.md).
 
 N is the number of open entries of kind `trial`: reruns, failures and runs that never
 finished all count, and nothing is deduplicated by configuration hash (section 9).
@@ -100,7 +104,8 @@ Before it writes anything the harness refuses on any of these:
   recorded defect, or naming a fix commit that the run it repeats already had; a
   benchmark, a control seed or a sensitivity cost run again without a recorded defect;
   past the budget; a reserve draw without its reason; anything but a candidate's
-  sensitivity run after the freeze; a sensitivity run before it.
+  sensitivity run, the unseal or the holdout run after the freeze; a sensitivity run
+  before it.
 
 It then appends the open entry, under a lock, refusing if the ledger moved since the run
 was admitted or if the freeze was tagged meanwhile, and reads the remote back to confirm it
@@ -148,8 +153,9 @@ own command: it refuses while a registered configuration lacks a selectable run,
 computes only on the ledger at the freeze anchor, and only on a ledger the gate itself
 issued; a ledger it issued before the freeze stays provisional, so check `frozen`.
 
-The genesis entry is written once, after G1.6 has committed the holdout key record
-(section 11, item 4):
+The genesis entry is written once, after the owner has created the holdout key record with
+`python -m norse_research.seal key-record` and committed it on main (section 11, item 4;
+[holdout-seal.md](holdout-seal.md)):
 
 ```bash
 python -m norse_research.gitledger genesis --key-record <commit>:<path> \
@@ -167,7 +173,8 @@ its contract.
 ### The holdout key record contract (for G1.6)
 
 The genesis step accepts the key record only as a JSON object with exactly these keys, and
-G1.6 should build the record to it:
+G1.6's `key-record` command builds the record to it (a test feeds the command's output to
+the genesis step):
 
 | Key | Value |
 |---|---|
@@ -209,7 +216,8 @@ clone and by `audit.force_push_findings` over GitHub's activity record.
   tests. The gateway runs in a container that cannot see this tree, so it must either hand
   runs to this harness over an authenticated channel or keep its run endpoint disabled for
   H1 and H2 (threat model finding 9); neither exists yet, which is why G1.5 waits on it.
-* **The unseal and the holdout run** (G1.6): the harness refuses a holdout run until then.
+* **The unseal and the holdout run** are G1.6's, in [holdout-seal.md](holdout-seal.md);
+  HOLD-1 and the verdict on the holdout result are G3.2's and G3.3's.
 * **Strategies** (G1.9, G2.2, G2.3): the harness runs Python strategies. If H1 and H2 are
   built in huginn instead, the source checks and the runner do not apply to them and T13
   needs another design.

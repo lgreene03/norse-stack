@@ -11,6 +11,7 @@ import statistics
 import pytest
 from ledger_fixtures import Book, issued, lcg_returns
 from norse_research import gate, harness
+from norse_research.benchmark import excess_returns, volatility_matched
 from norse_research.cscv import cscv
 from norse_research.gate import GateRefused, RegisteredLedger
 from norse_research.gitledger import FREEZE_ANCHOR
@@ -246,3 +247,85 @@ def test_gate_statistics_refuse_a_ledger_the_gate_did_not_issue():
     foreign = gate.selectable_runs(registered(other))["H1"][0]
     with pytest.raises(GateRefused, match="not a selectable run"):
         gate.deflated_sharpe_of(ledger, foreign)
+
+
+# --- section 10's DEV-1 to DEV-5 and section 11's holdout candidate (G1.6) ------------
+
+
+def development_book(skilled="H1-03", benchmark=True) -> Book:
+    """Every H1 configuration with a selectable run, ``skilled`` the one with an edge."""
+    book = Book()
+    for i, cid in enumerate(book.registration.order["H1"]):
+        drift = 0.002 if cid == skilled else 0.0
+        book.run(cid, lcg_returns(200 + i, days(book, "H1"), drift, scale=0.04))
+    if benchmark:
+        book.run("B-H1", lcg_returns(999, days(book, "H1"), 0.0, scale=0.04))
+    return book
+
+
+def test_development_applies_dev_1_to_dev_5_to_the_candidate_alone():
+    book = development_book()
+    ledger = issued(book, frozen=True)
+    judged = gate.development(ledger, "H1")
+    assert judged.candidate.configuration_id == "H1-03"
+    assert judged.criteria == dict.fromkeys(("DEV-1", "DEV-2", "DEV-3", "DEV-4", "DEV-5"), True)
+    assert judged.passes and gate.development(ledger, "H2") is None
+    assert judged.dsr == gate.deflated_sharpe_of(ledger, judged.candidate).dsr
+    # DEV-2: H1's excess is volatility matched against B-H1's run, with N from the
+    # ledger and V the variance of every selectable run's excess-return Sharpe ratio.
+    benchmark = list(gate.benchmark_returns(ledger, "H1"))
+    returns = list(judged.candidate.returns)
+    assert gate.excess_series(ledger, judged.candidate) == excess_returns(
+        returns, volatility_matched(benchmark, returns))
+    excess = gate.excess_deflated_sharpe_of(ledger, judged.candidate)
+    sharpes = [gate.daily_sharpe(gate.excess_series(ledger, r))
+               for r in gate.selectable_runs(ledger)["H1"]]
+    assert excess.trial_sharpe_variance == statistics.variance(sharpes)
+    assert excess.n_trials == 8 and excess.dsr == judged.excess_dsr
+    assert gate.holdout_candidate(ledger) is judged.candidate
+
+
+def test_dev_4_and_dev_5_by_hand():
+    book = development_book()
+    ledger = issued(book, frozen=True)
+    run = gate.candidates(ledger)["H1"]
+    by_year = gate.sharpe_without_each_year(ledger, run)
+    assert sorted(by_year) == list(range(2018, 2026))
+    window = book.registration.windows["H1"].day_list()
+    kept = [v for d, v in zip(window, run.returns, strict=True) if not d.startswith("2021")]
+    assert by_year[2021] == gate.daily_sharpe(kept)
+    # DEV-5: twenty large days carry everything; without them the mean is negative.
+    returns = (0.03,) * 20 + (0.001,) * 50 + (-0.002,) * 30
+    carried = dataclasses.replace(run, returns=returns)
+    assert gate.sharpe_without_largest(carried) == gate.daily_sharpe(returns[20:]) < 0
+    assert gate.daily_sharpe(returns) > 0
+    # Ties at the cut are removed earliest first, which leaves the same values either way.
+    tied = dataclasses.replace(run, returns=(0.03,) * 25 + (0.001,) * 50)
+    assert gate.sharpe_without_largest(tied) == gate.daily_sharpe((0.03,) * 5 + (0.001,) * 50)
+
+
+def test_the_holdout_candidate_is_chosen_on_the_frozen_ledger_only():
+    book = development_book()
+    with pytest.raises(GateRefused, match="frozen ledger only"):
+        gate.holdout_candidate(issued(book))
+    assert gate.holdout_candidate(issued(development_book(skilled=None), frozen=True)) is None
+
+
+def test_dev_2_without_the_benchmark_run_refuses_rather_than_fails():
+    ledger = issued(development_book(benchmark=False), frozen=True)
+    with pytest.raises(GateRefused, match="needs a completed B-H1 run"):
+        gate.development(ledger, "H1")
+
+
+def test_the_holdout_candidate_is_the_higher_dsr_with_ties_to_h1(monkeypatch):
+    ledger = issued(Book(), frozen=True)
+    judged = {h: gate.Development(h, f"candidate {h}", 0.99, 0.99, 0.1, {2020: 1.0}, 1.0)
+              for h in ("H1", "H2")}
+    monkeypatch.setattr(gate, "development", lambda ledger, h: judged[h])
+    assert gate.holdout_candidate(ledger) == "candidate H1"  # a tie goes to H1
+    judged["H2"] = dataclasses.replace(judged["H2"], dsr=0.995)
+    assert gate.holdout_candidate(ledger) == "candidate H2"
+    judged["H2"] = dataclasses.replace(judged["H2"], pbo=0.5)  # DEV-3 needs below 0.5
+    assert gate.holdout_candidate(ledger) == "candidate H1"
+    judged["H1"] = dataclasses.replace(judged["H1"], sharpe_without_year={2020: 1.0, 2021: 0.0})
+    assert gate.holdout_candidate(ledger) is None  # neither passes: no unseal

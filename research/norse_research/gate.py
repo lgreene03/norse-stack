@@ -30,6 +30,28 @@ its hypothesis's whole window; a hypothesis whose selectable runs come from diff
 files under the harness paths or under its own strategy paths (their recorded digests
 differ) has none (run rule 4). Once the freeze anchor exists, the gate takes only the
 ledger at that anchor (T19); any figure computed before it is provisional (run rule 3).
+
+The development criteria and the holdout candidate (G1.6, which the unseal needs;
+section 10 and section 11, items 1 to 3):
+
+* DEV-1, the candidate's DSR, above 0.95;
+* DEV-2, the DSR of its returns in excess of its benchmark, above 0.95: for H1
+  ``excess_returns(r, volatility_matched(r_B, r))``, for H2 ``excess_returns(r,
+  beta_matched(r_B, r))`` (D15), with the same N and V the sample variance of every
+  selectable run's excess-return Sharpe ratio, each against its own hypothesis's
+  benchmark, with no floor. r_B is the hypothesis's benchmark run chosen as a
+  selectable run is: its last completed entry whose returns cover the window. Without
+  one, DEV-2 cannot be computed and the gate refuses rather than call it a fail;
+* DEV-3, the PBO of the candidate's hypothesis, below 0.5;
+* DEV-4, the Sharpe ratio of the window's returns with each calendar year removed in
+  turn, every one above 0;
+* DEV-5, the Sharpe ratio without the 20 largest daily returns (ties: earliest dates
+  first), above 0.
+
+A hypothesis passes development if and only if its candidate meets all five; the
+holdout candidate is, among passing hypotheses, the candidate with the higher DEV-1
+DSR, ties to H1, chosen on the frozen ledger only. None passing means no holdout
+candidate, no unseal and no holdout run.
 """
 
 from __future__ import annotations
@@ -41,12 +63,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from .benchmark import beta_matched, excess_returns, volatility_matched
 from .block_bootstrap import BootstrapResult, block_bootstrap
 from .cscv import GATE_BLOCKS, CSCVResult, cscv
 from .environment import check_environment
 from .gitledger import FREEZE_ANCHOR, GitLedger, load_registration
 from .ledger import COMPLETED, Entry, LedgerError, LedgerSnapshot, VerificationError
-from .registration import HYPOTHESES, TRIAL, Registration
+from .registration import BENCHMARK, HYPOTHESES, TRIAL, Registration
 from .sharpe import (
     DeflatedSharpe,
     cross_trial_sharpe_variance,
@@ -65,6 +88,13 @@ BOOTSTRAP_SEED = 20261111
 BOOTSTRAP_BLOCK_LENGTH = 20
 BOOTSTRAP_REPS = 10_000
 BOOTSTRAP_CONFIDENCE = 0.90
+# Section 10's development criteria.
+DEV_DSR_ABOVE = 0.95  # DEV-1 and DEV-2
+DEV_PBO_BELOW = 0.5  # DEV-3
+DEV_LARGEST_REMOVED = 20  # DEV-5
+# DEV-2's benchmark adjustment per hypothesis: volatility matched for H1, beta matched
+# for H2 (decision D15).
+EXCESS_MATCH = {"H1": volatility_matched, "H2": beta_matched}
 
 
 class GateRefused(LedgerError, PermissionError):
@@ -246,6 +276,175 @@ def bootstrap_interval(run: SelectableRun) -> BootstrapResult:
         reps=BOOTSTRAP_REPS,
         confidence=BOOTSTRAP_CONFIDENCE,
     )
+
+
+# --- the development criteria and the holdout candidate (section 10; section 11) -----
+
+
+def benchmark_returns(ledger: RegisteredLedger, hypothesis: str) -> tuple[float, ...]:
+    """r_B for DEV-2: the hypothesis's benchmark run chosen as a selectable run is, its
+    last completed entry whose returns cover the window. Refused when there is none,
+    since DEV-2 then cannot be computed."""
+    snapshot, registration = _require(ledger).snapshot, ledger.registration
+    bid = next(
+        b for b, spec in registration.benchmarks.items()
+        if spec["window"].rsplit(".", 1)[-1] == hypothesis
+    )
+    days = registration.windows[hypothesis].day_list()
+    chosen = None
+    for opened in snapshot.opens(BENCHMARK):
+        if opened.body["configuration_id"] != bid:
+            continue
+        result = snapshot.result_of(opened)
+        if result is None or result.body["status"] != COMPLETED:
+            continue
+        series = snapshot.returns_of(result)
+        if [d for d, _ in series] == days:
+            chosen = tuple(v for _, v in series)
+    if chosen is None:
+        raise GateRefused(
+            f"DEV-2 needs a completed {bid} run covering {hypothesis}'s window; there is none"
+        )
+    return chosen
+
+
+def excess_series(ledger: RegisteredLedger, run: SelectableRun) -> list[float]:
+    """A selectable run's daily returns in excess of its benchmark (DEV-2): volatility
+    matched for H1, beta matched for H2 (D15)."""
+    benchmark = list(benchmark_returns(ledger, run.hypothesis))
+    returns = list(run.returns)
+    return excess_returns(returns, EXCESS_MATCH[run.hypothesis](benchmark, returns))
+
+
+def excess_deflated_sharpe_of(ledger: RegisteredLedger, run: SelectableRun) -> DeflatedSharpe:
+    """DEV-2: the deflated Sharpe ratio of a selectable run's excess returns, with N
+    from the ledger and V over every selectable run's excess-return Sharpe ratio."""
+    family = selectable_runs(ledger)
+    if run not in family.get(run.hypothesis, ()):
+        raise GateRefused(f"{run.configuration_id}'s run is not a selectable run of this ledger")
+    n_trials = trial_count(ledger)
+    excess = excess_series(ledger, run)
+    sharpes = [daily_sharpe(excess_series(ledger, r)) for runs in family.values() for r in runs]
+    if len(sharpes) >= 2:
+        variance, source = cross_trial_sharpe_variance(sharpes), "selectable runs' excess returns"
+    else:
+        variance, source = null_sharpe_variance(len(excess)), "null (fewer than two selectable runs)"
+    sr0 = expected_max_sharpe(n_trials, variance)
+    if daily_sharpe(excess) == 0.0:
+        return DeflatedSharpe(0.0, 0.0, sr0, len(excess), 0.0, 0.0, n_trials, variance, source)
+    m = moments(excess)
+    dsr = deflated_sharpe_ratio(m.sharpe, m.n, m.skew, m.kurtosis, n_trials, variance)
+    return DeflatedSharpe(dsr, m.sharpe, sr0, m.n, m.skew, m.kurtosis, n_trials, variance, source)
+
+
+def sharpe_without_each_year(ledger: RegisteredLedger, run: SelectableRun) -> dict[int, float]:
+    """DEV-4: the Sharpe ratio of the window's returns with each calendar year in it
+    removed in turn (2018 from 05-01 to 2025 for H1, 2020 from 01-08 to 2025 for H2)."""
+    days = _require(ledger).registration.windows[run.hypothesis].day_list()
+    years = sorted({int(d[:4]) for d in days})
+    return {
+        year: daily_sharpe([v for d, v in zip(days, run.returns, strict=True) if int(d[:4]) != year])
+        for year in years
+    }
+
+
+def sharpe_without_largest(run: SelectableRun) -> float:
+    """DEV-5: the Sharpe ratio without the 20 largest daily returns, ties removed
+    earliest date first."""
+    order = sorted(range(len(run.returns)), key=lambda i: (-run.returns[i], i))
+    dropped = set(order[:DEV_LARGEST_REMOVED])
+    return daily_sharpe([v for i, v in enumerate(run.returns) if i not in dropped])
+
+
+@dataclass(frozen=True)
+class Development:
+    """A hypothesis's candidate judged by DEV-1 to DEV-5 (section 10)."""
+
+    hypothesis: str
+    candidate: SelectableRun
+    dsr: float  # DEV-1
+    excess_dsr: float  # DEV-2
+    pbo: float  # DEV-3
+    sharpe_without_year: dict[int, float]  # DEV-4
+    sharpe_without_largest: float  # DEV-5
+
+    @property
+    def criteria(self) -> dict[str, bool]:
+        return {
+            "DEV-1": self.dsr > DEV_DSR_ABOVE,
+            "DEV-2": self.excess_dsr > DEV_DSR_ABOVE,
+            "DEV-3": self.pbo < DEV_PBO_BELOW,
+            "DEV-4": all(s > 0 for s in self.sharpe_without_year.values()),
+            "DEV-5": self.sharpe_without_largest > 0,
+        }
+
+    @property
+    def passes(self) -> bool:
+        return all(self.criteria.values())
+
+
+def development(ledger: RegisteredLedger, hypothesis: str) -> Development | None:
+    """The hypothesis's candidate against DEV-1 to DEV-5, or None while it has no
+    candidate (section 11, items 1 and 2). No other configuration is judged."""
+    candidate = candidates(_require(ledger)).get(hypothesis)
+    if candidate is None:
+        return None
+    return Development(
+        hypothesis,
+        candidate,
+        deflated_sharpe_of(ledger, candidate).dsr,
+        excess_deflated_sharpe_of(ledger, candidate).dsr,
+        probability_of_backtest_overfitting(ledger, hypothesis).pbo,
+        sharpe_without_each_year(ledger, candidate),
+        sharpe_without_largest(candidate),
+    )
+
+
+def _holdout_candidate(ledger: RegisteredLedger) -> SelectableRun | None:
+    best = None
+    for h in HYPOTHESES:  # H1 first, so a tie keeps H1 (section 11, item 3)
+        judged = development(ledger, h)
+        if judged is not None and judged.passes and (best is None or judged.dsr > best.dsr):
+            best = judged
+    return best.candidate if best is not None else None
+
+
+def holdout_candidate(ledger: RegisteredLedger) -> SelectableRun | None:
+    """Section 11, item 3: among hypotheses that pass development, the candidate with
+    the higher DEV-1 DSR, ties to H1; None if neither passes (no unseal, no holdout
+    run). Only on the frozen ledger: the rule is mechanical over the ledger at the
+    freeze anchor, so nothing seen later can change which configuration is judged."""
+    if not _require(ledger).frozen:
+        raise GateRefused("the holdout candidate is chosen on the frozen ledger only (section 11)")
+    return _holdout_candidate(ledger)
+
+
+def check_unseal_candidate(
+    snapshot: LedgerSnapshot, registration: Registration, freeze: str, unseal: Entry
+) -> None:
+    """On replay, the unseal entry names exactly the holdout candidate the registered
+    rule selects on ``snapshot``, the ledger at the freeze anchor (T22)."""
+    try:
+        candidate = _holdout_candidate(_issue(snapshot, registration, freeze, True))
+    except (GateRefused, ValueError) as exc:
+        raise VerificationError(
+            f"entry {unseal.seq}: the holdout candidate cannot be computed on the frozen "
+            f"ledger ({exc}), so no unseal can stand"
+        ) from None
+    if candidate is None:
+        raise VerificationError(
+            f"entry {unseal.seq}: an unseal, but no hypothesis passes development on the "
+            "frozen ledger, so there is no holdout candidate (section 11, item 3; T22)"
+        )
+    named = (unseal.body["configuration_id"], unseal.body["configuration_sha256"],
+             unseal.body["candidate"]["open"], unseal.body["candidate"]["result"])
+    chosen = (candidate.configuration_id, candidate.open_entry.body["configuration_sha256"],
+              candidate.open_entry.hash, candidate.result_entry.hash)
+    if named != chosen:
+        raise VerificationError(
+            f"entry {unseal.seq}: the unseal names {named[0]} ({named[1]}), but the registered "
+            f"rule selects {chosen[0]} ({chosen[1]}) on the frozen ledger (section 11; T22)"
+        )
 
 
 def require_frozen(given: LedgerSnapshot, frozen: LedgerSnapshot) -> LedgerSnapshot:

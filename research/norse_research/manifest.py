@@ -14,6 +14,10 @@ The archive key of a file is ``DatasetSpec.from_name(series).key(month)``.
 The holdout manifest is frozen. Its files are kept off disk until the unseal (G1.6),
 which fetches them again and verifies each against the hashes it pins, so it is never
 rewritten and its own SHA-256 is fixed here.
+
+The build and verify code here are the only callers that pass ``holdout_audit=True``
+to the package's readers: they check hashes, sizes and row counts and compute no
+statistic of a price (threat model T21; a test checks no other module passes it).
 """
 
 from __future__ import annotations
@@ -69,11 +73,12 @@ def gap_record(gap: Gap) -> list:
 
 
 def read_series_file(
-    store: ArchiveStore, spec: DatasetSpec, month: str
+    store: ArchiveStore, spec: DatasetSpec, month: str, *, holdout_audit: bool = False
 ) -> tuple[list, str, int, list[int]]:
     """Rows, SHA-256, size and collapsed exact repeats of one mirrored monthly file,
-    verified against its CHECKSUM and size-capped."""
-    data, digest = store.read(spec.key(month))
+    verified against its CHECKSUM and size-capped. A holdout month is refused unless
+    ``holdout_audit`` is set or the read is inside the unsealed holdout run."""
+    data, digest = store.read(spec.key(month), holdout_audit=holdout_audit)
     if len(data) > spec.max_bytes():
         raise ManifestError(f"{spec.key(month)}: {len(data)} bytes exceeds cap {spec.max_bytes()}")
     csv_name = spec.file_name(month)[: -len(".zip")] + ".csv"
@@ -98,7 +103,9 @@ def on_grid_and_gaps(spec: DatasetSpec, rows: list) -> tuple[list, list[int], li
 def series_entry(store: ArchiveStore, spec: DatasetSpec, months: list[str]) -> dict:
     files, rows, repeated = [], [], []
     for month in months:
-        file_rows, digest, size, repeats = read_series_file(store, spec, month)
+        file_rows, digest, size, repeats = read_series_file(
+            store, spec, month, holdout_audit=True
+        )
         if not file_rows:
             raise ManifestError(f"{spec.key(month)} holds no rows")
         files.append([month, digest, size, len(file_rows)])
@@ -181,7 +188,11 @@ class Manifest:
 
     @classmethod
     def load(cls, path: Path) -> Manifest:
-        raw = Path(path).read_bytes()
+        return cls.from_bytes(Path(path).read_bytes(), Path(path))
+
+    @classmethod
+    def from_bytes(cls, raw: bytes, path: Path) -> Manifest:
+        """A manifest from its bytes, such as a committed blob; ``path`` names it."""
         doc = json.loads(raw)
         if doc.get("schema") != SCHEMA:
             raise ManifestError(f"{path}: schema {doc.get('schema')!r}, expected {SCHEMA}")
@@ -211,7 +222,9 @@ def verify(manifest: Manifest, store: ArchiveStore) -> int:
     for name, entry in manifest.datasets.items():
         spec = DatasetSpec.from_name(name)
         for month, digest, size, rows in entry["files"]:
-            file_rows, actual, actual_size, _ = read_series_file(store, spec, month)
+            file_rows, actual, actual_size, _ = read_series_file(
+                store, spec, month, holdout_audit=True
+            )
             if (actual, actual_size, len(file_rows)) != (digest, size, rows):
                 raise ManifestError(f"{spec.key(month)} does not match {manifest.path.name}")
             checked += 1

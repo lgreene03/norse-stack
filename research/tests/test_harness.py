@@ -483,7 +483,7 @@ def test_trust_code_reads_no_clock():
               ("time", "monotonic"), ("time", "perf_counter"), ("time", "localtime"),
               ("time", "gmtime"), ("time", "ctime")}
     modules = ("rules", "harness", "gate", "gitledger", "sources", "runner", "registration",
-               "environment", "canonical", "loader", "ledger")
+               "environment", "canonical", "loader", "ledger", "seal", "periods")
     found = [
         f"{name}.py:{node.lineno}"
         for name in modules

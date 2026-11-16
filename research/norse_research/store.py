@@ -7,8 +7,11 @@ The data file is written before its CHECKSUM, each by an atomic rename, so the
 presence of a CHECKSUM means the download completed.
 
 The store downloads development files only. The holdout's files are kept off disk
-until the unseal (G1.6), which adds the one permitted re-fetch; until then a file
-dated 2026-01 or later is refused before anything is requested.
+until the unseal (G1.6); the one permitted re-fetch is ``norse_research.seal``'s, after
+the unseal entry is on the remote's ledger, so here a file dated 2026-01 or later is
+refused before anything is requested. Reading a holdout month's file is refused too,
+unless the manifest build and verify code passes ``holdout_audit=True`` or the read
+happens inside the unsealed holdout run (threat model T21).
 """
 
 from __future__ import annotations
@@ -33,7 +36,12 @@ from .binance_archive import (
     parse_checksum,
     sha256_hex,
 )
-from .periods import LAST_DEVELOPMENT_MONTH, HoldoutSealed
+from .periods import (
+    LAST_DEVELOPMENT_MONTH,
+    HoldoutSealed,
+    is_holdout_month,
+    require_holdout_access,
+)
 
 # The month of a monthly (``-2024-01.zip``) or daily (``-2024-01-31.zip``) archive file.
 FILE_MONTH = re.compile(r"-(\d{4}-\d{2})(?:-\d{2})?\.zip$")
@@ -130,8 +138,13 @@ class ArchiveStore:
         path = self.path(key)
         return path.is_file() and path.with_name(path.name + ".CHECKSUM").is_file()
 
-    def read(self, key: str) -> tuple[bytes, str]:
-        """Read a mirrored file, re-verifying it against its stored CHECKSUM."""
+    def read(self, key: str, *, holdout_audit: bool = False) -> tuple[bytes, str]:
+        """Read a mirrored file, re-verifying it against its stored CHECKSUM. A
+        holdout month's file is refused unless ``holdout_audit`` is set (the manifest
+        build and verify code only) or the read is inside the unsealed holdout run."""
+        month = FILE_MONTH.search(key)
+        if month is not None and is_holdout_month(month.group(1)):
+            require_holdout_access(key, holdout_audit)
         path = self.path(key)
         published = parse_checksum(
             path.with_name(path.name + ".CHECKSUM").read_bytes(), path.name

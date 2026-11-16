@@ -16,6 +16,12 @@ state through frames or the garbage collector can disable it (security review ro
 R1), so it is not a sandbox, and the control against a deliberate escape is that the
 code is committed, recorded in the ledger and reviewed (threat T13). The result goes
 back over standard output as one JSON line, the last.
+
+For the holdout run alone (G1.6), the payload also names the committed holdout
+manifest and the unseal entry: the loader is then given the holdout manifest, its
+files join the readable set, and the strategy runs inside the unsealed run, so its
+loads may reach 2026. The harness names the unseal only after it has pushed the run's
+open entry and found the unseal entry on the remote's ledger.
 """
 
 from __future__ import annotations
@@ -25,6 +31,7 @@ import os
 import sys
 import types
 from collections.abc import Mapping
+from contextlib import nullcontext
 from pathlib import Path
 from types import MappingProxyType
 
@@ -99,21 +106,27 @@ def run(payload: dict) -> list:
     from .formats import DatasetSpec
     from .loader import DatasetLoader, inside_ledger_entry
     from .manifest import Manifest
+    from .periods import inside_unsealed_run
     from .store import ArchiveStore
 
     code_root = payload["code_root"]
     files: set[str] = set()
     loader = None
+    unseal = payload.get("unseal")
     if payload.get("store_root"):
         manifest = Manifest.load(Path(code_root) / payload["manifest"])
+        holdout = None
+        if unseal and payload.get("holdout_manifest"):
+            holdout = Manifest.load(Path(code_root) / payload["holdout_manifest"])
         store = ArchiveStore(Path(payload["store_root"]))
-        for name, entry in manifest.datasets.items():
-            spec = DatasetSpec.from_name(name)
-            for month, *_ in entry["files"]:
-                path = store.path(spec.key(month))
-                files.add(os.path.normpath(str(path)))
-                files.add(os.path.normpath(str(path) + ".CHECKSUM"))
-        loader = DatasetLoader(manifest, store)
+        for pinned in (manifest, holdout):
+            for name, entry in (pinned.datasets.items() if pinned is not None else ()):
+                spec = DatasetSpec.from_name(name)
+                for month, *_ in entry["files"]:
+                    path = store.path(spec.key(month))
+                    files.add(os.path.normpath(str(path)))
+                    files.add(os.path.normpath(str(path) + ".CHECKSUM"))
+        loader = DatasetLoader(manifest, store, holdout=holdout)
     module_file = os.path.join(code_root, payload["module_path"])
     source = Path(module_file).read_bytes()
     roots = [code_root, payload["pycache"], sys.prefix, sys.base_prefix, sys.exec_prefix,
@@ -124,7 +137,8 @@ def run(payload: dict) -> list:
     module.__file__ = module_file
     module.__package__ = payload["module_name"].rpartition(".")[0]
     sys.modules[payload["module_name"]] = module
-    with inside_ledger_entry(payload["entry"]):
+    sealed = inside_unsealed_run(unseal) if unseal else nullcontext()
+    with inside_ledger_entry(payload["entry"]), sealed:
         exec(compile(source, module_file, "exec"), module.__dict__)
         function = module.__dict__[payload["function"]]
         series = function(_freeze(payload["configuration"]), DataView(loader))

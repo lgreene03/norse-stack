@@ -33,7 +33,11 @@ history every committed version of the file is a byte prefix of the next and eve
 return series is never changed (T4, T7); the pre-registration tag still points where
 genesis says (T24); and the run rules of section 9 hold over the whole ledger (M2). A
 ``ledger-*`` tag on a commit that holds no ledger is reported, not fatal, because the
-tag ruleset makes such a tag permanent (M6).
+tag ruleset makes such a tag permanent (M6). An unseal entry (G1.6) must name the
+freeze anchor's commit and the holdout candidate the registered rule selects on the
+ledger at that anchor (``gate.check_unseal_candidate``; T22), and every holdout run
+must be at its candidate's commit plus only changes to data loading or the seal
+(section 11, item 6).
 
 Nothing here reads the clock to decide anything; it is read only for timestamps,
 which never decrease along the chain (T11).
@@ -67,6 +71,7 @@ from .ledger import (
     LEDGER_PATH,
     OPEN,
     TIME_FORMAT,
+    UNSEAL,
     ZERO_HASH,
     Entry,
     LedgerError,
@@ -75,9 +80,11 @@ from .ledger import (
     genesis_of,
     make_entry,
     parse_ledger,
+    unseal_of,
 )
 from .periods import HOLDOUT_START, LAST_DEVELOPMENT_MONTH, OUT_OF_SAMPLE_START
 from .registration import (
+    HOLDOUT,
     HYPOTHESES,
     PREREGISTRATION_FILES,
     PREREGISTRATION_JSON,
@@ -124,6 +131,15 @@ REMOTE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 # The holdout key record's contract (T25; G1.6 commits the record; genesis pins it).
 KEY_RECORD_KEYS = frozenset({"kdf", "n", "r", "p", "dklen", "salt", "derived_key"})
 _RETURNS_FILE = re.compile(r"ledger/returns/[0-9a-f]{64}\.csv")
+# Section 11, item 6: a holdout run may be retried "at the commit of its selectable run
+# plus only commits that touch data loading or the seal". These are the files of data
+# loading and of the seal; any other change to the code a run executes (the harness
+# paths and the hypothesis's paths) between the candidate's commit and the holdout
+# run's refuses the run and fails verification.
+SEAL_AND_DATA_LOADING = frozenset(
+    f"research/norse_research/{name}.py"
+    for name in ("seal", "loader", "store", "manifest", "formats", "binance_archive", "periods")
+)
 
 
 class GitError(LedgerError):
@@ -425,12 +441,16 @@ class GitLedger:
             if genesis_of(written) is None:
                 raise VerificationError("no entry may precede the genesis entry")
             self.check_remote(written[0].body["remote"]["url"])  # the first genesis's (N5)
-            if body.get("type") == OPEN:
+            if body.get("type") in (OPEN, UNSEAL):
                 frozen = self.freeze_commit(remote) is not None
-                if frozen != (body.get("kind") == SENSITIVITY):
+                late = body.get("type") == UNSEAL or body.get("kind") in (SENSITIVITY, HOLDOUT)
+                if frozen != late:
                     raise LedgerOutOfStep(
-                        "the ledger is frozen: only the candidates' sensitivity runs remain"
-                        if frozen else "a sensitivity run comes only after the ledger freeze"
+                        "the ledger is frozen: only the candidates' sensitivity runs, the "
+                        "unseal and the holdout run remain"
+                        if frozen else
+                        "sensitivity runs, the unseal and the holdout run come only after the "
+                        "ledger freeze"
                     )
             try:
                 commit = self._commit(local, new_data, files, _message(entry))
@@ -604,7 +624,35 @@ class GitLedger:
             frozen_length = len(parse_ledger(self.git.blob(freeze, LEDGER_PATH)))
         check_run_rules(snapshot.entries, registration, genesis, frozen_length)
         self._check_rerun_commits(snapshot)
+        self._check_unseal(snapshot, registration, freeze)
         return Verified(snapshot, head, remote, tags, ignored, registration, freeze)
+
+    def _check_unseal(
+        self, snapshot: LedgerSnapshot, registration: Registration, freeze: str | None
+    ) -> None:
+        """On replay, the unseal names the freeze anchor's commit and the candidate the
+        registered rule selects on the ledger at it (T20, T22), and every holdout run
+        is at the candidate's commit plus only data loading or the seal (item 6)."""
+        unseal = unseal_of(snapshot.entries)
+        if unseal is None:
+            return
+        if unseal.body["freeze"] != freeze:
+            raise VerificationError(
+                f"entry {unseal.seq}: the unseal names the freeze {unseal.body['freeze']}, "
+                f"but the freeze anchor marks {freeze}"
+            )
+        from .gate import check_unseal_candidate  # the gate imports this module
+
+        check_unseal_candidate(self.snapshot(freeze), registration, freeze, unseal)
+        candidate = next(e for e in snapshot.entries if e.hash == unseal.body["candidate"]["open"])
+        paths = snapshot.genesis.body["tree_paths"]
+        for entry in snapshot.opens(HOLDOUT):
+            problem = holdout_commit_error(
+                self.git, candidate.body["commit"], entry.body["commit"],
+                [*paths["harness"], *paths[candidate.body["hypothesis"]]],
+            )
+            if problem:
+                raise VerificationError(f"entry {entry.seq}: {problem}")
 
     def _check_rerun_commits(self, snapshot: LedgerSnapshot) -> None:
         """On replay, each rerun's fix is in its own code and was not in the code of
@@ -728,6 +776,25 @@ def _message(entry: Entry) -> str:
     if body["type"] != GENESIS:
         what += f" {body.get('kind') or ''} {body.get('configuration_id') or ''}".rstrip()
     return f"ledger: entry {entry.seq}, {what.strip()}\n\nentry {entry.hash}\n"
+
+
+def holdout_commit_error(git: Git, candidate: str, commit: str, paths: Sequence[str]) -> str | None:
+    """Why a holdout run at ``commit`` is not at its candidate's commit plus only
+    changes to data loading or the seal under ``paths`` (section 11, item 6), or None."""
+    known = git.try_text("cat-file", "-t", candidate) == "commit"
+    if not known or not git.is_ancestor(candidate, commit):
+        return f"the holdout run's commit {commit} does not descend from its candidate's {candidate}"
+    changed = git.text(
+        "diff", "--name-only", "--no-renames", candidate, commit, "--", *paths
+    ).splitlines()
+    other = sorted(p for p in changed if p not in SEAL_AND_DATA_LOADING)
+    if other:
+        return (
+            f"the code changed since the candidate's run outside data loading and the seal "
+            f"({other[:5]}); section 11, item 6 allows a holdout run only at the candidate's "
+            "commit plus changes to data loading or the seal"
+        )
+    return None
 
 
 # --- the registration through the genesis entry ----------------------------------------
