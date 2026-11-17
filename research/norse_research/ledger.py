@@ -43,11 +43,13 @@ holdout file is fetched again and before any holdout run. It names the commit an
 hashes of the pre-registration tag the genesis entry names, the holdout candidate's
 configuration id, hypothesis and configuration hash, the open and result entries of
 its selectable run, the frozen ledger commit the candidate was chosen on, and the
-hashes of the holdout manifest and the key record genesis pins (section 11, item 4).
-That the owner's key verified leaves no mark a reader could check: the key record's
-derived key is public, so nothing in the entry can prove the passphrase was typed
-(docs/research/holdout-seal.md). A second unseal entry fails verification here; its
-place after the freeze and its candidate are checked by ``gitledger`` and ``gate``.
+hashes of the holdout manifest and the key record genesis pins (section 11, item 4),
+and its ``proof``: the scrypt output of the owner's passphrase, whose SHA-256 the key
+record holds (a commit-reveal; security review H1). Only someone who knows the
+passphrase can produce it, and ``gitledger`` checks it against the pinned record when
+the entry is written and on every replay. A second unseal entry fails verification
+here; its place after the freeze, its proof and its candidate are checked by
+``gitledger`` and ``gate``.
 
 **N** is the number of open entries of kind ``trial``: every trial opened counts
 once, whether it completes, fails or never finishes, and reruns count again. It is
@@ -115,7 +117,7 @@ _KEYS = {
        "cost_basis", "result", "result_sha256", "returns_path"},
     UNSEAL: _COMMON
     | {"preregistration", "configuration_id", "hypothesis", "configuration_sha256",
-       "candidate", "freeze", "holdout_manifest_sha256", "key_record_sha256"},
+       "candidate", "freeze", "holdout_manifest_sha256", "key_record_sha256", "proof"},
 }
 # Fields a result entry copies from the open entry it closes.
 _COPIED = ("configuration_sha256", "commit", "manifest_sha256", "cost_basis")
@@ -289,6 +291,9 @@ def _check_unseal(seq: int, body: dict) -> None:
     _git_id(seq, "freeze", body["freeze"])
     _sha(seq, "holdout_manifest_sha256", body["holdout_manifest_sha256"])
     _sha(seq, "key_record_sha256", body["key_record_sha256"])
+    proof = body["proof"]
+    if not isinstance(proof, str) or not re.fullmatch(r"(?:[0-9a-f]{2}){32,}", proof):
+        raise _fail(seq, "the unseal's proof is not a scrypt output (lower-case hex, 32 bytes or more)")
 
 
 _CHECKS = {

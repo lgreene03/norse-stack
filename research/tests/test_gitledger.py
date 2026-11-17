@@ -353,12 +353,14 @@ def test_the_key_record_contract_is_exact():
         {**good, "salt": "a" * 33},  # odd length
         {**good, "salt": "ab" * 15},  # under 16 bytes
         {**good, "salt": "AB" * 16},  # not lower-case
-        {**good, "dklen": 16, "derived_key": "cd" * 16},
-        {**good, "derived_key": "cd" * 31},  # not dklen bytes
+        {**good, "dklen": 16},
+        {**good, "verifier_sha256": "cd" * 31},  # not a full SHA-256
+        {**good, "verifier_sha256": "CD" * 32},  # not lower-case
         {**good, "kdf": "sha256"},
         {**good, "n": float(2**17)},
         {**good, "sha256_of_passphrase": "ab" * 32},  # an extra field
-        {k: v for k, v in good.items() if k != "derived_key"},
+        {**good, "derived_key": "cd" * 32},  # the scrypt output is never in the record (H1)
+        {k: v for k, v in good.items() if k != "verifier_sha256"},
         {k: v for k, v in good.items() if k != "dklen"},
     ]
     for record in bad:

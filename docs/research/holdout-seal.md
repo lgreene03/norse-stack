@@ -33,24 +33,37 @@ python -m norse_research.seal key-record --out keys/holdout-key-record.json
 ```
 
 It asks for the passphrase twice, without echo, and refuses if the two differ or the passphrase
-is shorter than 20 characters. It accepts the passphrase only from an interactive terminal: no
-option, environment variable or file can carry it. It derives a key with scrypt at n 2^17, r 8,
-p 1 and 32 bytes over a fresh 16-byte salt, writes a JSON file holding exactly the seven keys the
-genesis step's contract names (`kdf`, `n`, `r`, `p`, `dklen`, `salt`, `derived_key`), checks the
-file against that contract and against the passphrase once more, and prints only the path and the
-file's SHA-256. It never replaces an existing record. The derived key is public once committed,
-which is why the derivation is memory-hard: guessing a generated six-word passphrase against it is
-out of reach, guessing a short one a person chose is not (T25).
+has fewer than six words or 20 characters (a word is a run of letters, whatever separates them;
+the code cannot tell generated words from chosen ones, so generating them is the owner's part).
+It accepts the passphrase only from an interactive terminal: no option, environment variable or
+file can carry it. It derives scrypt at n 2^17, r 8, p 1 and 32 bytes over a fresh 16-byte salt
+and writes a JSON file holding exactly the seven keys the genesis step's contract names (`kdf`,
+`n`, `r`, `p`, `dklen`, `salt`, `verifier_sha256`). The last is the SHA-256 of the scrypt output,
+never the output itself: the record is a commitment, and the unseal later reveals the output. The
+command checks the file against the contract and against the passphrase once more, and prints only
+the path and the file's SHA-256, which the owner keeps beside the passphrase in the password
+manager. It never replaces an existing record. The verifier is public once committed, which is why
+the derivation is memory-hard: guessing a generated six-word passphrase against it costs one scrypt
+per guess and is out of reach, guessing a short one a person chose is not (T25). The format holds no
+field the repository's secret scan reads as a credential, so committing it needs no change to the
+scan; `research/tests/fixtures/key-record-test-passphrase-only.json`, a sample for a passphrase that
+exists only in the tests, is scanned on every pull request to show it.
 
-The repository's secret scan will flag that file: gitleaks' default `generic-api-key` rule reads
-a long hex value under a name ending in `key` as a credential. By design it is a public salted hash
-(D4), but how to let it through, for example an allowlist for that one path in a `.gitleaks.toml`,
-changes the scan's policy and is the owner's and the security role's decision; nothing here makes
-it. Commit `research/keys/holdout-key-record.json` on main through a pull request. The genesis step
+Commit `research/keys/holdout-key-record.json` on main through a pull request. The genesis step
 then names it (see trial-ledger.md), as `--key-record <that commit>:research/keys/holdout-key-record.json`,
 and pins its commit, path and SHA-256 in the genesis entry. From then on the seal reads the record
 only from that commit and checks it against that hash; a different record committed later, or
-edited in the working tree, changes nothing.
+edited in the working tree, changes nothing. Whoever runs the genesis step chooses which record it
+pins, so straight after it the owner runs, in a terminal of their own:
+
+```bash
+python -m norse_research.seal check-key
+```
+
+It reads the passphrase from the terminal, checks it against the key record the genesis entry on
+the remote pins, prints that record's SHA-256 for comparison with the one kept in the password
+manager, and writes nothing. If it refuses, the genesis entry pins a record that is not the owner's,
+and a superseding genesis is still possible until the first entry of any other type (section 16).
 
 ## What happens at the unseal (G3.2, with the owner holding the key)
 
@@ -78,13 +91,19 @@ entry (T23); a dirty tree, a HEAD not on main, or code running that is not the c
 period constants that differ from the genesis entry's (T20); a pre-registration commit, tag or file
 hash other than the genesis entry's (T24); and a configuration hash other than the holdout
 candidate's, which it computes by the registered rule over the ledger at the freeze anchor (T22).
-Only then does it read the passphrase from the terminal and compare its scrypt derivation with the
-key record genesis pins, in constant time (T25). A missing or wrong passphrase writes nothing.
+Only then does it read the passphrase from the terminal and check that the SHA-256 of its scrypt
+output is the key record's verifier, in constant time (T25). A missing or wrong passphrase writes
+nothing.
 
 When the passphrase verifies, the unseal entry is appended through the ledger's ordinary append,
 committed, pushed and read back from the remote. It names the pre-registration, the candidate's
 configuration id, hypothesis and hash, the open and result entries of its selectable run, the
-freeze anchor's commit, and the hashes of the holdout manifest and the key record. Only after the
+freeze anchor's commit, and the hashes of the holdout manifest and the key record, and it reveals
+the scrypt output as its `proof`. The ledger itself checks that proof against the verifier in the
+key record genesis pins, when the entry is written and on every replay, so an unseal written
+without the owner's key, by the seal, by a direct append or by git plumbing, is refused, and with
+it the re-fetch and the holdout run (security review H1). Revealing the scrypt output is safe
+because the unseal is single use (T23); a rewrite of the remote to replay it is T10's. Only after the
 remote holds it are the holdout files fetched again (D17): every file the frozen holdout manifest
 pins, about 8,517 of them, each checked against its published CHECKSUM and against the manifest's
 SHA-256 and size before it is written, and then the whole manifest is verified, rows included. The
@@ -94,9 +113,10 @@ since 2026-11-11, restore that file from the encrypted offline copy into the mir
 and fetches the rest. The unseal itself is never repeated.
 
 Verification replays all of this on every later read of the ledger: a second unseal entry, an
-unseal before the freeze anchor, one naming another pre-registration, key record or holdout
-manifest, or one naming any configuration other than the candidate the rule selects on the frozen
-ledger, each fails verification, so the harness and the gate refuse the ledger.
+unseal before the freeze anchor, one without a proof that verifies, one naming another
+pre-registration, key record or holdout manifest, or one naming any configuration other than the
+candidate the rule selects on the frozen ledger, each fails verification, so the harness and the
+gate refuse the ledger.
 
 ## The holdout run
 
@@ -158,10 +178,9 @@ one, so G3.2 should check each series the candidate reads for it before the run.
 ## What this does not cover
 
 A deliberate download of the public holdout outside the harness (T21): nothing prevents it, and the
-mechanical candidate rule is what makes such a look useless. Proof that the passphrase was typed:
-the key record's derived key is public, so nothing in the unseal entry can prove it, and someone with
-write access to the ledger branch could write an unseal entry by hand that verification would accept
-(threat model finding 19); the control is that the entry is pushed on the pinned remote, where it is
-seen. An agent that somehow holds the passphrase can fake a terminal; the control is that the
-passphrase never reaches one. The G3.1 drafts, as above. The research gateway (G1.2), which runs no
-holdout run and must keep its run endpoint off for H1 and H2.
+mechanical candidate rule is what makes such a look useless. A key record substituted at genesis
+(T25(c)): whoever runs the genesis step chooses the record, and `make_key_record` needs no terminal,
+so an agent could pin a record for a passphrase it knows; `check-key` straight after genesis is the
+control, and it is process, not prevention. An agent that somehow holds the passphrase can fake a
+terminal; the control is that the passphrase never reaches one. The G3.1 drafts, as above. The
+research gateway (G1.2), which runs no holdout run and must keep its run endpoint off for H1 and H2.

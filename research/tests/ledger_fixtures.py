@@ -21,7 +21,6 @@ only in these tests and is never the owner's.
 
 from __future__ import annotations
 
-import hashlib
 import itertools
 import json
 import subprocess
@@ -69,14 +68,12 @@ HOLDOUT_MANIFEST = "research/manifests/binance-vision-holdout.json"
 KEY_RECORD = "research/keys/holdout-key-record.json"
 # Exists only in these tests; never the owner's passphrase.
 TEST_PASSPHRASE = "synthetic test passphrase, never the owner key"
-KEY_RECORD_DOC = {"kdf": "scrypt", "n": 2**17, "r": 8, "p": 1, "dklen": 32, "salt": "ab" * 16}
-# Derived here, never written out: a hex literal under a key name reads as a credential
-# to the secret scan. test_seal checks norse_research.seal derives the same.
-KEY_RECORD_DOC["derived_key"] = hashlib.scrypt(
-    TEST_PASSPHRASE.encode(), salt=bytes.fromhex(KEY_RECORD_DOC["salt"]), n=2**17, r=8, p=1,
-    dklen=32, maxmem=256 * 1024 * 1024,
-).hex()
-KEY_RECORD_TEXT = json.dumps(KEY_RECORD_DOC) + "\n"
+# The committed sample record for TEST_PASSPHRASE, in the format the owner's record
+# uses, so CI's secret scan reads that format on every pull request. test_seal checks
+# it against a scrypt computed here with hashlib alone.
+KEY_RECORD_SAMPLE = Path(__file__).resolve().parent / "fixtures" / "key-record-test-passphrase-only.json"
+KEY_RECORD_TEXT = KEY_RECORD_SAMPLE.read_text()
+KEY_RECORD_DOC = json.loads(KEY_RECORD_TEXT)
 TREE_PATHS = {"harness": ["research/norse_research"], "H1": ["strategies/h1"],
               "H2": ["strategies/h2"]}
 

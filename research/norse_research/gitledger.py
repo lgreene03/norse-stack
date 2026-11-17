@@ -48,6 +48,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -129,7 +130,7 @@ IDENTITY = {
 }
 REMOTE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 # The holdout key record's contract (T25; G1.6 commits the record; genesis pins it).
-KEY_RECORD_KEYS = frozenset({"kdf", "n", "r", "p", "dklen", "salt", "derived_key"})
+KEY_RECORD_KEYS = frozenset({"kdf", "n", "r", "p", "dklen", "salt", "verifier_sha256"})
 _RETURNS_FILE = re.compile(r"ledger/returns/[0-9a-f]{64}\.csv")
 # Section 11, item 6: a holdout run may be retried "at the commit of its selectable run
 # plus only commits that touch data loading or the seal". These are the files of data
@@ -452,6 +453,10 @@ class GitLedger:
                         "sensitivity runs, the unseal and the holdout run come only after the "
                         "ledger freeze"
                     )
+            if body.get("type") == UNSEAL:
+                problem = unseal_proof_error(self.git, genesis_of(written), body)
+                if problem:
+                    raise VerificationError(f"the unseal is refused: {problem}")
             try:
                 commit = self._commit(local, new_data, files, _message(entry))
                 self.git.run("update-ref", "-m", "ledger append", self.ref, commit, local or "")
@@ -641,6 +646,9 @@ class GitLedger:
                 f"entry {unseal.seq}: the unseal names the freeze {unseal.body['freeze']}, "
                 f"but the freeze anchor marks {freeze}"
             )
+        problem = unseal_proof_error(self.git, snapshot.genesis, unseal.body)
+        if problem:
+            raise VerificationError(f"entry {unseal.seq}: {problem}")
         from .gate import check_unseal_candidate  # the gate imports this module
 
         check_unseal_candidate(self.snapshot(freeze), registration, freeze, unseal)
@@ -875,9 +883,15 @@ def check_key_record(data: bytes) -> None:
     """The holdout key record, exactly (T25, review N8): a JSON object with the keys
     ``kdf`` ("scrypt"), ``n`` (a power of two, at least 2^17), ``r`` (8), ``p`` (1),
     ``dklen`` (at least 32), ``salt`` (lower-case hex, even length, at least 32
-    characters) and ``derived_key`` (lower-case hex of exactly ``dklen`` bytes), and
-    nothing else; the parameters must be ones ``hashlib.scrypt`` accepts within 256 MiB.
-    G1.6 writes the record; this is the contract genesis holds it to."""
+    characters) and ``verifier_sha256`` (the lower-case hex SHA-256 of the scrypt
+    output), and nothing else; the parameters must be ones ``hashlib.scrypt`` accepts
+    within 256 MiB. G1.6 writes the record; this is the contract genesis holds it to.
+
+    The record is the commitment of a commit-reveal (G1.6 security review H1): it holds
+    a hash of the scrypt output, never the output itself, and the unseal entry reveals
+    the output as its ``proof``, which the ledger checks against this hash when the
+    entry is written and on every replay. Offline guessing still costs one scrypt per
+    guess."""
     try:
         record = loads_strict(data)
     except CanonicalError as exc:
@@ -887,7 +901,7 @@ def check_key_record(data: bytes) -> None:
         problem = f"the keys are exactly {sorted(KEY_RECORD_KEYS)}"
     else:
         n, r, p, dklen = record["n"], record["r"], record["p"], record["dklen"]
-        salt, derived = record["salt"], record["derived_key"]
+        salt, verifier = record["salt"], record["verifier_sha256"]
         integers = all(type(v) is int for v in (n, r, p, dklen))
         if record["kdf"] != "scrypt" or not integers:
             problem = "kdf is scrypt and n, r, p and dklen are integers"
@@ -895,14 +909,39 @@ def check_key_record(data: bytes) -> None:
             problem = "n is a power of two of at least 2^17, r is 8 and p is 1"
         elif not isinstance(salt, str) or not re.fullmatch(r"(?:[0-9a-f]{2}){16,}", salt):
             problem = "salt is lower-case hex of at least 16 bytes"
-        elif dklen < 32 or not isinstance(derived, str) or not re.fullmatch(
-            rf"[0-9a-f]{{{2 * dklen}}}", derived
-        ):
-            problem = "dklen is at least 32 and derived_key is lower-case hex of dklen bytes"
+        elif dklen < 32:
+            problem = "dklen is at least 32"
+        elif not isinstance(verifier, str) or not re.fullmatch(r"[0-9a-f]{64}", verifier):
+            problem = "verifier_sha256 is a lower-case hex SHA-256"
         elif not _scrypt_accepts(n, r, p, dklen):
             problem = "hashlib.scrypt refuses these parameters within 256 MiB"
     if problem:
         raise LedgerError(f"the key record breaks its contract (threat model T25): {problem}")
+
+
+def pinned_key_record(git: Git, genesis: Entry) -> dict:
+    """The key record the genesis entry pins, read from its commit and checked against
+    its SHA-256 and the contract; never the working tree's copy (T25)."""
+    pin = genesis.body["key_record"]
+    data = git.blob(pin["commit"], pin["path"])
+    if data is None:
+        raise VerificationError(f"no key record at {pin['commit']}:{pin['path']}, which genesis pins")
+    if sha256_hex(data) != pin["sha256"]:
+        raise VerificationError("the key record at its pinned commit does not match the genesis entry")
+    check_key_record(data)
+    return loads_strict(data)
+
+
+def unseal_proof_error(git: Git, genesis: Entry, body: Mapping) -> str | None:
+    """Why an unseal entry's ``proof`` is not the scrypt output whose SHA-256 the key
+    record genesis pins, or None (security review H1). Compared in constant time."""
+    record = pinned_key_record(git, genesis)
+    proof = body.get("proof")
+    if not isinstance(proof, str) or not re.fullmatch(rf"[0-9a-f]{{{2 * record['dklen']}}}", proof):
+        return "its proof is not the scrypt output of the pinned key record's length"
+    if not hmac.compare_digest(sha256_hex(bytes.fromhex(proof)), record["verifier_sha256"]):
+        return "its proof does not verify against the key record genesis pins: no owner's key (T25)"
+    return None
 
 
 def tree_digests(git: Git, commit: str, tree_paths: Mapping[str, Sequence[str]]) -> dict:

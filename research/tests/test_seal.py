@@ -12,6 +12,8 @@ section 11 of docs/PREREGISTRATION.md and decisions D4 and D17.
 
 import ast
 import copy
+import functools
+import hashlib
 import io
 import json
 import re
@@ -24,6 +26,7 @@ from conftest import clear_overrides
 from ledger_fixtures import (
     KEY_RECORD,
     KEY_RECORD_DOC,
+    KEY_RECORD_TEXT,
     REPO,
     RESEARCH,
     TEST_PASSPHRASE,
@@ -120,8 +123,15 @@ def holdout_run(world, sha=None):
                        store=world.store)
 
 
+@functools.lru_cache(maxsize=4)
+def proof_of(passphrase=TEST_PASSPHRASE):
+    """The scrypt output an unseal reveals, under the test record's salt."""
+    return seal.derive(passphrase, KEY_RECORD_DOC)
+
+
 def unseal_body(world, cid=CANDIDATE, **changes):
-    """An unseal entry's body as the seal would write it, by hand."""
+    """An unseal entry's body as the seal would write it, by hand, with the owner's
+    proof unless ``changes`` replaces it."""
     genesis = genesis_of(world)
     opened, closed = trial(world, cid)
     return {
@@ -134,6 +144,7 @@ def unseal_body(world, cid=CANDIDATE, **changes):
         "freeze": world.ledger.verify().freeze or "0" * 40,
         "holdout_manifest_sha256": genesis.body["manifests"]["holdout"],
         "key_record_sha256": genesis.body["key_record"]["sha256"],
+        "proof": proof_of(),
         **changes,
     }
 
@@ -175,9 +186,15 @@ def holdout_open_body(world, candidate_cid=CANDIDATE, configuration=None):
 # --- the key record (item 1 of the brief; T25) ---------------------------------------
 
 
-def test_the_test_key_record_is_derived_from_the_test_passphrase():
-    assert seal.derive(TEST_PASSPHRASE, KEY_RECORD_DOC) == KEY_RECORD_DOC["derived_key"]
-    seal.check_key(KEY_RECORD_DOC, TEST_PASSPHRASE)
+def test_the_committed_sample_record_commits_to_the_test_passphrase():
+    # Computed here with hashlib alone, independently of norse_research.seal.
+    output = hashlib.scrypt(TEST_PASSPHRASE.encode(), salt=bytes.fromhex("ab" * 16),
+                            n=2**17, r=8, p=1, dklen=32, maxmem=256 * 1024 * 1024)
+    assert KEY_RECORD_DOC["verifier_sha256"] == hashlib.sha256(output).hexdigest()
+    # The record holds a hash of the scrypt output, never the output (review H1).
+    assert output.hex() not in KEY_RECORD_TEXT and set(KEY_RECORD_DOC) == gitledger.KEY_RECORD_KEYS
+    check_key_record(KEY_RECORD_TEXT.encode())
+    assert seal.check_key(KEY_RECORD_DOC, TEST_PASSPHRASE) == output.hex() == proof_of()
 
 
 class _Terminal(io.StringIO):
@@ -204,9 +221,11 @@ def test_key_record_command_writes_a_record_the_genesis_step_accepts(tmp_path, m
     assert (record["kdf"], record["n"], record["r"], record["p"], record["dklen"]) == (
         "scrypt", 2**17, 8, 1, 32)
     assert len(bytes.fromhex(record["salt"])) == 16
-    assert passphrase not in data.decode()
+    proof = seal.check_key(record, passphrase)
+    assert record["verifier_sha256"] == hashlib.sha256(bytes.fromhex(proof)).hexdigest()
+    assert passphrase not in data.decode() and proof not in data.decode()
+    assert seal.sha256_hex(data) in shown.out  # for the owner to keep beside the passphrase
     check_key_record(data)  # the validator the genesis step applies
-    seal.check_key(record, passphrase)
     with pytest.raises(SealRefused, match="never replaced"):
         seal.main(["key-record", "--out", str(out)])
     # The genesis step itself accepts it, committed on main, and pins its hash.
@@ -227,6 +246,11 @@ def test_key_record_command_refuses_differing_or_short_passphrases(tmp_path):
         seal.write_key_record(tmp_path / "a.json", read=lambda prompt: next(answers))
     with pytest.raises(SealRefused, match="shorter than 20"):
         seal.write_key_record(tmp_path / "b.json", read=lambda prompt: "short words")
+    # Review L6: six words as well as 20 characters, whatever separates them.
+    for weak in ("correct horse battery staple", "averyveryverylongsingleword-and-two"):
+        with pytest.raises(SealRefused, match="fewer than 6 words"):
+            seal.write_key_record(tmp_path / "c.json", read=lambda prompt, w=weak: w)
+    assert seal.passphrase_problem("plinth-ochre-gravel-fable-tundra-quill") is None
     assert not list(tmp_path.iterdir())
 
 
@@ -243,8 +267,12 @@ def test_key_record_uses_scrypt_with_the_registered_parameters():
         {**good, "r": 4},
         {**good, "p": 2},
         {**good, "salt": "ab" * 15},
-        {**good, "dklen": 16, "derived_key": good["derived_key"][:32]},
+        {**good, "dklen": 16},
+        {**good, "verifier_sha256": good["verifier_sha256"].upper()},
+        {**good, "verifier_sha256": good["verifier_sha256"][:40]},
         {**good, "sha256": "0" * 64},  # no other hash of the passphrase
+        # The scrypt output itself is never in the record: it is the unseal's proof.
+        {**good, "derived_key": seal.derive(TEST_PASSPHRASE, good)},
     ]
     for record in weak:
         with pytest.raises(ledger.LedgerError, match="breaks its contract"):
@@ -812,3 +840,69 @@ def test_key_record_is_read_from_the_genesis_preregistration_not_the_working_tre
     assert entry.body["key_record_sha256"] == genesis_of(frozen).body["key_record"]["sha256"]
     record = seal.key_record_of(frozen.ledger.git, genesis_of(frozen))
     assert record == KEY_RECORD_DOC
+
+
+def test_an_unseal_written_without_the_key_is_refused_by_the_ledger(frozen):
+    # Security review H1 (probe K1): the key is on the path that opens the holdout. The
+    # public append refuses an unseal with no proof or with a proof from another
+    # passphrase, and replay refuses one written past append by plumbing, so neither
+    # the re-fetch nor the holdout run can start.
+    before = frozen.remote_ledger()
+    body = unseal_body(frozen)
+    del body["proof"]
+    with pytest.raises(VerificationError, match="unseal entry holds"):
+        frozen.ledger.append(body)
+    for proof in (proof_of(OTHER_KEY), "ab" * 32, proof_of()[:-2] + "00"):
+        with pytest.raises(VerificationError, match="does not verify"):
+            frozen.ledger.append(unseal_body(frozen, proof=proof))
+    with pytest.raises(VerificationError, match="scrypt output of the pinned"):
+        frozen.ledger.append(unseal_body(frozen, proof=proof_of() + "00"))
+    assert frozen.remote_ledger() == before
+    hand_append(frozen, unseal_body(frozen, proof=proof_of(OTHER_KEY)))
+    with pytest.raises(VerificationError, match="does not verify"):
+        frozen.ledger.verify()
+    with pytest.raises(VerificationError, match="does not verify"):
+        seal.fetch_holdout(frozen.repo, store=frozen.store, fetch=frozen.fetcher())
+    with pytest.raises(VerificationError, match="does not verify"):
+        holdout_run(frozen)
+    assert frozen.holdout_files_in_mirror() == []
+
+
+def test_the_unseal_entry_reveals_the_proof_the_key_record_commits_to(frozen):
+    entry = unseal(frozen, fetch=False)
+    assert entry.body["proof"] == proof_of()
+    assert hashlib.sha256(bytes.fromhex(entry.body["proof"])).hexdigest() == (
+        KEY_RECORD_DOC["verifier_sha256"])
+    frozen.ledger.verify()
+
+
+def test_check_key_verifies_the_genesis_record_and_writes_nothing(tmp_path, monkeypatch, capsys):
+    # Security review M2: the owner checks the record genesis pinned straight after
+    # genesis, so a record substituted there is found at once, not at the unseal.
+    clear_overrides(monkeypatch)
+    world = World(tmp_path / "honest")
+    try:
+        before = world.remote_ledger()
+        pinned = genesis_of(world).body["key_record"]["sha256"]
+        assert seal.check_genesis_key(world.repo, read_key=key()) == pinned
+        with pytest.raises(SealRefused, match="does not verify"):
+            seal.check_genesis_key(world.repo, read_key=key(OTHER_KEY))
+        monkeypatch.setattr("sys.stdin", _Terminal())
+        monkeypatch.setattr(seal.getpass, "getpass", lambda prompt: TEST_PASSPHRASE)
+        assert seal.main(["--repo", str(world.repo), "check-key"]) == 0
+        assert pinned in capsys.readouterr().out
+        assert world.remote_ledger() == before
+    finally:
+        world.close()
+    # Genesis pinned a record for a passphrase someone else chose: check-key says so.
+    world = World(tmp_path / "substituted", genesis=False)
+    try:
+        world.write("research/keys/other.json", seal.key_record_bytes(
+            seal.make_key_record(OTHER_KEY, salt=bytes(16))))
+        commit = world.commit("a record the owner never made")
+        world.push()
+        world.write_genesis(key_record=(commit, "research/keys/other.json"))
+        with pytest.raises(SealRefused, match="does not verify"):
+            seal.check_genesis_key(world.repo, read_key=key())
+    finally:
+        world.close()

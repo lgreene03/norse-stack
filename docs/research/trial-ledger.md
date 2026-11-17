@@ -51,7 +51,8 @@ informative only: no trust decision reads the clock, and a test fails if code ou
 * **Unseal** (G1.6) is written at most once, after the freeze anchor, when the owner's
   passphrase verifies. It names the pre-registration genesis names, the holdout candidate
   the registered rule selects on the frozen ledger, and the hashes of the holdout manifest
-  and the key record; the holdout run follows it. See [holdout-seal.md](holdout-seal.md).
+  and the key record, and reveals the scrypt output the key record commits to; the
+  holdout run follows it. See [holdout-seal.md](holdout-seal.md).
 
 N is the number of open entries of kind `trial`: reruns, failures and runs that never
 finished all count, and nothing is deduplicated by configuration hash (section 9).
@@ -170,6 +171,12 @@ main or overlapping (a hypothesis's paths may sit inside the harness paths, whic
 them out of the harness digest; no other overlap is allowed); and a key record that breaks
 its contract.
 
+Straight after the genesis step the owner runs, in a terminal of their own,
+`python -m norse_research.seal check-key`. It checks the typed passphrase against the key
+record the genesis entry on the remote pins and writes nothing. Whoever runs the genesis step
+chooses which record it pins, so this is the check that it pinned the owner's (security review
+M2); the owner also compares the SHA-256 it prints with the one `key-record` printed.
+
 ### The holdout key record contract (for G1.6)
 
 The genesis step accepts the key record only as a JSON object with exactly these keys, and
@@ -184,11 +191,16 @@ the genesis step):
 | `p` | `1` |
 | `dklen` | an integer, at least 32 |
 | `salt` | lower-case hex, an even number of characters, at least 32 (16 bytes) |
-| `derived_key` | lower-case hex of exactly `dklen` bytes |
+| `verifier_sha256` | lower-case hex SHA-256 of the scrypt output (64 characters) |
 
 The parameters must also be ones `hashlib.scrypt` accepts within `maxmem` of 256 MiB; the
 genesis step makes one trial call to check. The record must be committed on the remote's
-main. Nothing else may be in it: in particular no other hash of the passphrase.
+main. Nothing else may be in it: in particular no other hash of the passphrase, and never the
+scrypt output itself. The record is the commitment of a commit-reveal (security review H1):
+the unseal entry reveals the scrypt output as its `proof`, and the ledger refuses an unseal
+whose proof does not hash to `verifier_sha256`, when it is written and on every replay.
+`research/tests/fixtures/key-record-test-passphrase-only.json` is a sample in this format for
+a passphrase that exists only in the tests.
 
 ## The ledger branch ruleset
 
