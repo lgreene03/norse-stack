@@ -175,8 +175,8 @@ different axis of honesty.
 **Since G1.2 (2026-11) the gateway runs nothing.** It refuses every run
 submission, with or without its bearer token, because H1 and H2 trials run only
 through `research/norse_research`'s harness, which writes every run to the trial
-ledger. It serves earlier runs read-only behind the token, with CORS only for the
-console's origin ([RUNBOOK, section 1.1](RUNBOOK.md)). The rest of this section
+ledger. It serves earlier runs read-only behind the token and a Host allowlist,
+with no CORS headers ([RUNBOOK, section 1.1](RUNBOOK.md)). The rest of this section
 describes the gateway as it was built.
 
 Walk-forward + PBO + Deflated-Sharpe validation, run **as a service, out of the

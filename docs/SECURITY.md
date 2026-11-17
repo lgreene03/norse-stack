@@ -38,10 +38,12 @@ inside the Compose network is treated as a single trusted domain:
   do, so that anything else on the host listening on every interface is not
   open to the network either.
 - The optional console dev server (`console/serve.py`, port 8090) is not part
-  of the compose stack and currently listens on every interface. It proxies to
-  the loopback services, including research run submission, so it re-exposes
-  them while it runs; run it only on a trusted network until it binds to
-  loopback.
+  of the compose stack. It binds 127.0.0.1 (`CONSOLE_BIND` overrides it) and
+  refuses any request whose Host header is not `localhost:8090` or
+  `127.0.0.1:8090`, which keeps out the network and DNS-rebinding pages. It
+  proxies to the loopback services and adds the research gateway's token to
+  research reads, so any local process that reaches it reads gateway results
+  without the token. It refuses research run submission and never forwards it.
 - Inter-service traffic (HTTP APIs, Kafka, OTLP) stays on the internal Docker
   network and never crosses an untrusted link.
 

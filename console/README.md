@@ -36,11 +36,22 @@ Override the port with `PORT=9000 python3 serve.py`. The proxy targets
 `SLEIPNIR_HOST`, `MUNINN_HOST`, `REDPANDA_CONSOLE_HOST`, `RESEARCH_HOST`,
 `MIMIR_HOST`, `FORSETI_HOST` (in compose: `research`, `mimir`, `forseti`).
 
+The console binds 127.0.0.1 (set `CONSOLE_BIND` to listen elsewhere) and
+refuses, with 403, any request whose Host header is not `localhost:PORT` or
+`127.0.0.1:PORT` (add more with `CONSOLE_ALLOWED_HOSTS`, comma-separated
+host:port). That keeps out other machines and DNS-rebinding pages, which matters
+because the console adds the research gateway's token for its callers.
+
 The research gateway needs a bearer token (G1.2). The console reads it from the
 file named by `RESEARCH_TOKEN_FILE`, by default `secrets/research_token` at the
 repo root (the same untracked file compose mounts into the gateway), and adds it
-to the requests it proxies there; the browser never sees it. The startup output
-says whether the file was found, never the token. See
+to the research reads it proxies there, and nowhere else. A file that fails the
+gateway's rule (at least 32 printable, non-space ASCII characters after one
+trailing newline) is never sent. The startup output says whether the file is
+usable and why not, never the token. Proxy errors return no exception text or
+backend URL, backend redirects are not followed, and proxy environment
+variables are ignored. `python -m unittest discover -s console/tests` checks
+all of this (CI's validate job runs it). See
 [docs/RUNBOOK.md, section 1.1](../docs/RUNBOOK.md).
 
 Opening `index.html` directly via `file://` (or adding `?demo=1` to the URL)

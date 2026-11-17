@@ -49,8 +49,16 @@ The token is a file, never a command-line argument or an `.env` value (G0.4):
 read-only into the `research` container at `/run/secrets/research_token` and
 names it by path in `HUGINN_RESEARCH_TOKEN_FILE`. The console server
 (`console/serve.py`) reads the same file, or the one named by
-`RESEARCH_TOKEN_FILE`, and adds the token to the requests it proxies to the
-gateway, so the browser never sees it.
+`RESEARCH_TOKEN_FILE`, and adds the token to the research reads it proxies to
+the gateway, and to nothing else. The console binds 127.0.0.1 and refuses any
+request whose Host header is not `localhost:8090` or `127.0.0.1:8090`, so
+neither another machine nor a DNS-rebinding page can read results through it.
+
+The token must be at least 32 printable, non-space ASCII characters; one
+trailing newline is allowed and removed. A file that fails this, for example a
+second line left by `>>`, a Windows line ending or a short value, is rejected by
+both the gateway (which then answers `503`) and the console, and both name the
+cause in their logs without printing the token.
 
 `make up` and `scripts/smoke.sh` create the file when it is absent. To create it
 by hand before `docker compose up`:
@@ -63,23 +71,27 @@ chmod 644 secrets/research_token
 
 The file has to exist before the stack starts, because Compose bind-mounts it
 into the container. Mode 644 lets the gateway's unprivileged container user read
-it through that mount. On this single-user Mac the token authenticates the
-machine, not a person, as the threat model already says for T26
-([ledger-threat-model.md](research/ledger-threat-model.md)).
+it through that mount. Any process running as this account can read the file,
+and any local process can read results through the console, which adds the
+token for it. So the token keeps out other machines and web pages, not local
+processes: it authenticates this Mac, not a person, as the threat model says
+for T26 ([ledger-threat-model.md](research/ledger-threat-model.md)).
 
 The gateway reads the token once, at startup. After creating or replacing the
 file, recreate it with `docker compose up -d --force-recreate research`; the
-console picks the new file up on its next request. To call the gateway directly:
+console picks the new file up on its next request. To call the gateway directly
+without putting the token on a command line (`printf` is a shell builtin, so the
+token never appears in any process's arguments, where `ps` would show it):
 
 ```bash
-curl -fsS -H "Authorization: Bearer $(cat secrets/research_token)" \
+curl -fsS -H @<(printf 'Authorization: Bearer %s\n' "$(cat secrets/research_token)") \
   http://127.0.0.1:8094/api/research/runs
 ```
 
 If the research panel stays on "connecting to research…", check
 `docker compose logs --tail=20 research` for "No research token configured" or
-"Research token unreadable", and the console's startup line `research token:`,
-which says whether it found the file.
+"Research token rejected" (which names the cause), and the console's startup
+line `research token:`, which says whether the file is usable and, if not, why.
 
 ---
 

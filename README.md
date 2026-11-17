@@ -281,7 +281,7 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 
 ### Research Gateway (read-only since G1.2)
 - Runs nothing. `POST /api/research/runs` is refused with or without a token, because H1 and H2 trials run only through `research/norse_research`'s harness, which writes every run to the trial ledger.
-- `GET /api/research/runs` lists, and `GET /api/research/runs/{id}` returns, runs that earlier versions persisted. Both need `Authorization: Bearer <token>`, with the token in the untracked `secrets/research_token` ([RUNBOOK, section 1.1](docs/RUNBOOK.md)); the console adds it for you. CORS goes only to the console's own origin.
+- `GET /api/research/runs` lists, and `GET /api/research/runs/{id}` returns, runs that earlier versions persisted. Both need `Authorization: Bearer <token>`, with the token in the untracked `secrets/research_token` ([RUNBOOK, section 1.1](docs/RUNBOOK.md)). The console adds it to research reads; it binds 127.0.0.1 and refuses a foreign Host header, so only local processes can use it. The gateway sends no CORS headers and refuses a Host header other than 127.0.0.1, localhost or research on 8094.
 - Walk-forward itself still runs offline through huginn's `cmd/walkforward`; the published results are in [docs/EDGE_VERDICT.md](docs/EDGE_VERDICT.md).
 
 ### Mimir (point-in-time feature store)

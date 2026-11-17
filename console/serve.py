@@ -32,15 +32,24 @@ RESEARCH_HOST, MIMIR_HOST, FORSETI_HOST, HEIMDALL_HOST).
 
 A backend being down NEVER crashes the console: the proxy returns 502 with a
 JSON {"error": ...} body and short timeouts so a hung backend can't wedge the
-server.
+server. Error bodies never carry exception text or backend URLs; those are
+logged here instead. Backend redirects are not followed and HTTP proxy
+environment variables are ignored, so a request never leaves for another host.
+
+The console binds 127.0.0.1 (CONSOLE_BIND overrides it) and refuses, with 403,
+any request whose Host header is not localhost:PORT or 127.0.0.1:PORT (plus any
+in CONSOLE_ALLOWED_HOSTS), which stops the LAN and DNS-rebinding pages (G0.2's
+console clause, pulled forward by G1.2).
 
 The research gateway needs a bearer token on every route but /healthz (G1.2).
 The console reads it from the file whose path is in RESEARCH_TOKEN_FILE
 (default: secrets/research_token at the repo root, the same untracked file
 docker-compose.yml mounts into the gateway) and adds it to the requests it
-proxies there, so the browser never sees it. The token is never logged. The
-gateway runs nothing, so POST /api/research[/*] is refused here and never
-forwarded. docs/RUNBOOK.md, section 1.1.
+proxies there, and only there. The token is never logged or returned. A file
+that fails the gateway's rule (one trailing newline removed, then at least 32
+printable, non-space ASCII characters) is not used at all. The gateway runs
+nothing, so POST /api/research[/*] is refused here and never forwarded.
+docs/RUNBOOK.md, section 1.1.
 
 Usage:
     python3 serve.py            # serves on http://localhost:8090
@@ -55,6 +64,15 @@ import urllib.request
 
 PORT = int(os.environ.get("PORT", "8090"))
 DIRECTORY = os.path.dirname(os.path.abspath(__file__))
+
+# Loopback only by default (G0.2). Anything else is an explicit opt-in.
+BIND_HOST = os.environ.get("CONSOLE_BIND", "127.0.0.1")
+# Extra Host header values to accept besides localhost:PORT and 127.0.0.1:PORT,
+# comma-separated host:port. Empty by default.
+EXTRA_ALLOWED_HOSTS = frozenset(
+    h.strip().lower()
+    for h in os.environ.get("CONSOLE_ALLOWED_HOSTS", "").split(",")
+    if h.strip())
 
 # Short proxy timeout: a hung backend must never wedge a console request.
 PROXY_TIMEOUT_SECS = float(os.environ.get("PROXY_TIMEOUT_SECS", "3"))
@@ -127,19 +145,70 @@ GET_ROUTES = {
 }
 
 
-def research_auth_headers():
-    """Return the gateway's Authorization header, or {} without a token.
+MIN_TOKEN_LEN = 32
 
-    With the file absent, unreadable or empty the request goes without one and
-    the gateway answers 401 (or 503 if it has no token either), which the
-    research panel shows as not connected. Never raises.
+
+def load_research_token():
+    """Read and check the research token. Returns (token, None) or (None, cause).
+
+    The rule is huginn cmd/research's loadToken, byte for byte: remove exactly
+    one trailing "\\n", then require at least MIN_TOKEN_LEN characters, each
+    printable non-space ASCII (0x21 to 0x7E). So a two-line file left by `>>`,
+    a "\\r\\n" ending or a short token is rejected, never sent. The cause never
+    contains the file's content. Never raises.
     """
     try:
-        with open(RESEARCH_TOKEN_FILE, encoding="utf-8") as fh:
-            token = fh.read().strip()
-    except OSError:
-        return {}
+        with open(RESEARCH_TOKEN_FILE, "rb") as fh:
+            raw = fh.read()
+    except OSError as e:
+        return None, "unreadable (%s)" % type(e).__name__
+    if raw.endswith(b"\n"):
+        raw = raw[:-1]
+    if len(raw) < MIN_TOKEN_LEN:
+        return None, "holds fewer than %d characters" % MIN_TOKEN_LEN
+    if any(b < 0x21 or b > 0x7E for b in raw):
+        return None, "holds whitespace, a control character or a non-ASCII byte"
+    return raw.decode("ascii"), None
+
+
+_last_token_problem = [None]
+
+
+def research_auth_headers():
+    """Return the gateway's Authorization header, or {} without a valid token.
+
+    Without one the request goes bare and the gateway answers 401 (or 503 if
+    it has no token either), which the research panel shows as not connected.
+    A change in the token file's state is logged once, by cause, never value.
+    """
+    token, cause = load_research_token()
+    if cause != _last_token_problem[0]:
+        _last_token_problem[0] = cause
+        if cause:
+            print("  research token rejected: %s %s" % (RESEARCH_TOKEN_FILE, cause))
     return {"Authorization": "Bearer " + token} if token else {}
+
+
+def token_status():
+    """One startup line saying whether the token is usable; never the token."""
+    _, cause = load_research_token()
+    return "  research token: %s (%s)" % (
+        RESEARCH_TOKEN_FILE,
+        "present" if cause is None
+        else "REJECTED, %s: the research panel will not connect" % cause)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every backend redirect, so a request (and any token on it) never
+    follows a Location to another host (G1.2 review, F7)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+# Every proxied request goes through this opener: no redirects, and no proxy
+# from http_proxy and the like, since every backend is on this host.
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -147,6 +216,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*args, directory=DIRECTORY, **kwargs)
 
     # ---- helpers --------------------------------------------------------
+    def _host_allowed(self):
+        """True when the Host header names this console on loopback.
+
+        A DNS-rebinding page reaches the console under the attacker's name, and
+        a LAN client under the Mac's address; both carry a foreign Host.
+        """
+        port = self.server.server_address[1]
+        host = (self.headers.get("Host") or "").strip().lower()
+        return host in {"localhost:%d" % port, "127.0.0.1:%d" % port} | EXTRA_ALLOWED_HOSTS
+
+    def _refuse_foreign_host(self):
+        """Send 403 and return True when the Host header is not allowed."""
+        if self._host_allowed():
+            return False
+        self._send_json(403, {"error": "host not allowed"})
+        return True
+
     def _send_json(self, status, obj, headers=None):
         # No-cache headers are injected by the end_headers() override below, so
         # every response (static or API) stays uncached during development.
@@ -166,7 +252,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         Never raises: a backend that is down/slow/garbage yields a 502 JSON
         body rather than a 500 or a wedged connection. Status code and the
         Content-Type are passed through on success so JSON stays JSON and
-        Prometheus text stays text.
+        Prometheus text stays text. A redirect is not followed: it becomes a
+        502. The client never sees exception text or the backend URL.
         """
         url = "http://%s:%d%s" % (host, port, backend_path)
         req = urllib.request.Request(url, method=method, data=body)
@@ -174,7 +261,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             for k, v in headers.items():
                 req.add_header(k, v)
         try:
-            with urllib.request.urlopen(req, timeout=PROXY_TIMEOUT_SECS) as resp:
+            with _OPENER.open(req, timeout=PROXY_TIMEOUT_SECS) as resp:
                 payload = resp.read()
                 ctype = resp.headers.get("Content-Type", "application/octet-stream")
                 self.send_response(resp.status)
@@ -184,6 +271,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 if self.command != "HEAD":
                     self.wfile.write(payload)
         except urllib.error.HTTPError as e:
+            if 300 <= e.code < 400:
+                # A redirect, refused by _NoRedirect: never followed.
+                print("  proxy: %s %s answered %d; redirect not followed" % (method, url, e.code))
+                e.close()
+                self._send_json(502, {"error": "backend redirected; not followed"})
+                return
             # Backend answered with a non-2xx: pass the status + body through so
             # the console can show the real upstream error (e.g. 503 locked).
             try:
@@ -202,9 +295,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if self.command != "HEAD":
                 self.wfile.write(payload)
         except Exception as e:  # connection refused, timeout, DNS, etc.
-            self._send_json(502, {"error": "backend unreachable",
-                                  "detail": str(e),
-                                  "target": url})
+            # Log the cause here, with any Authorization value scrubbed, and
+            # return nothing of it: exception text can quote request headers.
+            detail = str(e)
+            for v in (headers or {}).values():
+                if v:
+                    detail = detail.replace(v, "<redacted>")
+            print("  proxy: %s %s failed: %s: %s" % (method, url, type(e).__name__, detail))
+            self._send_json(502, {"error": "backend unreachable"})
 
     def _health_proxy(self, svc):
         """Probe a service's /healthz and report up/down as JSON.
@@ -275,16 +373,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return False
 
     def do_GET(self):
+        if self._refuse_foreign_host():
+            return
         if self._try_proxy_get():
             return
         super().do_GET()
 
     def do_HEAD(self):
+        if self._refuse_foreign_host():
+            return
         if self._try_proxy_get():
             return
         super().do_HEAD()
 
     def do_POST(self):
+        if self._refuse_foreign_host():
+            return
         path = self.path.split("?", 1)[0]
         # HALT / RESUME → huginn breaker. Body {"halted": true|false} selects
         # the trigger (halt) vs reset (resume) endpoint. The Authorization
@@ -335,19 +439,22 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
+def create_server(port=None, bind=None):
+    """The console's server, on BIND_HOST (127.0.0.1 unless CONSOLE_BIND)."""
+    return Server((BIND_HOST if bind is None else bind,
+                   PORT if port is None else port), Handler)
+
+
 def main():
-    with Server(("", PORT), Handler) as httpd:
+    with create_server() as httpd:
         url = "http://localhost:%d/" % PORT
         print("Norse Console serving %s" % DIRECTORY)
-        print("  -> %s" % url)
+        print("  -> %s  (bound to %s)" % (url, BIND_HOST))
         print("  proxy: huginn=%s:8083  odin=%s:8086" % (HUGINN_HOST, ODIN_HOST))
         print("  proxy: research=%s:8094  mimir=%s:8095  forseti=%s:8096  heimdall=%s:8097"
               % (RESEARCH_HOST, MIMIR_HOST, FORSETI_HOST, HEIMDALL_HOST))
-        # Say whether the research token is present; never print the token.
-        print("  research token: %s (%s)"
-              % (RESEARCH_TOKEN_FILE,
-                 "present" if research_auth_headers()
-                 else "MISSING or empty: the research panel will not connect"))
+        # Say whether the research token is usable; never print the token.
+        print(token_status())
         print("  (Ctrl-C to stop)")
         try:
             httpd.serve_forever()

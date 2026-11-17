@@ -449,8 +449,9 @@ services:
   # research/norse_research's harness, which writes the trial ledger. It serves
   # runs earlier versions persisted, read-only. Every route but /healthz needs
   # the bearer token in secrets/research_token, mounted as a read-only secret
-  # file and named by path (G0.4); without it the API answers 503. CORS goes
-  # only to the console's own origin. docs/RUNBOOK.md, section 1.1.
+  # file and named by path (G0.4); without a valid one the API answers 503. It
+  # sends no CORS headers and refuses a Host header other than 127.0.0.1,
+  # localhost or research on 8094. docs/RUNBOOK.md, section 1.1.
   research:
     build:
       context: ../huginn
@@ -461,7 +462,6 @@ services:
       RESEARCH_PORT: "8094"
       RESEARCH_RESULTS_DIR: data/research
       HUGINN_RESEARCH_TOKEN_FILE: /run/secrets/research_token
-      RESEARCH_CONSOLE_ORIGIN: http://localhost:8090
     secrets:
       - research_token
     volumes:

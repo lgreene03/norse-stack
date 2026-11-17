@@ -80,6 +80,14 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The console server's security behaviour (G1.2, G0.2's console clause):
+      # it binds loopback and refuses a foreign Host header, adds the research
+      # token only to research reads and never returns it, refuses research
+      # POSTs, rejects a malformed token file and follows no redirect. Stdlib
+      # only, fake backends on loopback, fake token.
+      - name: Test the console server
+        run: python -m unittest discover -s console/tests -v
+
       - name: Validate monitoring config (prometheus + grafana provisioning)
         run: |
           python -m pip install --upgrade pip

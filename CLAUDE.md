@@ -113,7 +113,8 @@ Served with versioning, provenance and online retraining; the score is provenanc
 ### Research Gateway (read-only since G1.2, `huginn` cmd/research)
 - Runs nothing: `POST /api/research/runs` is refused with or without a token, because H1 and H2 trials run only through `research/norse_research`'s ledgered harness. Do not re-enable it without the ledgered path G1.2 describes.
 - `GET /api/research/runs` and `GET /api/research/runs/{id}` serve runs earlier versions persisted.
-- Every route but `/healthz` needs `Authorization: Bearer <token>`; the token is the untracked file `secrets/research_token`, mounted as a compose secret and read by `console/serve.py` (docs/RUNBOOK.md, section 1.1). CORS goes only to the console's origin.
+- Every route but `/healthz` needs `Authorization: Bearer <token>`; the token is the untracked file `secrets/research_token`, mounted as a compose secret and read by `console/serve.py` (docs/RUNBOOK.md, section 1.1). No CORS headers; a Host other than 127.0.0.1, localhost or research on 8094 is refused.
+- `console/serve.py` binds 127.0.0.1 and refuses a Host other than `localhost:PORT` or `127.0.0.1:PORT`, because it adds the research token for its callers; `console/tests` (run in CI's validate job) holds it to that.
 
 ### Mimir (Point-in-Time Feature Store)
 - `GET /api/features?as_of=<t>` — as-of query returning only data known at instant `t` (no lookahead)

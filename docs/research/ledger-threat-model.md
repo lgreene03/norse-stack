@@ -760,8 +760,11 @@ from browsers and the network.
 unauthenticated submission" among its own tests; it is met by these, and by the same
 assertions against any other submission surface the harness exposes.
 
-**Residual.** Insiders, as above. The console server (`console/serve.py`) proxies run
-submission and binds every interface until G0.2 lands.
+**Residual.** Insiders, as above. The console server (`console/serve.py`) adds the token
+to the research reads it proxies, so any local process reads results through it without
+the token, which the token file's mode already allows. Since G1.2 it no longer proxies
+run submission, binds 127.0.0.1 and refuses a foreign Host header, which closes the
+network and DNS-rebinding paths through it.
 
 #### T27. The REST comparison's cached responses and register
 

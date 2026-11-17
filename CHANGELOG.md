@@ -17,9 +17,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   trials run only through `research/norse_research`'s ledgered harness. Every
   route but `/healthz` needs a bearer token read from `secrets/research_token`,
   which compose mounts as a read-only secret file and `make up` and
-  `scripts/smoke.sh` create when absent; CORS goes only to the console's origin.
-  The console sends the token on its research proxy, no longer forwards POSTs
-  there, and its research panel has no Run button
+  `scripts/smoke.sh` create when absent. The gateway sends no CORS headers and
+  refuses a foreign Host header. The console sends the token on its research
+  proxy, no longer forwards POSTs there, and its research panel has no Run
+  button
+- `console/serve.py` binds 127.0.0.1 by default and refuses any request whose
+  Host header is not `localhost:PORT` or `127.0.0.1:PORT` (G0.2's console
+  clause, pulled forward by G1.2). It rejects a malformed research token file
+  instead of sending it, returns no exception text or backend URL in errors,
+  follows no backend redirect and ignores proxy environment variables. New
+  stdlib tests in `console/tests` run in CI's validate job
 
 ### Added
 - Unified docker-compose.yml booting the full stack (23 containers) plus infrastructure
