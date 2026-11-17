@@ -12,6 +12,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and the research gateway to the local network. The Postgres host ports are
   removed, CI fails any port published on another address, and `.env`, `.env.*`
   and `secrets/` are gitignored
+- The research gateway is locked down and runs nothing (G1.2, with
+  lgreene03/huginn#49). It refuses every run submission, because H1 and H2
+  trials run only through `research/norse_research`'s ledgered harness. Every
+  route but `/healthz` needs a bearer token read from `secrets/research_token`,
+  which compose mounts as a read-only secret file and `make up` and
+  `scripts/smoke.sh` create when absent. The gateway sends no CORS headers and
+  refuses a foreign Host header. The console sends the token on its research
+  proxy, no longer forwards POSTs there, and its research panel has no Run
+  button
+- `console/serve.py` binds 127.0.0.1 by default and refuses any request whose
+  Host header is not `localhost:PORT` or `127.0.0.1:PORT` (G0.2's console
+  clause, pulled forward by G1.2). It rejects a malformed research token file
+  instead of sending it, returns no exception text or backend URL in errors,
+  follows no backend redirect and ignores proxy environment variables. New
+  stdlib tests in `console/tests` run in CI's validate job
 
 ### Added
 - Unified docker-compose.yml booting the full stack (23 containers) plus infrastructure

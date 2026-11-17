@@ -444,9 +444,14 @@ services:
 
   # ── Research & Platform Services ──────────────────────────────────────
 
-  # Research / validation gateway: runs walk-forward + PBO + Deflated-Sharpe
-  # jobs OUT of the live trading process (reuses huginn's internal/research).
-  # No Kafka/DB deps; reads the bundled dataset, serves results over HTTP.
+  # Research gateway (huginn's cmd/research). It runs nothing: under G1.2 run
+  # submission is refused, because H1 and H2 trials run only through
+  # research/norse_research's harness, which writes the trial ledger. It serves
+  # runs earlier versions persisted, read-only. Every route but /healthz needs
+  # the bearer token in secrets/research_token, mounted as a read-only secret
+  # file and named by path (G0.4); without a valid one the API answers 503. It
+  # sends no CORS headers and refuses a Host header other than 127.0.0.1,
+  # localhost or research on 8094. docs/RUNBOOK.md, section 1.1.
   research:
     build:
       context: ../huginn
@@ -456,12 +461,11 @@ services:
     environment:
       RESEARCH_PORT: "8094"
       RESEARCH_RESULTS_DIR: data/research
-      RESEARCH_DATA_PATH: data/btc_test.jsonl
-      ACCESS_CONTROL_ALLOW_ORIGIN: ${ACCESS_CONTROL_ALLOW_ORIGIN:-*}
+      HUGINN_RESEARCH_TOKEN_FILE: /run/secrets/research_token
+    secrets:
+      - research_token
     volumes:
-      # The historical dataset is .dockerignored from the image; mount it in.
-      # Read-only: completed runs are served from memory (research jobs are
-      # ephemeral by design — re-run to reproduce).
+      # Runs persisted by earlier versions of the gateway, served read-only.
       - ../huginn/data:/app/data:ro
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8094/healthz"]
@@ -758,3 +762,10 @@ volumes:
   pgdata-muninn:
   pgdata-huginn:
   mimir-data:
+
+# Secret files, untracked under secrets/ (ignored by .gitignore). Each must
+# exist before `docker compose up`; `make up` creates the research token when it
+# is absent. docs/RUNBOOK.md, section 1.1.
+secrets:
+  research_token:
+    file: ./secrets/research_token

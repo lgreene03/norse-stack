@@ -25,11 +25,23 @@ clone: ## Clone the sibling service repos (../muninn ../huginn ../sleipnir ../mu
 build: ## Build all service images from the sibling checkouts (requires: make clone)
 	docker compose build
 
-up: ## Build (if needed) and boot the full stack from sibling checkouts
+up: secrets/research_token ## Build (if needed) and boot the full stack from sibling checkouts
 	docker compose up -d --build
 
-up-ghcr: ## Boot using prebuilt GHCR images for the engine services (no sibling checkouts needed; requires published images)
+up-ghcr: secrets/research_token ## Boot using prebuilt GHCR images for the engine services (no sibling checkouts needed; requires published images)
 	docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+
+# The research gateway's bearer token (G1.2): an untracked secret file that
+# docker-compose.yml mounts into the research service and the console sends.
+# Created only when absent, and never printed. Mode 644 so the gateway's
+# unprivileged container user can read it through the mount.
+# docs/RUNBOOK.md, section 1.1.
+secrets/research_token:
+	@mkdir -p secrets
+	@openssl rand -hex 32 > $@.tmp
+	@chmod 644 $@.tmp
+	@mv $@.tmp $@
+	@echo "Created $@ (research gateway token, not printed)"
 
 smoke: ## Run the end-to-end smoke test
 	./scripts/smoke.sh

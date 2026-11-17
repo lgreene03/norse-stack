@@ -6,7 +6,7 @@ positions, fills feed), the **alpha factory** (composite score + per-alpha
 contribution / confidence / IC), **portfolio construction** (dollar-neutral
 target weights, factor exposures, risk contributions), the **walk-forward /
 PBO edge verdict**, plus three research/ops panels — the **research gateway**
-(walk-forward as a service, run on demand), the **feature store** (Mimir
+(earlier walk-forward runs, read-only), the **feature store** (Mimir
 point-in-time, no-lookahead), and **execution TCA** (Forseti transaction-cost
 analysis) — and updates itself from the live services every 3s.
 
@@ -36,6 +36,24 @@ Override the port with `PORT=9000 python3 serve.py`. The proxy targets
 `SLEIPNIR_HOST`, `MUNINN_HOST`, `REDPANDA_CONSOLE_HOST`, `RESEARCH_HOST`,
 `MIMIR_HOST`, `FORSETI_HOST` (in compose: `research`, `mimir`, `forseti`).
 
+The console binds 127.0.0.1 (set `CONSOLE_BIND` to listen elsewhere) and
+refuses, with 403, any request whose Host header is not `localhost:PORT` or
+`127.0.0.1:PORT` (add more with `CONSOLE_ALLOWED_HOSTS`, comma-separated
+host:port). That keeps out other machines and DNS-rebinding pages, which matters
+because the console adds the research gateway's token for its callers.
+
+The research gateway needs a bearer token (G1.2). The console reads it from the
+file named by `RESEARCH_TOKEN_FILE`, by default `secrets/research_token` at the
+repo root (the same untracked file compose mounts into the gateway), and adds it
+to the research reads it proxies there, and nowhere else. A file that fails the
+gateway's rule (at least 32 printable, non-space ASCII characters after one
+trailing newline) is never sent. The startup output says whether the file is
+usable and why not, never the token. Proxy errors return no exception text or
+backend URL, backend redirects are not followed, and proxy environment
+variables are ignored. `python -m unittest discover -s console/tests` checks
+all of this (CI's validate job runs it). See
+[docs/RUNBOOK.md, section 1.1](../docs/RUNBOOK.md).
+
 Opening `index.html` directly via `file://` (or adding `?demo=1` to the URL)
 renders the design with the baked-in **demo** dataset — useful for previewing the
 UI with no stack running.
@@ -53,7 +71,7 @@ UI with no stack running.
 | `/api/validation`   | huginn `:8083/api/validation`            |
 | `/api/portfolio`    | odin `:8086/api/portfolio`               |
 | `/api/equity`       | odin `:8086/api/equity`                  |
-| `/api/research[/*]` | research `:8094/api/research[/*]` (GET list/detail **+ POST** run submission; query + body forwarded) |
+| `/api/research[/*]` | research `:8094/api/research[/*]` (GET list/detail only, query forwarded, bearer token added; POST is refused with 405 because the gateway runs nothing) |
 | `/api/sources`      | mimir `:8095/api/sources`                |
 | `/api/features`     | mimir `:8095/api/features` (`?as_of=`, `?instrument=` forwarded) |
 | `/api/features/history` | mimir `:8095/api/features/history` (`?instrument=`, `?limit=` forwarded) |
@@ -79,7 +97,7 @@ shows stale fake numbers.
 | Alpha factory      | `/api/alphas` (+ `/api/metrics`)         | Live composite score, per-alpha weight / contribution / confidence / rolling IC. Powered by the **composite** strategy (`STRATEGY_NAME=composite`); a field the engine hasn't computed yet renders as a muted dash, never a fake value. |
 | Portfolio          | `/api/portfolio`                         | Inverse-vol, dollar-neutral target weights + factor exposures + risk contributions, computed by Odin from recent per-instrument returns. `{available:false}` → "no portfolio run" empty state. |
 | Validation         | `/api/validation`                        | Walk-forward folds + PBO + deflated Sharpe, derived from the real artifact (see below). Undefined deflated Sharpe renders as `n/a`, not `0`. `{available:false}` → "no walk-forward run yet". |
-| Research gateway   | `/api/research/runs` (+ `/runs/{id}`)    | Walk-forward **as a service**, re-run on demand off the live trading process. The Run button `POST`s a job (`{strategy, thresholds, folds}`), then polls the run by id until terminal and renders the result; the recent-runs list + most-recent fold table (best_threshold / test_pnl / test_fills / sharpe) refresh on the 3s cadence. PBO / deflated Sharpe render `n/a` when null. |
+| Research gateway   | `/api/research/runs` (+ `/runs/{id}`)    | Read-only. There is no Run button: the gateway starts no runs (G1.2), because H1 and H2 trials run only through `research/norse_research`'s ledgered harness, and the panel says so. The recent-runs list + most-recent fold table (best_threshold / test_pnl / test_fills / sharpe) of runs earlier versions persisted refresh on the 3s cadence. PBO / deflated Sharpe render `n/a` when null. Without the token the panel stays on "connecting to research…". |
 | Feature store · Mimir | `/api/sources` + `/api/features?as_of=` | Per-instrument freshness (count, last event time, max ingest lag) from `/api/sources`, plus an **as-of lookup** (datetime input, defaults to now) showing each instrument's `event_time` vs `ingest_time` so the **no-lookahead** behavior is visible. Shows the point-in-time basis string. |
 | Execution TCA · Forseti | `/api/tca`                          | Overall tiles (avg slippage bps, total fees, maker/taker ratio, implementation shortfall) + by-instrument table + basis string. `avgSlippageBps: null` (no arrival benchmark, e.g. paper fills) renders `n/a` with the honest basis "fees + reported-slippage only", never a fabricated `0`. `{available:false}` → "no fills yet". |
 | Services           | `/api/health/<svc>`                      | huginn/sleipnir/odin `/healthz`, muninn `/actuator/health`, redpanda-console reachability. |

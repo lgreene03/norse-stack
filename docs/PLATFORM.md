@@ -48,7 +48,7 @@ flowchart LR
     end
     subgraph PLANES[Self-serve platform planes]
         M1[Mimir: point-in-time<br/>feature store :8095]
-        RG[Research gateway:<br/>walk-forward/PBO/DSR as a service :8094]
+        RG[Research gateway:<br/>earlier runs, read-only :8094]
         FT[Forseti: execution TCA +<br/>market impact / capacity :8096]
         HD[Heimdall: market-regime<br/>Gaussian HMM / Baum-Welch :8097]
     end
@@ -171,6 +171,13 @@ can hit over HTTP without touching the live trading process. Each one hardens a
 different axis of honesty.
 
 ### Research gateway — the validation/research plane (`huginn` cmd/research, port 8094)
+
+**Since G1.2 (2026-11) the gateway runs nothing.** It refuses every run
+submission, with or without its bearer token, because H1 and H2 trials run only
+through `research/norse_research`'s harness, which writes every run to the trial
+ledger. It serves earlier runs read-only behind the token and a Host allowlist,
+with no CORS headers ([RUNBOOK, section 1.1](RUNBOOK.md)). The rest of this section
+describes the gateway as it was built.
 
 Walk-forward + PBO + Deflated-Sharpe validation, run **as a service, out of the
 live trading process**. It reuses `huginn/internal/research` — the *same* engine
