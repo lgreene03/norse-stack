@@ -31,6 +31,10 @@ ALLOWED_IMPORTS = frozenset(
         "datetime", "decimal", "enum", "fractions", "functools", "heapq", "itertools",
         "math", "numbers", "operator", "statistics", "typing",
         "norse_research.formats",
+        # The simulation engine (G1.9). H1's and H2's strategy paths may not overlap
+        # (genesis, review N12), so the engine both share sits in the harness's paths
+        # and is reached through this one entry. It opens no file, socket or process.
+        "norse_research.sim",
     }
 )
 FORBIDDEN_CALLS = frozenset(
