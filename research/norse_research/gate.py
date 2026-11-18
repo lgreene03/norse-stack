@@ -18,7 +18,9 @@ G1.3's, applied as section 10 registers them:
   order, and one row per day of its window (section 15, item 2);
 * each hypothesis's candidate is its selectable run with the highest DEV-1 DSR, ties
   to the earlier registered configuration, and only once every registered
-  configuration has a selectable run (section 11, items 1 and 2; run rule 2);
+  configuration has a selectable run (section 11, items 1 and 2; run rule 2). It is
+  ranked by the DSR's z, which orders runs exactly as the DSR does but does not round
+  to 1.0 in floating point (G1.6 quant review M1);
 * the minimum track record length, reported only, is against 0 and against SR_0 with N
   from the ledger;
 * the bootstrap intervals pass every registered argument explicitly, since
@@ -78,6 +80,7 @@ from .sharpe import (
     min_track_record_length,
     moments,
     null_sharpe_variance,
+    sharpe_standard_error,
 )
 from .store import REPO_ROOT
 
@@ -213,19 +216,44 @@ def trial_sharpe_variance(ledger: RegisteredLedger, n_obs: int) -> tuple[float, 
     return null_sharpe_variance(n_obs), "null (fewer than two selectable runs)"
 
 
-def deflated_sharpe_of(ledger: RegisteredLedger, run: SelectableRun) -> DeflatedSharpe:
-    """DEV-1: the deflated Sharpe ratio of a selectable run's daily net returns."""
+def _deflated(
+    returns: Sequence[float], n_trials: int, variance: float, source: str
+) -> tuple[DeflatedSharpe, float]:
+    """The deflated Sharpe ratio of ``returns`` and its PSR statistic z, (SR - SR0)
+    over the Sharpe ratio's standard error, so DSR = Phi(z). A series with no variance
+    has a Sharpe ratio of 0, a DSR of 0 and a z of minus infinity (section 10); a series
+    with variance and a mean of exactly 0 is computed like any other (quant review L4)."""
+    sr0 = expected_max_sharpe(n_trials, variance)
+    try:
+        m = moments(returns)
+    except ValueError:  # fewer than two returns, or no variance
+        empty = DeflatedSharpe(0.0, 0.0, sr0, len(returns), 0.0, 0.0, n_trials, variance, source)
+        return empty, -math.inf
+    dsr = deflated_sharpe_ratio(m.sharpe, m.n, m.skew, m.kurtosis, n_trials, variance)
+    z = (m.sharpe - sr0) / sharpe_standard_error(m.sharpe, m.n, m.skew, m.kurtosis)
+    deflated = DeflatedSharpe(dsr, m.sharpe, sr0, m.n, m.skew, m.kurtosis, n_trials, variance,
+                              source)
+    return deflated, z
+
+
+def _dev1(ledger: RegisteredLedger, run: SelectableRun) -> tuple[DeflatedSharpe, float]:
     if run not in selectable_runs(ledger).get(run.hypothesis, ()):
         raise GateRefused(f"{run.configuration_id}'s run is not a selectable run of this ledger")
-    n_trials = trial_count(ledger)
-    n_obs = len(run.returns)
-    variance, source = trial_sharpe_variance(ledger, n_obs)
-    sr0 = expected_max_sharpe(n_trials, variance)
-    if daily_sharpe(run.returns) == 0.0:
-        return DeflatedSharpe(0.0, 0.0, sr0, n_obs, 0.0, 0.0, n_trials, variance, source)
-    m = moments(run.returns)
-    dsr = deflated_sharpe_ratio(m.sharpe, m.n, m.skew, m.kurtosis, n_trials, variance)
-    return DeflatedSharpe(dsr, m.sharpe, sr0, m.n, m.skew, m.kurtosis, n_trials, variance, source)
+    variance, source = trial_sharpe_variance(ledger, len(run.returns))
+    return _deflated(run.returns, trial_count(ledger), variance, source)
+
+
+def deflated_sharpe_of(ledger: RegisteredLedger, run: SelectableRun) -> DeflatedSharpe:
+    """DEV-1: the deflated Sharpe ratio of a selectable run's daily net returns."""
+    return _dev1(ledger, run)[0]
+
+
+def deflated_sharpe_z(ledger: RegisteredLedger, run: SelectableRun) -> float:
+    """DEV-1's PSR statistic z, by which the candidate rules rank (quant review M1).
+    DSR = Phi(z) is strictly increasing in z, so ranking by z is ranking by the DSR as
+    registered; ranking by the DSR's floating-point value is not, since Phi(z) rounds to
+    exactly 1.0 for z above about 8.3 and the tie rule would then pick the earlier run."""
+    return _dev1(ledger, run)[1]
 
 
 def min_track_record_of(ledger: RegisteredLedger, run: SelectableRun) -> tuple[float, float]:
@@ -245,18 +273,20 @@ def min_track_record_of(ledger: RegisteredLedger, run: SelectableRun) -> tuple[f
 
 
 def candidates(ledger: RegisteredLedger) -> dict[str, SelectableRun | None]:
-    """Each hypothesis's candidate, or None while not every registered
-    configuration has a selectable run (section 11, item 1; run rule 2)."""
+    """Each hypothesis's candidate, the selectable run with the highest DEV-1 DSR, ranked
+    by its z so the ranking does not saturate (quant review M1), ties to the earlier
+    configuration; None while not every registered configuration has a selectable run
+    (section 11, item 1; run rule 2)."""
     out: dict[str, SelectableRun | None] = {}
     for h, runs in selectable_runs(ledger).items():
         if len(runs) != len(ledger.registration.order[h]):
             out[h] = None
             continue
-        best, best_dsr = None, -1.0
+        best, best_z = None, -math.inf
         for run in runs:  # registered order, so a tie keeps the earlier configuration
-            dsr = deflated_sharpe_of(ledger, run).dsr
-            if dsr > best_dsr:
-                best, best_dsr = run, dsr
+            z = deflated_sharpe_z(ledger, run)
+            if best is None or z > best_z:
+                best, best_z = run, z
         out[h] = best
     return out
 
@@ -329,12 +359,7 @@ def excess_deflated_sharpe_of(ledger: RegisteredLedger, run: SelectableRun) -> D
         variance, source = cross_trial_sharpe_variance(sharpes), "selectable runs' excess returns"
     else:
         variance, source = null_sharpe_variance(len(excess)), "null (fewer than two selectable runs)"
-    sr0 = expected_max_sharpe(n_trials, variance)
-    if daily_sharpe(excess) == 0.0:
-        return DeflatedSharpe(0.0, 0.0, sr0, len(excess), 0.0, 0.0, n_trials, variance, source)
-    m = moments(excess)
-    dsr = deflated_sharpe_ratio(m.sharpe, m.n, m.skew, m.kurtosis, n_trials, variance)
-    return DeflatedSharpe(dsr, m.sharpe, sr0, m.n, m.skew, m.kurtosis, n_trials, variance, source)
+    return _deflated(excess, n_trials, variance, source)[0]
 
 
 def sharpe_without_each_year(ledger: RegisteredLedger, run: SelectableRun) -> dict[int, float]:
@@ -363,6 +388,7 @@ class Development:
     hypothesis: str
     candidate: SelectableRun
     dsr: float  # DEV-1
+    z: float  # DEV-1's PSR statistic, by which the holdout candidate is ranked
     excess_dsr: float  # DEV-2
     pbo: float  # DEV-3
     sharpe_without_year: dict[int, float]  # DEV-4
@@ -389,10 +415,12 @@ def development(ledger: RegisteredLedger, hypothesis: str) -> Development | None
     candidate = candidates(_require(ledger)).get(hypothesis)
     if candidate is None:
         return None
+    deflated, z = _dev1(ledger, candidate)
     return Development(
         hypothesis,
         candidate,
-        deflated_sharpe_of(ledger, candidate).dsr,
+        deflated.dsr,
+        z,
         excess_deflated_sharpe_of(ledger, candidate).dsr,
         probability_of_backtest_overfitting(ledger, hypothesis).pbo,
         sharpe_without_each_year(ledger, candidate),
@@ -403,8 +431,8 @@ def development(ledger: RegisteredLedger, hypothesis: str) -> Development | None
 def _holdout_candidate(ledger: RegisteredLedger) -> SelectableRun | None:
     best = None
     for h in HYPOTHESES:  # H1 first, so a tie keeps H1 (section 11, item 3)
-        judged = development(ledger, h)
-        if judged is not None and judged.passes and (best is None or judged.dsr > best.dsr):
+        judged = development(ledger, h)  # ranked by z, which does not saturate (review M1)
+        if judged is not None and judged.passes and (best is None or judged.z > best.z):
             best = judged
     return best.candidate if best is not None else None
 

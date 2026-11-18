@@ -6,12 +6,12 @@ T19. Synthetic returns only.
 
 import dataclasses
 import inspect
+import math
 import statistics
 
 import pytest
 from ledger_fixtures import Book, issued, lcg_returns
 from norse_research import gate, harness
-from norse_research.benchmark import excess_returns, volatility_matched
 from norse_research.cscv import cscv
 from norse_research.gate import GateRefused, RegisteredLedger
 from norse_research.gitledger import FREEZE_ANCHOR
@@ -250,6 +250,31 @@ def test_gate_statistics_refuse_a_ledger_the_gate_did_not_issue():
 
 
 # --- section 10's DEV-1 to DEV-5 and section 11's holdout candidate (G1.6) ------------
+#
+# Expected values are computed here from section 10's formulas, written out with the
+# standard library, never by calling the code under test (quant review L6).
+
+NORMAL = statistics.NormalDist()
+EULER = 0.5772156649015329
+
+
+def my_sharpe(x):
+    sd = statistics.stdev(x)
+    return 0.0 if sd == 0 else statistics.fmean(x) / sd
+
+
+def my_z(x, n_trials, variance):
+    """Section 10's PSR statistic against SR0, Pearson moments with 1/T."""
+    n = len(x)
+    mean = math.fsum(x) / n
+    m2 = math.fsum((v - mean) ** 2 for v in x) / n
+    g3 = math.fsum((v - mean) ** 3 for v in x) / n / m2**1.5
+    g4 = math.fsum((v - mean) ** 4 for v in x) / n / m2**2
+    emz = 0.0 if n_trials == 1 else (
+        (1 - EULER) * NORMAL.inv_cdf(1 - 1 / n_trials)
+        + EULER * NORMAL.inv_cdf(1 - 1 / (n_trials * math.e)))
+    sr, sr0 = my_sharpe(x), math.sqrt(variance) * emz
+    return (sr - sr0) * math.sqrt(n - 1) / math.sqrt(1 - g3 * sr + (g4 - 1) / 4 * sr * sr)
 
 
 def development_book(skilled="H1-03", benchmark=True) -> Book:
@@ -263,6 +288,22 @@ def development_book(skilled="H1-03", benchmark=True) -> Book:
     return book
 
 
+def family_book():
+    """Both hypotheses' grids and both benchmarks, the strategies exposed to a market."""
+    book = Book()
+    drifts = {"H1-03": 0.0025, "H1-06": 0.0022, "H2-02": 0.0012, "H2-05": 0.0010}
+    series = {}
+    for h in ("H1", "H2"):
+        for i, cid in enumerate(book.registration.order[h]):
+            series[cid] = lcg_returns(300 + i + (50 if h == "H2" else 0), days(book, h),
+                                      drifts.get(cid, 0.0001 * i), scale=0.04)
+            book.run(cid, series[cid])
+    for k, h in enumerate(("H1", "H2")):
+        series[f"B-{h}"] = lcg_returns(900 + k, days(book, h), 0.0008, scale=0.06)
+        book.run(f"B-{h}", series[f"B-{h}"])
+    return book, series
+
+
 def test_development_applies_dev_1_to_dev_5_to_the_candidate_alone():
     book = development_book()
     ledger = issued(book, frozen=True)
@@ -270,38 +311,107 @@ def test_development_applies_dev_1_to_dev_5_to_the_candidate_alone():
     assert judged.candidate.configuration_id == "H1-03"
     assert judged.criteria == dict.fromkeys(("DEV-1", "DEV-2", "DEV-3", "DEV-4", "DEV-5"), True)
     assert judged.passes and gate.development(ledger, "H2") is None
-    assert judged.dsr == gate.deflated_sharpe_of(ledger, judged.candidate).dsr
-    # DEV-2: H1's excess is volatility matched against B-H1's run, with N from the
-    # ledger and V the variance of every selectable run's excess-return Sharpe ratio.
-    benchmark = list(gate.benchmark_returns(ledger, "H1"))
-    returns = list(judged.candidate.returns)
-    assert gate.excess_series(ledger, judged.candidate) == excess_returns(
-        returns, volatility_matched(benchmark, returns))
-    excess = gate.excess_deflated_sharpe_of(ledger, judged.candidate)
-    sharpes = [gate.daily_sharpe(gate.excess_series(ledger, r))
-               for r in gate.selectable_runs(ledger)["H1"]]
-    assert excess.trial_sharpe_variance == statistics.variance(sharpes)
-    assert excess.n_trials == 8 and excess.dsr == judged.excess_dsr
     assert gate.holdout_candidate(ledger) is judged.candidate
 
 
-def test_dev_4_and_dev_5_by_hand():
-    book = development_book()
+def test_dev_2_matches_an_independent_computation_for_both_hypotheses():
+    # H1 volatility matched, H2 beta matched (D15), N from the ledger, V over every
+    # selectable run's excess Sharpe ratio across both hypotheses, each against its own
+    # hypothesis's benchmark. Swapping the two adjustments would change both answers.
+    book, series = family_book()
     ledger = issued(book, frozen=True)
-    run = gate.candidates(ledger)["H1"]
-    by_year = gate.sharpe_without_each_year(ledger, run)
-    assert sorted(by_year) == list(range(2018, 2026))
-    window = book.registration.windows["H1"].day_list()
-    kept = [v for d, v in zip(window, run.returns, strict=True) if not d.startswith("2021")]
-    assert by_year[2021] == gate.daily_sharpe(kept)
-    # DEV-5: twenty large days carry everything; without them the mean is negative.
-    returns = (0.03,) * 20 + (0.001,) * 50 + (-0.002,) * 30
-    carried = dataclasses.replace(run, returns=returns)
-    assert gate.sharpe_without_largest(carried) == gate.daily_sharpe(returns[20:]) < 0
-    assert gate.daily_sharpe(returns) > 0
-    # Ties at the cut are removed earliest first, which leaves the same values either way.
-    tied = dataclasses.replace(run, returns=(0.03,) * 25 + (0.001,) * 50)
-    assert gate.sharpe_without_largest(tied) == gate.daily_sharpe((0.03,) * 5 + (0.001,) * 50)
+
+    def excess(cid, beta_for_h2=True):
+        h = cid[:2]
+        r, rb = series[cid], series[f"B-{h}"]
+        if h == "H2" and beta_for_h2:
+            k = statistics.linear_regression(rb, r).slope
+        else:
+            k = statistics.stdev(r) / statistics.stdev(rb)
+        return [a - k * b for a, b in zip(r, rb, strict=True)]
+
+    family = book.registration.order["H1"] + book.registration.order["H2"]
+    variance = statistics.variance([my_sharpe(excess(c)) for c in family])
+    for h, cand in gate.candidates(ledger).items():
+        expected = NORMAL.cdf(my_z(excess(cand.configuration_id), 14, variance))
+        got = gate.excess_deflated_sharpe_of(ledger, cand)
+        assert got.n_trials == 14
+        assert got.trial_sharpe_variance == pytest.approx(variance, rel=1e-12)
+        assert got.dsr == pytest.approx(expected, abs=1e-12), h
+    h2 = gate.candidates(ledger)["H2"].configuration_id
+    swapped = NORMAL.cdf(my_z(excess(h2, beta_for_h2=False), 14, variance))
+    assert abs(swapped - gate.excess_deflated_sharpe_of(
+        ledger, gate.candidates(ledger)["H2"]).dsr) > 1e-6
+
+
+def test_dev_4_removes_each_year_including_the_partial_first_years():
+    book, series = family_book()
+    ledger = issued(book, frozen=True)
+    for h, first_year in (("H1", 2018), ("H2", 2020)):
+        cand = gate.candidates(ledger)[h]
+        window = book.registration.windows[h].day_list()
+        by_year = gate.sharpe_without_each_year(ledger, cand)
+        assert sorted(by_year) == list(range(first_year, 2026))
+        for year in (first_year, 2023):
+            kept = [v for d, v in zip(window, series[cand.configuration_id], strict=True)
+                    if not d.startswith(str(year))]
+            assert by_year[year] == pytest.approx(my_sharpe(kept), rel=1e-12)
+
+
+def test_dev_5_removes_the_largest_returns_not_the_first_nor_the_largest_absolute():
+    # Twenty large days interleaved late and one large loss: dropping the 20 largest
+    # signed returns, the registered rule, differs from dropping the first 20 days and
+    # from dropping the 20 largest in absolute value (quant review L6a).
+    returns = [0.001] * 100
+    for i in range(23, 100, 4):
+        returns[i] = 0.02
+    returns[60] = -0.05
+    run = gate.SelectableRun("H1", "H1-01", 0, None, None, tuple(returns))
+    rule = my_sharpe([v for v in returns if v != 0.02])
+    first_days = my_sharpe(returns[20:])
+    by_size = sorted(range(100), key=lambda i: (-abs(returns[i]), i))[:20]
+    absolute = my_sharpe([v for i, v in enumerate(returns) if i not in set(by_size)])
+    assert gate.sharpe_without_largest(run) == pytest.approx(rule, rel=1e-12)
+    assert abs(rule - first_days) > 0.1 and abs(rule - absolute) > 0.1
+
+
+def test_the_candidate_rule_ranks_by_z_where_the_dsr_saturates():
+    # Quant review M1, its reproduction: every run's DSR rounds to exactly 1.0, so the
+    # tie rule on the DSR would pick H1-01 and H2-01. Ranked by z, as the registered
+    # ordering by DSR is, the candidates are the runs with the highest z.
+    book = Book()
+    sat = {}
+    for h in ("H1", "H2"):
+        for i, cid in enumerate(book.registration.order[h]):
+            sat[cid] = lcg_returns(41 if h == "H1" else 43, days(book, h),
+                                   0.0020 + 0.00002 * i, scale=0.02)
+            book.run(cid, sat[cid])
+    ledger = issued(book, frozen=True)
+    variance = statistics.variance([my_sharpe(v) for v in sat.values()])
+    found = gate.candidates(ledger)
+    for h in ("H1", "H2"):
+        runs = gate.selectable_runs(ledger)[h]
+        assert all(gate.deflated_sharpe_of(ledger, r).dsr == 1.0 for r in runs)
+        zs = {c: my_z(sat[c], 14, variance) for c in book.registration.order[h]}
+        best = max(zs, key=lambda c: (zs[c], -book.registration.order[h].index(c)))
+        assert best == book.registration.order[h][-1] == found[h].configuration_id
+        assert gate.deflated_sharpe_z(ledger, found[h]) == pytest.approx(zs[best], rel=1e-9)
+
+
+def test_a_zero_mean_run_with_variance_has_its_registered_dsr():
+    # Quant review L4: a Sharpe ratio of exactly 0 with variance is not "no variance".
+    # With one trial, SR0 is 0, so z is 0 and the DSR is Phi(0), 0.5.
+    book = Book()
+    book.run("H1-01", [0.01, -0.01] * (days(book, "H1") // 2))
+    ledger = issued(book)
+    run = gate.selectable_runs(ledger)["H1"][0]
+    assert gate.deflated_sharpe_of(ledger, run).dsr == 0.5
+    assert gate.deflated_sharpe_z(ledger, run) == 0.0
+    flat = Book()
+    flat.run("H1-01", [0.0] * days(flat, "H1"))
+    flat_run = gate.selectable_runs(issued(flat))["H1"][0]
+    assert gate.deflated_sharpe_of(issued(flat), flat_run).dsr == 0.0
+    assert gate.deflated_sharpe_z(issued(flat), flat_run) == -math.inf
 
 
 def test_the_holdout_candidate_is_chosen_on_the_frozen_ledger_only():
@@ -317,15 +427,31 @@ def test_dev_2_without_the_benchmark_run_refuses_rather_than_fails():
         gate.development(ledger, "H1")
 
 
-def test_the_holdout_candidate_is_the_higher_dsr_with_ties_to_h1(monkeypatch):
+def judged_at(h, **values):
+    base = {"dsr": 0.99, "z": 3.0, "excess_dsr": 0.99, "pbo": 0.1,
+            "sharpe_without_year": {2020: 1.0}, "sharpe_without_largest": 1.0}
+    return gate.Development(h, f"candidate {h}", **{**base, **values})
+
+
+def test_the_development_bars_are_strict():
+    # Quant review L6d: above 0.95, below 0.5, above 0; equal fails.
+    assert judged_at("H1").passes
+    for values, failing in (({"dsr": 0.95}, "DEV-1"), ({"excess_dsr": 0.95}, "DEV-2"),
+                            ({"pbo": 0.5}, "DEV-3"), ({"sharpe_without_year": {2020: 0.0}}, "DEV-4"),
+                            ({"sharpe_without_largest": 0.0}, "DEV-5")):
+        criteria = judged_at("H1", **values).criteria
+        assert [k for k, ok in criteria.items() if not ok] == [failing]
+
+
+def test_the_holdout_candidate_is_the_higher_z_with_ties_to_h1(monkeypatch):
     ledger = issued(Book(), frozen=True)
-    judged = {h: gate.Development(h, f"candidate {h}", 0.99, 0.99, 0.1, {2020: 1.0}, 1.0)
-              for h in ("H1", "H2")}
+    judged = {h: judged_at(h) for h in ("H1", "H2")}
     monkeypatch.setattr(gate, "development", lambda ledger, h: judged[h])
     assert gate.holdout_candidate(ledger) == "candidate H1"  # a tie goes to H1
-    judged["H2"] = dataclasses.replace(judged["H2"], dsr=0.995)
+    judged["H2"] = dataclasses.replace(judged["H2"], z=3.5)
     assert gate.holdout_candidate(ledger) == "candidate H2"
-    judged["H2"] = dataclasses.replace(judged["H2"], pbo=0.5)  # DEV-3 needs below 0.5
+    # The higher hypothesis fails development, so the other is the holdout candidate.
+    judged["H2"] = dataclasses.replace(judged["H2"], pbo=0.5)
     assert gate.holdout_candidate(ledger) == "candidate H1"
     judged["H1"] = dataclasses.replace(judged["H1"], sharpe_without_year={2020: 1.0, 2021: 0.0})
     assert gate.holdout_candidate(ledger) is None  # neither passes: no unseal
