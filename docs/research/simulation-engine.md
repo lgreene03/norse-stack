@@ -160,6 +160,23 @@ first five. Tests check the stablecoin list and the exclusions against
 preregistration.json. `perpetual_of` maps a spot pair to its perpetual, including the four
 contracts quoted per thousand coins.
 
+**The controls' random numbers (section 8).** The control runs are registered on
+`rng = numpy.random.default_rng(seed)`: C-H1 makes one call `rng.random(n) < 0.5` with n
+the 158,821 development daily bars of the 115 pinned candidates, and C-H2 two calls
+`rng.integers(540, M - 540, endpoint=True)` on one generator, BTC first, with M = 6,576.
+numpy is neither in the standard library nor in the allowlist, so `sim.pcg64` reproduces
+those calls bit for bit: SeedSequence seeding from an integer, the PCG64 generator with its
+buffered half word, `Generator.random`'s doubles and `Generator.integers`' single draws by
+Lemire's method, ported from numpy's own sources. Strategies reach it as
+`norse_research.sim.default_rng`. Known answers generated once by numpy 2.5.5, in a virtual
+environment outside the repository, are committed as `fixtures/numpy-rng-vectors.json`
+with the generating script beside it. They cover the seeds 0, 1, 42 and 99 over 200,000
+doubles (a SHA-256 of every one, plus sampled values), C-H2's draws, other 32-bit ranges
+including heavy rejection, and interleaved calls. A further test compares every
+registered seed, 0 to 99, with numpy directly when numpy is installed; CI installs none and
+skips it. Ranges wider than 32 bits, arrays of integers and other dtypes raise an error,
+since no control uses them and an untested port would not be known to be exact.
+
 ## Choices made
 
 Where the registration was ambiguous or silent, the engine resolves it as follows. Each
@@ -226,6 +243,10 @@ is a reading of the registration, not a new parameter, and none changes a pass m
     its `calc_time` (when section 5 counts it known; it accrues at `calc_time`), and a
     notice when an instrument stops. A live feed would take that notice from Binance's
     delisting announcement; the replay derives it from the recording.
+17. **The controls' generator is numpy's, reimplemented.** Section 8 names numpy's calls,
+    and a different generator with the same distribution would draw different signs and
+    shifts, so it would not be the registered control. The package stays standard
+    library only by porting exactly what those calls compute, held to numpy's own output.
 
 ## The data contract, and what is missing
 
@@ -237,7 +258,7 @@ committed manifest. Fifteen-minute bars are read lazily a month at a time, since
 candidates' would not fit in memory, and are never shown to a strategy. The archive holds
 no mark-price series, as section 5 notes; the 15-minute close stands in for it.
 
-Four things the engine cannot supply, each for the lead:
+Three things the engine cannot supply, each for the lead:
 
 * **Series spans.** The loader refuses a range its data does not span and a month the
   manifest pins no file for, and the `DataView` does not expose the manifest's coverage,
@@ -251,12 +272,9 @@ Four things the engine cannot supply, each for the lead:
 * **Recorded gaps crossed.** Section 5 says a crossed gap is listed in the run's ledger
   entry. The engine collects the gaps each load returns (`Market.crossed_gaps`), but the
   runner's result carries only the returns, so the harness has no channel for them yet.
-* **The controls' random numbers.** C-H1 and C-H2 are registered to draw from
-  `numpy.random.default_rng(seed)`. numpy is neither in the standard library nor in the
-  strategy allowlist, so the control strategies cannot draw those numbers as registered.
-  This needs a decision before G2.1 runs the controls.
 * **huginn's defaults.** G1.9's "Done when" includes aligning huginn's executor and
-  research gateway cost defaults, which live in the huginn repository.
+  research gateway cost defaults, which live in the huginn repository; a separate huginn
+  pull request does that.
 
 No drawdown breaker is modelled: the registration has none, and the register's risk about
 huginn's replay breaker concerns huginn, not this engine.

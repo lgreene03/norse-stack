@@ -59,6 +59,7 @@ from .model import (
     perp_series,
     spot_series,
 )
+from .pcg64 import Generator, default_rng
 from .targeting import (
     RANK_DEPTH,
     REGISTERED_EXCLUSIONS,
@@ -95,6 +96,7 @@ __all__ = [
     "Decision",
     "Fill",
     "FundingWindow",
+    "Generator",
     "History",
     "Instrument",
     "InstrumentEnded",
@@ -115,6 +117,7 @@ __all__ = [
     "backtest",
     "carry_thresholds",
     "day_ms",
+    "default_rng",
     "funding_series",
     "iso_day",
     "month_of_decision",
