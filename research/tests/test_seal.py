@@ -1383,3 +1383,30 @@ def test_a_failed_unseal_push_leaves_no_proof_in_the_clone(frozen, monkeypatch):
         frozen.remote, "rev-parse", "refs/heads/ledger")
     frozen.ledger.verify()
     assert entry.type == "unseal"
+
+
+def test_the_strategy_process_gives_the_same_series_every_time(tmp_path, monkeypatch):
+    # Security review round 2, N3: under -I string hashing was randomised per process, so
+    # a strategy that iterates a set of names gave a different series on each run of the
+    # same commit. The process now runs with PYTHONHASHSEED=0 and nothing else.
+    clear_overrides(monkeypatch)
+    world = World(tmp_path, behaviours={"H1-01": "set_order"})
+    try:
+        genesis = genesis_of(world)
+        config = world.open_body("H1-01")["configuration"]
+
+        def run_once():
+            return harness._run_strategy(
+                world.ledger.git, git(world.repo, "rev-parse", "HEAD"),
+                genesis.body["strategies"]["H1-01"], genesis.body["tree_paths"]["H1"],
+                "research/manifests/binance-vision-development.json", config, "e" * 64, None,
+            )
+
+        assert harness.STRATEGY_ENVIRONMENT == {"PYTHONHASHSEED": "0"}
+        first = run_once()
+        assert all(run_once() == first for _ in range(2))
+        # Without the fixed seed the same commit gives different series.
+        monkeypatch.setattr(harness, "STRATEGY_ENVIRONMENT", {})
+        assert len({json.dumps(run_once()) for _ in range(6)}) > 1
+    finally:
+        world.close()

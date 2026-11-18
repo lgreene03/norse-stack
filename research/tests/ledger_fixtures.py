@@ -182,6 +182,13 @@ def peeks(config, data):
     return _series(config, 0.002)
 
 
+def set_order(config, data):
+    # Depends on the iteration order of a set of names, so on string hashing.
+    order = list({"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT",
+                  "BNBUSDT", "TRXUSDT"})
+    return _series(config, order.index("SOLUSDT") / 10000)
+
+
 def loads_across(config, data):
     # Reads across 2025-12-01, the boundary the rehearsal tests put in development.
     utc = timezone.utc

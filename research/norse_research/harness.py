@@ -144,6 +144,8 @@ STRATEGIES_PATH = f"{PACKAGE_PATH}/strategies"
 
 _PATHS = re.compile(r"(?<![\w.])/(?:[\w.@~+-]+/)*[\w.@~+-]+")
 _VOLUME = re.compile(r"/Volumes/[^/\n'\"]+")
+# The strategy process's whole environment: string hashing fixed, nothing else (N3).
+STRATEGY_ENVIRONMENT = {"PYTHONHASHSEED": "0"}
 _RUNNER = (
     "import sys; sys.path[:0] = [sys.argv[1], sys.argv[2]]; "
     "from norse_research.runner import main; main()"
@@ -252,8 +254,9 @@ def _run_strategy(
     unsealed: tuple[str, str] | None = None,
     rehearsal: str | None = None,
 ) -> list:
-    """The strategy's daily returns, computed in a fresh ``python -I -B`` process with
-    an empty environment from the files committed at ``head``. ``unsealed`` is the
+    """The strategy's daily returns, computed in a fresh ``python -s -P -B`` process
+    whose environment holds only ``PYTHONHASHSEED=0``, from the files committed at
+    ``head``. ``unsealed`` is the
     holdout run's alone: the committed holdout manifest's path and the unseal entry,
     which the runner needs to read holdout rows (G1.6). ``rehearsal`` is the rehearsal's
     alone: the development month whose data stands in for the holdout."""
@@ -279,11 +282,15 @@ def _run_strategy(
             "unseal": unseal_entry,
             "rehearsal": rehearsal,
         }
+        # -s -P instead of -I, whose -E would ignore PYTHONHASHSEED: with string hashing
+        # randomised per process, a strategy that iterates a set of symbols could give a
+        # different series on each run of the same commit (security review round 2, N3).
+        # The environment holds that one variable and nothing else.
         proc = subprocess.run(
-            [sys.executable, "-I", "-B", "-X", f"pycache_prefix={pycache}", "-c", _RUNNER,
+            [sys.executable, "-s", "-P", "-B", "-X", f"pycache_prefix={pycache}", "-c", _RUNNER,
              str(code_root / "research"), str(code_root)],
-            input=json.dumps(payload).encode(), capture_output=True, env={}, cwd=tmp,
-            check=False,
+            input=json.dumps(payload).encode(), capture_output=True, env=STRATEGY_ENVIRONMENT,
+            cwd=tmp, check=False,
         )
     lines = [
         line for line in proc.stdout.decode(errors="replace").splitlines()

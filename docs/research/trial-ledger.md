@@ -63,8 +63,9 @@ finished all count, and nothing is deduplicated by configuration hash (section 9
 registered configuration and nothing else. The harness never imports or executes a
 strategy. It reads the pinned module's `CONFIGURATIONS`, `PARAMETERS` and `DEFAULTS`,
 which must be literals assigned once, by parsing the committed source; after the open
-entry is pushed, it runs the pinned function in a fresh `python -I -B -X
-pycache_prefix=<an empty folder>` process with an empty environment, built from the files
+entry is pushed, it runs the pinned function in a fresh `python -s -P -B -X
+pycache_prefix=<an empty folder>` process whose environment holds only `PYTHONHASHSEED=0`
+(so the same commit gives the same series; G1.6 security review round 2, N3), built from the files
 committed at HEAD (the package, the hypothesis's strategy paths and the manifest), and
 reads the daily returns back over a pipe. In that process an audit hook, installed before
 the strategy's module-level code runs, lets it read the interpreter's own library, the

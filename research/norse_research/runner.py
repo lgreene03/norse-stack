@@ -1,7 +1,9 @@
 """Runs one pinned strategy in a fresh interpreter (G1.5; security review N1, N4, N9).
 
-The harness starts this module as ``python -I -B -X pycache_prefix=<an empty folder>``
-with an empty environment, after the run's open entry is pushed, in a folder holding
+The harness starts this module as ``python -s -P -B -X pycache_prefix=<an empty folder>``
+with an environment holding only ``PYTHONHASHSEED=0``, so that string hashing, and with
+it the order of a set of names, is the same on every run (G1.6 security review round 2,
+N3), after the run's open entry is pushed, in a folder holding
 only the files committed at HEAD that the run needs: this package, the hypothesis's
 strategy paths and the registered manifest. So the code that computes a result is the
 committed code, executed from its source (never a cached ``.pyc``), in a process no

@@ -728,11 +728,13 @@ def test_environment_overrides_are_refused(tmp_path, monkeypatch, no_source_chec
                 gate.freeze(world.ledger, "M2", allow_incomplete=True)
             with pytest.raises(EnvironmentRefused):
                 world.write_genesis()
-        # NORSE_DATASETS_DIR is allowed, and no variable reaches the strategy.
+        # NORSE_DATASETS_DIR is allowed, and no variable of the caller's reaches the
+        # strategy: only the harness's own fixed PYTHONHASHSEED=0 (G1.6 review round 2, N3).
         monkeypatch.setenv("NORSE_DATASETS_DIR", str(world.tmp / "mirror"))
         record = run(world, "H1-01")
         count, overrides = record.error.split("environment ", 1)[1].split(" ", 1)
-        assert overrides == "[]" and int(count) <= 2  # macOS may add its own one or two
+        assert overrides == "['PYTHONHASHSEED']" and int(count) <= 3  # macOS may add one or two
+        assert harness.STRATEGY_ENVIRONMENT == {"PYTHONHASHSEED": "0"}
         assert os.environ["NORSE_DATASETS_DIR"] == str(world.tmp / "mirror")
     finally:
         world.close()
