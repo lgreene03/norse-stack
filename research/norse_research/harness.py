@@ -89,6 +89,7 @@ from .canonical import sha256_hex
 from .environment import ENV_ALLOWED, ENV_REFUSED, check_environment, git_version
 from .gate import RegisteredLedger, candidates, gate_ledger
 from .gitledger import (
+    PACKAGE_PATH,
     Git,
     GitLedger,
     LedgerBusy,
@@ -138,7 +139,6 @@ from .sources import (
 from .store import ArchiveStore
 
 DEVELOPMENT_MANIFEST = "research/manifests/binance-vision-development.json"
-PACKAGE_PATH = "research/norse_research"  # where this package lives in the repository
 PACKAGE_DIR = Path(__file__).resolve().parent
 STRATEGIES_DIR = PACKAGE_DIR / "strategies"
 STRATEGIES_PATH = f"{PACKAGE_PATH}/strategies"

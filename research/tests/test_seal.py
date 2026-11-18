@@ -411,6 +411,21 @@ def test_package_readers_refuse_holdout_months_without_the_audit_flag(tmp_path):
         read_rows(store, spec, "2026-01")
 
 
+@pytest.mark.parametrize("suffix", ["/", "/.", "//", "/./"])
+def test_a_holdout_key_with_a_trailing_separator_is_refused(tmp_path, suffix):
+    # Probe S1 (security review L1): the store decided "holdout month" by a suffix match,
+    # which a trailing separator defeated. A key not in normal form is now refused.
+    store = ArchiveStore(tmp_path)
+    spec, _ = make_series(store, "spot/klines/XUSDT/1d", "2025-12", "2026-01")
+    for key_ in (spec.key("2026-01") + suffix, "data/./" + spec.key("2026-01")[5:],
+                 spec.key("2026-01").replace("/", "//", 1)):
+        with pytest.raises((ValueError, PermissionError)):
+            store.read(key_)
+        with pytest.raises(ValueError, match="unsafe archive key"):
+            store.path(key_)
+    assert len(store.read(spec.key("2025-12"))[0]) > 0
+
+
 def _keyword_callers(name: str, value=True) -> list[str]:
     return sorted(
         path.name
@@ -646,6 +661,11 @@ def test_a_holdout_run_at_code_changed_outside_data_loading_is_refused(frozen):
     head = git(frozen.repo, "rev-parse", "HEAD")
     problem = gitledger.holdout_commit_error(frozen.ledger.git, candidate_commit, head, paths)
     assert "notes.txt" in problem
+    # Security review L3: the runner exports the whole package, so the diff covers it even
+    # when the genesis tree paths list less of it.
+    narrow = gitledger.holdout_commit_error(frozen.ledger.git, candidate_commit, head,
+                                           ["strategies/h1"])
+    assert "notes.txt" in narrow
     # A change to data loading or the seal alone is allowed.
     allowed = gitledger.SEAL_AND_DATA_LOADING
     assert "research/norse_research/loader.py" in allowed

@@ -144,6 +144,9 @@ SEAL_AND_DATA_LOADING = frozenset(
     f"research/norse_research/{name}.py"
     for name in ("seal", "loader", "store", "manifest", "formats", "binance_archive", "periods")
 )
+# Where this package lives in the repository. The runner exports all of it to every run,
+# so item 6's diff always covers it, whatever the genesis tree paths list (review L3).
+PACKAGE_PATH = "research/norse_research"
 
 
 class GitError(LedgerError):
@@ -799,12 +802,13 @@ def _message(entry: Entry) -> str:
 
 def holdout_commit_error(git: Git, candidate: str, commit: str, paths: Sequence[str]) -> str | None:
     """Why a holdout run at ``commit`` is not at its candidate's commit plus only
-    changes to data loading or the seal under ``paths`` (section 11, item 6), or None."""
+    changes to data loading or the seal under ``paths`` and the whole package, which the
+    runner exports to every run (section 11, item 6; review L3), or None."""
     known = git.try_text("cat-file", "-t", candidate) == "commit"
     if not known or not git.is_ancestor(candidate, commit):
         return f"the holdout run's commit {commit} does not descend from its candidate's {candidate}"
     changed = git.text(
-        "diff", "--name-only", "--no-renames", candidate, commit, "--", *paths
+        "diff", "--name-only", "--no-renames", candidate, commit, "--", PACKAGE_PATH, *paths
     ).splitlines()
     other = sorted(p for p in changed if p not in SEAL_AND_DATA_LOADING)
     if other:

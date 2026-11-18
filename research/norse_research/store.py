@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
 import tempfile
 import threading
@@ -130,7 +131,10 @@ class ArchiveStore:
                 raise
 
     def path(self, key: str) -> Path:
-        if ".." in key.split("/") or key.startswith("/"):
+        """Where ``key`` is mirrored. Only a key in normal form is accepted: no ``..``,
+        no leading or trailing separator and nothing ``posixpath.normpath`` would change,
+        so the month the key names is the month of the file read (security review L1)."""
+        if ".." in key.split("/") or key.startswith("/") or posixpath.normpath(key) != key:
             raise ValueError(f"unsafe archive key {key!r}")
         return self.root / MIRROR_DIR / key
 
@@ -142,10 +146,10 @@ class ArchiveStore:
         """Read a mirrored file, re-verifying it against its stored CHECKSUM. A
         holdout month's file is refused unless ``holdout_audit`` is set (the manifest
         build and verify code only) or the read is inside the unsealed holdout run."""
-        month = FILE_MONTH.search(key)
+        path = self.path(key)
+        month = FILE_MONTH.search(path.name)
         if month is not None and is_holdout_month(month.group(1)):
             require_holdout_access(key, holdout_audit)
-        path = self.path(key)
         published = parse_checksum(
             path.with_name(path.name + ".CHECKSUM").read_bytes(), path.name
         )

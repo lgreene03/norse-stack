@@ -202,6 +202,32 @@ development bar and a first holdout bar further apart than one interval) is reco
 manifest, so a load across it fails as an unrecorded gap. Manifest verification does not look for
 one, so G3.2 should check each series the candidate reads for it before the run.
 
+## Residual risks (security review round 1, L2, L4 and L5)
+
+**The in-package seal is a naming convention (L2).** `periods.inside_unsealed_run` accepts any
+64-character string and never checks that an unseal entry by that hash exists, and any script can
+pass `holdout_audit=True` to the store or the manifest reader; the tests that only the runner and
+the manifest tools do so read the package, not every script on the machine. After the unseal, when
+the holdout files are on disk, a script that uses either reads holdout rows outside the holdout run.
+This is threat T21's residual: the package stops accidents, not a deliberate read of public data,
+and the mechanical candidate rule is what makes such a read useless.
+
+**"Early" does not see the G3.1 drafts (L4).** The threat model defines an early unseal as one before
+the freeze tag and both G3.1 README drafts are in the chain; the code checks the freeze anchor only,
+and the unseal entry records no commit of the drafts. Until that is built, it is a manual check, which
+G3.1's owner (the CTPO role) makes before the owner runs `seal unseal`, and records in G3.1's row of
+docs/ITERATION_GOALS.md: both drafts, the README text for a pass and for a fail, are merged on main;
+the commit that merged them is an ancestor of the HEAD at which the unseal will run (`git
+merge-base --is-ancestor <drafts commit> HEAD`); and the SHA-256 of each draft file at that commit is
+written in the row, so a later edit to either is visible.
+
+**Replaying the unseal depends on the gate code at verify time (L5).** Verification recomputes the
+holdout candidate with the `gate`, `sharpe`, `cscv` and `benchmark` modules as they are when it runs,
+not as they were at the unseal. A later change to any of them could make the ledger fail
+verification for good, or change the candidate replay expects. The control is process: after the
+freeze, those four modules are not changed without a recorded defect and a security review, and G2.7
+and G3.4 check that they are unchanged since the freeze anchor.
+
 ## What this does not cover
 
 A deliberate download of the public holdout outside the harness (T21): nothing prevents it, and the
