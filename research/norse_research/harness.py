@@ -56,9 +56,15 @@ own development window, without the unseal, and must reproduce the candidate's
 committed series exactly, so no holdout return is computed unless it does; only then
 does it run once from the start of the development window through 2026-10-31,
 positions carried across the boundary, inside the unsealed run, whose development
-part must match again. A failure is ledgered and may be retried under the same
-unseal; a completed result spends the seal. HOLD-1 and the verdict read that result
-later (G3.2, G3.3); nothing here computes a statistic of holdout returns.
+part must match again. That unsealed run is bracketed by an attempt entry, written
+first, and its close, recording the outcome and whether any row from 2026-01-01 on
+reached the strategy; the run holds the clone's holdout lock throughout, so a second
+one there is refused (security review H2, M1). A failure is ledgered and may be
+retried under the same unseal: at the same commit always, at a commit with other data
+loading or seal files only while no earlier attempt served a holdout row or was left
+open. Once the strategy has been given the unseal, a failure's own text is withheld
+from the ledger (L7). A completed result spends the seal. HOLD-1 and the verdict read
+that result later (G3.2, G3.3); nothing here computes a statistic of holdout returns.
 """
 
 from __future__ import annotations
@@ -73,6 +79,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -84,17 +91,22 @@ from .gate import RegisteredLedger, candidates, gate_ledger
 from .gitledger import (
     Git,
     GitLedger,
+    LedgerBusy,
     holdout_commit_error,
     period_constants,
     registered_ids,
     tree_digests,
 )
 from .ledger import (
+    ABANDONED,
+    ATTEMPT,
+    ATTEMPT_CLOSE,
     CODE_BRANCH,
     COMPLETED,
     FAILED,
     OPEN,
     RESULT,
+    RETURNED,
     Entry,
     LedgerError,
     LedgerSnapshot,
@@ -239,11 +251,14 @@ def _run_strategy(
     entry: str,
     store: ArchiveStore | None,
     unsealed: tuple[str, str] | None = None,
+    report: dict | None = None,
 ) -> list:
     """The strategy's daily returns, computed in a fresh ``python -I -B`` process with
     an empty environment from the files committed at ``head``. ``unsealed`` is the
     holdout run's alone: the committed holdout manifest's path and the unseal entry,
-    which the runner needs to read holdout rows (G1.6)."""
+    which the runner needs to read holdout rows (G1.6). ``report``, when given, gets
+    ``holdout_rows_served``: whether the runner handed the strategy any row from
+    2026-01-01 on, taken as true when the process gave no answer."""
     holdout_manifest, unseal_entry = unsealed if unsealed is not None else (None, None)
     with tempfile.TemporaryDirectory(prefix="norse-strategy-") as tmp:
         code_root, pycache = Path(tmp) / "code", Path(tmp) / "pycache"
@@ -273,9 +288,13 @@ def _run_strategy(
         line for line in proc.stdout.decode(errors="replace").splitlines()
         if line.startswith(RESULT_PREFIX)
     ]
-    if not lines:
+    result = json.loads(lines[-1][len(RESULT_PREFIX):]) if lines else None
+    if report is not None:
+        report["holdout_rows_served"] = (
+            result.get("holdout_rows_served") is not False if result is not None else True
+        )
+    if result is None:
         raise StrategyFailed(f"the strategy process exited with {proc.returncode} and no result")
-    result = json.loads(lines[-1][len(RESULT_PREFIX):])
     if not result.get("ok"):
         raise StrategyFailed(result.get("error", "the strategy failed"))
     return result["returns"]
@@ -635,6 +654,44 @@ def run(
 # --- the holdout run (G1.6; section 11, items 5 and 6) ---------------------------------
 
 HOLDOUT_REQUEST_KEYS = frozenset({"configuration", "candidate_sha256"})
+WITHHELD = (
+    "the unsealed run failed; its message is withheld because it may carry holdout values "
+    "(security review L7)"
+)
+
+
+class HoldoutCheckFailed(ValueError):
+    """A check the harness makes on a holdout run; its message is the harness's own and
+    holds no value computed from holdout data."""
+
+
+def _holdout_failure(exc: BaseException, unsealed: bool, repo: Path, store) -> str:
+    """A failed holdout attempt's error as the public ledger records it. Once the
+    strategy has been given the unseal, a failure's text is the strategy's and may carry
+    holdout values, so only its type is published, unless the harness or the ledger
+    raised it with a message of its own (security review L7)."""
+    if unsealed and not isinstance(exc, HoldoutCheckFailed | LedgerError):
+        name = type(exc).__name__
+        if isinstance(exc, StrategyFailed):  # the runner reports "<type>: <message>"
+            reported = str(exc).split(":", 1)[0]
+            name = reported if reported.isidentifier() else name
+        return f"{name}: {WITHHELD}"
+    return public_error(exc, repo, store)
+
+
+def _close_abandoned_attempts(ledger: GitLedger) -> None:
+    """Close, as abandoned, every attempt a killed run left open. This run holds the
+    clone's holdout lock, so none is in flight here; one in flight on another clone is
+    ended by it and cannot then complete. An abandoned attempt counts as having served
+    holdout rows (security review H2, M1)."""
+    entries = ledger.snapshot(ledger.local_head()).entries
+    closed = {e.body["attempt"] for e in entries if e.type == ATTEMPT_CLOSE}
+    for attempt in (e for e in entries if e.type == ATTEMPT and e.hash not in closed):
+        ledger.append(
+            {"type": ATTEMPT_CLOSE, "attempt": attempt.hash, "attempt_seq": attempt.seq,
+             "outcome": ABANDONED, "holdout_rows_served": True},
+            expected_head=ledger.local_head(),
+        )
 
 
 def _holdout_summary(
@@ -645,12 +702,14 @@ def _holdout_summary(
     HOLD-1 reads the committed series later (G3.2)."""
     pairs = [(str(day), float(value)) for day, value in returned]
     if [d for d, _ in pairs] != window.day_list():
-        raise ValueError(
+        raise HoldoutCheckFailed(
             "the holdout run's returns are not one per day from the start of the development "
             "window through the holdout's end"
         )
     if pairs[: len(committed)] != committed:
-        raise ValueError("its development returns differ from the candidate's committed series")
+        raise HoldoutCheckFailed(
+            "its development returns differ from the candidate's committed series"
+        )
     return pairs, {
         "days": len(pairs),
         "first_day": pairs[0][0],
@@ -674,7 +733,29 @@ def _run_holdout(
     store: ArchiveStore | None,
     admitted_on: str | None,
 ) -> RunRecord:
-    """The one holdout run, or a ledgered attempt at it. See the module docstring."""
+    """The one holdout run, or a ledgered attempt at it, holding the clone's holdout
+    lock throughout (security review M1). See the module docstring."""
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(ledger.holdout_lock())
+        except LedgerBusy as exc:
+            raise RunRefused(str(exc)) from None
+        return _run_holdout_locked(ledger, snapshot, registration, request, repo, head,
+                                   manifest, manifest_rel, store, admitted_on)
+
+
+def _run_holdout_locked(
+    ledger: GitLedger,
+    snapshot: LedgerSnapshot,
+    registration: Registration,
+    request: Mapping[str, Any],
+    repo: Path,
+    head: str,
+    manifest: Manifest,
+    manifest_rel: str,
+    store: ArchiveStore | None,
+    admitted_on: str | None,
+) -> RunRecord:
     git = ledger.git
     genesis = snapshot.genesis
     if set(request) != HOLDOUT_REQUEST_KEYS:
@@ -721,6 +802,7 @@ def _run_holdout(
             "rerun": None,
             "reserve_reason": None,
             "candidate_sha256": resolved.configuration["candidate_sha256"],
+            "commit": head,
         },
     )
     if error:
@@ -762,6 +844,7 @@ def _run_holdout(
     error = None
     files: dict[str, bytes] = {}
     pin = genesis.body["strategies"][cid]
+    unsealed = False
     try:
         seal.require_unseal_on_remote(ledger, unseal.hash, opened.hash)
         committed = [(d, float(v)) for d, v in snapshot.returns_of(candidate_result)]
@@ -770,21 +853,43 @@ def _run_holdout(
             opened.hash, store,
         )
         if [(str(d), float(v)) for d, v in reproduced] != committed:
-            raise StrategyFailed(
+            raise HoldoutCheckFailed(
                 "the development returns do not reproduce the candidate's committed series, so "
                 "no holdout return was computed (section 11, item 5)"
             )
-        returned = _run_strategy(
-            git, head, pin, paths[h], manifest_rel, resolved.configuration, opened.hash, store,
-            unsealed=(seal.HOLDOUT_MANIFEST, unseal.hash),
+        # The attempt bracket (security review H2): written before the strategy is first
+        # given the unseal, closed after it with the outcome and whether any row from
+        # 2026-01-01 on reached it. A process killed in between leaves it open, and the
+        # next run closes it as abandoned.
+        _close_abandoned_attempts(ledger)
+        attempt = ledger.append(
+            {"type": ATTEMPT, "opens": opened.hash, "open_seq": opened.seq, "commit": head},
+            expected_head=ledger.local_head(),
         )
+        unsealed = True
+        report: dict = {}
+        outcome = FAILED
+        try:
+            returned = _run_strategy(
+                git, head, pin, paths[h], manifest_rel, resolved.configuration, opened.hash,
+                store, unsealed=(seal.HOLDOUT_MANIFEST, unseal.hash), report=report,
+            )
+            outcome = RETURNED
+        finally:
+            ledger.append(
+                {"type": ATTEMPT_CLOSE, "attempt": attempt.hash, "attempt_seq": attempt.seq,
+                 "outcome": outcome,
+                 "holdout_rows_served": report.get("holdout_rows_served", True)},
+                require_in_step=False,
+                attempts=3,
+            )
         pairs, summary = _holdout_summary(returned, resolved.window, committed)
         data = encode_returns(pairs)
         digest = sha256_hex(data)
         files[returns_path(digest)] = data
         status = COMPLETED
     except Exception as exc:  # a failed attempt is still a ledgered attempt (item 6)
-        error = public_error(exc, repo, store)
+        error = _holdout_failure(exc, unsealed, repo, store)
         status, summary, digest = FAILED, {"error": error}, None
     closed = ledger.append(
         {

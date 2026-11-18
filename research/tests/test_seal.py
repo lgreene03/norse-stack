@@ -16,8 +16,10 @@ import functools
 import hashlib
 import io
 import json
+import os
 import re
 import subprocess
+import sys
 import zipfile
 from datetime import UTC, datetime
 
@@ -30,11 +32,13 @@ from ledger_fixtures import (
     REPO,
     RESEARCH,
     TEST_PASSPHRASE,
+    Book,
     World,
     git,
     grid_world,
+    lcg_returns,
 )
-from norse_research import gate, gitledger, harness, ledger, seal
+from norse_research import gate, gitledger, harness, ledger, rules, seal
 from norse_research.coverage import read_rows
 from norse_research.formats import DatasetSpec
 from norse_research.gitledger import LedgerOutOfStep, LedgerWriteError, check_key_record
@@ -48,6 +52,7 @@ from norse_research.periods import (
     inside_unsealed_run,
 )
 from norse_research.registration import RunNotRegistered
+from norse_research.rules import check_run_rules
 from norse_research.seal import NoTerminal, SealRefused
 from norse_research.store import ArchiveStore
 from synthetic_store import make_series
@@ -534,20 +539,26 @@ def test_holdout_run_reads_holdout_rows_once_and_spends_the_seal(frozen, monkeyp
     original = harness._run_strategy
 
     def watched(*args, **kwargs):
-        held = {e.hash: e for e in remote_entries(frozen)}
+        remote = remote_entries(frozen)
+        held = {e.hash: e for e in remote}
         calls.append((kwargs.get("unsealed"), entry.hash in held, args[6] in held,
-                      args[5]["window"]["last_return_day"]))
+                      args[5]["window"]["last_return_day"], remote[-1].type))
         return original(*args, **kwargs)
 
     monkeypatch.setattr(harness, "_run_strategy", watched)
     record = holdout_run(frozen)
     assert record.status == "completed", record.error
     # First the development window, without the unseal; then the holdout run, unsealed;
-    # the remote held the unseal entry and the run's open entry at each call (T23).
+    # the remote held the unseal entry and the run's open entry at each call (T23), and
+    # the attempt entry before the unsealed one (security review H2).
     assert calls == [
-        (None, True, True, "2025-12-31"),
-        ((seal.HOLDOUT_MANIFEST, entry.hash), True, True, "2026-10-31"),
+        (None, True, True, "2025-12-31", "open"),
+        ((seal.HOLDOUT_MANIFEST, entry.hash), True, True, "2026-10-31", "attempt"),
     ]
+    attempts = [e for e in remote_entries(frozen) if e.type in ("attempt", "attempt_close")]
+    assert [e.type for e in attempts] == ["attempt", "attempt_close"]
+    assert attempts[1].body["outcome"] == "returned"
+    assert attempts[1].body["holdout_rows_served"] is True  # it read across the boundary
     opened = record.open_entry.body
     assert opened["kind"] == "holdout" and opened["configuration_id"] == CANDIDATE
     assert opened["configuration"]["candidate_sha256"] == entry.body["configuration_sha256"]
@@ -906,3 +917,247 @@ def test_check_key_verifies_the_genesis_record_and_writes_nothing(tmp_path, monk
             seal.check_genesis_key(world.repo, read_key=key())
     finally:
         world.close()
+
+
+# --- security review H2, M1, L7: holdout attempts, one at a time ---------------------
+
+DRIVER = r'''
+import json, sys
+sys.path.insert(0, sys.argv[1] + "/research")
+from pathlib import Path
+from norse_research import harness
+from norse_research.store import ArchiveStore
+try:
+    record = harness.run(Path(sys.argv[1]), {"configuration": "holdout",
+                         "candidate_sha256": sys.argv[3]}, store=ArchiveStore(Path(sys.argv[2])))
+    print(json.dumps({"status": record.status}))
+except harness.RunRefused as exc:
+    print(json.dumps({"refused": str(exc)}))
+'''
+
+
+def run_at_head_in_a_fresh_process(world, tmp_path):
+    """A holdout run in a new process importing the code at HEAD, as a real retry after
+    a code change would be (the test process holds the code it started with)."""
+    driver = tmp_path / "driver.py"
+    driver.write_text(DRIVER)
+    env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME") or k.startswith("GIT_")}
+    sha = trial(world, CANDIDATE)[0].body["configuration_sha256"]
+    proc = subprocess.run(
+        [sys.executable, "-I", "-B", str(driver), str(world.repo), str(world.store.root), sha],
+        capture_output=True, text=True, env=env, cwd=str(tmp_path), check=False,
+    )
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def test_an_attempt_that_served_holdout_rows_binds_every_retry_to_its_commit(
+    frozen, monkeypatch, tmp_path
+):
+    # Probes R1 and D1: the holdout series was computed and seen, then the attempt
+    # failed. A retry with a "data loading" change (which item 6 alone would allow) is
+    # refused; a retry at the attempt's own commit is allowed and gives the same series.
+    unseal(frozen)
+    seen = []
+
+    def peek_then_fail(returned, window, committed):
+        seen.append([(str(d), float(v)) for d, v in returned])
+        raise RuntimeError("stand-in for any failure after the holdout returns were computed")
+
+    with monkeypatch.context() as m:
+        m.setattr(harness, "_holdout_summary", peek_then_fail)
+        first = holdout_run(frozen)
+    assert first.status == "failed" and harness.WITHHELD in first.error
+    closes = [e for e in remote_entries(frozen) if e.type == "attempt_close"]
+    assert [(c.body["outcome"], c.body["holdout_rows_served"]) for c in closes] == [
+        ("returned", True)]
+    attempt_commit = git(frozen.repo, "rev-parse", "HEAD")
+    loader = frozen.repo / "research/norse_research/loader.py"
+    loader.write_text(loader.read_text() + "\n# a data loading fix\n")
+    frozen.commit("loader: a data loading fix")
+    frozen.push()
+    out = run_at_head_in_a_fresh_process(frozen, tmp_path)
+    assert "served holdout rows, so a retry runs only at its commit" in out["refused"]
+    assert attempt_commit in out["refused"]
+    git(frozen.repo, "checkout", "--quiet", attempt_commit)
+    second = holdout_run(frozen)
+    assert second.status == "completed", second.error
+    assert frozen.ledger.verify().snapshot.returns_of(second.result_entry) == seen[0]
+
+
+def test_a_killed_attempt_is_closed_as_abandoned_and_binds_the_retry_to_its_commit(
+    frozen, monkeypatch
+):
+    # Probe R1b: the process dies after the unsealed run returned, before the attempt's
+    # close; the ledger still shows the attempt, and only its commit may run again.
+    unseal(frozen)
+    original = gitledger.GitLedger.append
+
+    def die_before_the_close(self, body, files=None, **kwargs):
+        if body.get("type") == "attempt_close":
+            raise SystemExit("stand-in for SIGKILL after the unsealed run returned")
+        return original(self, body, files, **kwargs)
+
+    with monkeypatch.context() as m:
+        m.setattr(gitledger.GitLedger, "append", die_before_the_close)
+        with pytest.raises(SystemExit):
+            holdout_run(frozen)
+    entries = remote_entries(frozen)
+    (attempt,) = [e for e in entries if e.type == "attempt"]
+    assert not any(e.type in ("attempt_close", "result") for e in entries[attempt.seq:])
+    frozen.ledger.verify()
+    assert "was never closed" in rules.holdout_retry_error(entries, "0" * 40)
+    assert rules.holdout_retry_error(entries, attempt.body["commit"]) is None
+    again = holdout_run(frozen)
+    assert again.status == "completed", again.error
+    closes = [e for e in remote_entries(frozen) if e.type == "attempt_close"]
+    assert (closes[0].body["attempt"], closes[0].body["outcome"],
+            closes[0].body["holdout_rows_served"]) == (attempt.hash, "abandoned", True)
+    frozen.ledger.verify()
+
+
+def test_a_second_holdout_run_while_one_is_in_flight_is_refused(frozen, monkeypatch):
+    # Probe R2 and security review M1: on one clone the holdout lock refuses a second run
+    # while the first is in flight, so only one attempt and one result exist.
+    unseal(frozen)
+    original = harness._run_strategy
+    inner = []
+
+    def start_another(*args, **kwargs):
+        if not inner:
+            try:
+                inner.append(holdout_run(frozen).status)
+            except harness.RunRefused as exc:
+                inner.append(str(exc))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(harness, "_run_strategy", start_another)
+    outer = holdout_run(frozen)
+    assert outer.status == "completed", outer.error
+    assert "another holdout run is in progress" in inner[0]
+    entries = remote_entries(frozen)
+    assert [e.type for e in entries].count("attempt") == 1
+    assert sum(1 for e in entries if e.type == "result" and e.body["status"] == "completed"
+               and e.body["configuration_sha256"] == outer.open_entry.body[
+                   "configuration_sha256"]) == 1
+    frozen.ledger.verify()
+
+
+def test_an_attempt_from_another_clone_ends_one_in_flight_which_cannot_complete(
+    frozen, monkeypatch
+):
+    # Security review M1 across clones: the lock is per clone, so the ledger keeps
+    # attempts one at a time. A run on another clone first closes the open attempt as
+    # abandoned (which binds it to the same commit); the first run cannot then close its
+    # attempt or complete. One completed result, and the ledger verifies.
+    unseal(frozen)
+    original = harness._run_strategy
+    other = []
+
+    def another_clone_runs_meanwhile(*args, **kwargs):
+        if kwargs.get("unsealed") and not other:
+            other.append(None)
+            clone = frozen.clone("other")
+            other[0] = harness.run(clone.git.repo, {"configuration": "holdout",
+                                   "candidate_sha256": request_for(frozen)["configuration_sha256"]},
+                                   store=frozen.store)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(harness, "_run_strategy", another_clone_runs_meanwhile)
+    first = holdout_run(frozen)
+    assert other[0].status == "completed", other[0].error
+    assert first.status == "failed" and "closed twice" in first.error
+    entries = remote_entries(frozen)
+    completed = [e for e in entries if e.type == "result" and e.body["status"] == "completed"
+                 and e.body["opens"] in {o.hash for o in entries
+                                         if o.type == "open" and o.body["kind"] == "holdout"}]
+    assert len(completed) == 1
+    assert [e.body["outcome"] for e in entries if e.type == "attempt_close"] == [
+        "abandoned", "returned"]
+    frozen.ledger.verify()
+
+
+def test_a_failed_unsealed_run_publishes_no_text_of_its_own(tmp_path, monkeypatch):
+    # Security review L7: once the strategy has the unseal, a failure's message may carry
+    # holdout values, so the ledger records only its type.
+    world = a_grid_world(tmp_path, monkeypatch, behaviours={CANDIDATE: "leaks_late"})
+    try:
+        unseal(world)
+        record = holdout_run(world)
+        assert record.status == "failed"
+        assert record.error == f"RuntimeError: {harness.WITHHELD}"
+        assert "holdout close" not in world.remote_ledger().decode()
+        (closed,) = [e for e in remote_entries(world) if e.type == "attempt_close"]
+        assert (closed.body["outcome"], closed.body["holdout_rows_served"]) == ("failed", True)
+    finally:
+        world.close()
+
+
+def test_the_attempt_rules_replay_without_git():
+    # The rules the ledger and replay hold attempts to, on a ledger built in memory.
+    book = Book()
+    days = book.registration.windows["H1"].days
+    for i, cid in enumerate(book.registration.order["H1"]):
+        book.run(cid, lcg_returns(i, days))
+    genesis = book.entries[0]
+    opened = next(e for e in book.entries if e.type == "open"
+                  and e.body["configuration_id"] == CANDIDATE)
+    closed = next(e for e in book.entries if e.type == "result" and e.body["opens"] == opened.hash)
+    frozen_length = len(book.entries)
+    book.add({"type": "unseal", "preregistration": genesis.body["preregistration"],
+              "configuration_id": CANDIDATE, "hypothesis": "H1",
+              "configuration_sha256": opened.body["configuration_sha256"],
+              "candidate": {"open": opened.hash, "result": closed.hash}, "freeze": "f" * 40,
+              "holdout_manifest_sha256": genesis.body["manifests"]["holdout"],
+              "key_record_sha256": genesis.body["key_record"]["sha256"], "proof": "ab" * 32})
+    resolved = book.registration.resolve_holdout(opened.body, genesis.body["manifests"]["holdout"])
+
+    def holdout_open(on, commit):
+        return on.add({**opened.body, "kind": "holdout", "configuration": resolved.configuration,
+                       "configuration_sha256": resolved.configuration_sha256,
+                       "window": resolved.window.as_dict(), "commit": commit})
+
+    def attempt(on, run):
+        return on.add({"type": "attempt", "opens": run.hash, "open_seq": run.seq,
+                       "commit": run.body["commit"]})
+
+    def close(on, tried, served, outcome="failed"):
+        return on.add({"type": "attempt_close", "attempt": tried.hash, "attempt_seq": tried.seq,
+                       "outcome": outcome, "holdout_rows_served": served})
+
+    first = holdout_open(book, "1" * 40)
+    tried = attempt(book, first)
+    assert "was never closed" in rules.holdout_retry_error(book.entries, "2" * 40)
+    clean = copy.deepcopy(book)
+    close(clean, tried, served=False)
+    clean.snapshot()
+    assert rules.holdout_retry_error(clean.entries, "2" * 40) is None  # no holdout row seen
+    second = holdout_open(clean, "2" * 40)
+    check_run_rules(clean.snapshot().entries, clean.registration, frozen_length=frozen_length)
+    served = copy.deepcopy(book)
+    close(served, tried, served=True)
+    assert "served holdout rows" in rules.holdout_retry_error(served.entries, "2" * 40)
+    holdout_open(served, "2" * 40)
+    with pytest.raises(VerificationError, match="a retry runs only at its commit"):
+        check_run_rules(served.snapshot().entries, served.registration,
+                        frozen_length=frozen_length)
+    # One attempt at a time; never closed twice; an abandoned one served rows; a
+    # completed holdout result needs its own attempt closed as returned.
+    cases = []
+    overlapping = copy.deepcopy(clean)
+    attempt(overlapping, second)
+    overlap_run = holdout_open(overlapping, "2" * 40)
+    attempt(overlapping, overlap_run)
+    cases.append((overlapping, "attempts run one at a time"))
+    twice = copy.deepcopy(clean)
+    close(twice, tried, served=False)
+    cases.append((twice, "closed twice"))
+    lenient = copy.deepcopy(book)
+    close(lenient, tried, served=False, outcome="abandoned")
+    cases.append((lenient, "counts as having served"))
+    unattempted = copy.deepcopy(clean)
+    unattempted.result(second, [0.0] * resolved.window.days, days=resolved.window.day_list())
+    cases.append((unattempted, "needs its own attempt"))
+    for ledger_, message in cases:
+        with pytest.raises(VerificationError, match=message):
+            ledger_.snapshot()

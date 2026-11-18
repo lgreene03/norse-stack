@@ -51,6 +51,14 @@ the entry is written and on every replay. A second unseal entry fails verificati
 here; its place after the freeze, its proof and its candidate are checked by
 ``gitledger`` and ``gate``.
 
+**Attempt** and **attempt close** (G1.6; security review H2, M1) bracket every unsealed
+run of the holdout: the attempt is written before the strategy is first given the
+unseal, and its close records the outcome (``returned``, ``failed``, or ``abandoned``
+when a later run closes an attempt a killed process left open) and whether any row from
+2026-01-01 on was served to the strategy. Attempts run one at a time, a completed
+holdout result needs its own attempt closed as returned, and there is only one.
+``rules`` holds the retry rule they feed.
+
 **N** is the number of open entries of kind ``trial``: every trial opened counts
 once, whether it completes, fails or never finishes, and reruns count again. It is
 never deduplicated by configuration hash (section 9; T1).
@@ -84,6 +92,12 @@ from .registration import (
 )
 
 UNSEAL = "unseal"
+# A holdout attempt (G1.6; security review H2): written before every unsealed run, and
+# closed after it with its outcome and whether any row from 2026-01-01 on was served.
+ATTEMPT = "attempt"
+ATTEMPT_CLOSE = "attempt_close"
+RETURNED = "returned"
+ABANDONED = "abandoned"
 
 FORMAT = "norse-stack/trial-ledger/v1"
 LEDGER_BRANCH = "ledger"
@@ -118,6 +132,8 @@ _KEYS = {
     UNSEAL: _COMMON
     | {"preregistration", "configuration_id", "hypothesis", "configuration_sha256",
        "candidate", "freeze", "holdout_manifest_sha256", "key_record_sha256", "proof"},
+    ATTEMPT: _COMMON | {"opens", "open_seq", "commit"},
+    ATTEMPT_CLOSE: _COMMON | {"attempt", "attempt_seq", "outcome", "holdout_rows_served"},
 }
 # Fields a result entry copies from the open entry it closes.
 _COPIED = ("configuration_sha256", "commit", "manifest_sha256", "cost_basis")
@@ -296,9 +312,87 @@ def _check_unseal(seq: int, body: dict) -> None:
         raise _fail(seq, "the unseal's proof is not a scrypt output (lower-case hex, 32 bytes or more)")
 
 
+def _check_attempt(seq: int, body: dict) -> None:
+    _sha(seq, "opens", body["opens"])
+    _git_id(seq, "commit", body["commit"])
+    if type(body["open_seq"]) is not int:
+        raise _fail(seq, "open_seq is not an entry number")
+
+
+def _check_attempt_close(seq: int, body: dict) -> None:
+    _sha(seq, "attempt", body["attempt"])
+    if type(body["attempt_seq"]) is not int:
+        raise _fail(seq, "attempt_seq is not an entry number")
+    if body["outcome"] not in (RETURNED, FAILED, ABANDONED):
+        raise _fail(seq, f"unknown attempt outcome {body['outcome']!r}")
+    if type(body["holdout_rows_served"]) is not bool:
+        raise _fail(seq, "holdout_rows_served is true or false")
+    if body["outcome"] == ABANDONED and not body["holdout_rows_served"]:
+        raise _fail(seq, "an abandoned attempt counts as having served holdout rows")
+
+
 _CHECKS = {
     GENESIS: _check_genesis, OPEN: _check_open, RESULT: _check_result, UNSEAL: _check_unseal,
+    ATTEMPT: _check_attempt, ATTEMPT_CLOSE: _check_attempt_close,
 }
+
+
+def _closes(entries: Sequence[Entry], attempt: Entry) -> Entry | None:
+    return next(
+        (e for e in entries if e.type == ATTEMPT_CLOSE and e.body["attempt"] == attempt.hash), None
+    )
+
+
+def _holdout_completed(entries: Sequence[Entry]) -> bool:
+    held = {e.hash for e in entries if e.type == OPEN and e.body["kind"] == HOLDOUT}
+    return any(e.type == RESULT and e.body["opens"] in held and e.body["status"] == COMPLETED
+               for e in entries)
+
+
+def _attempt_error(body: dict, entries: list[Entry], hashes: dict[str, int]) -> str | None:
+    """Why an attempt, an attempt's close or a holdout result does not follow from the
+    entries before it, or None (security review H2 and M1). Attempts are strictly one
+    at a time: each is closed before the next opens. A completed holdout result needs
+    its own attempt closed with outcome ``returned``, and there is at most one."""
+    if body["type"] == ATTEMPT:
+        opened = entries[hashes[body["opens"]]] if body["opens"] in hashes else None
+        if opened is None or opened.type != OPEN or opened.body["kind"] != HOLDOUT:
+            return "an attempt names no earlier holdout run"
+        if opened.seq != body["open_seq"] or opened.body["commit"] != body["commit"]:
+            return "an attempt's open_seq or commit is not its holdout run's"
+        if any(e.type == RESULT and e.body["opens"] == opened.hash for e in entries):
+            return "an attempt for a holdout run that already has its result"
+        attempts = [e for e in entries if e.type == ATTEMPT]
+        if any(a.body["opens"] == opened.hash for a in attempts):
+            return "a second attempt within one holdout run"
+        unclosed = [a.seq for a in attempts if _closes(entries, a) is None]
+        if unclosed:
+            return (
+                f"an attempt while attempt {unclosed[0]} is open: attempts run one at a time "
+                "(security review M1)"
+            )
+        if _holdout_completed(entries):
+            return "an attempt after the holdout result spent the seal (section 11, item 6)"
+        return None
+    if body["type"] == ATTEMPT_CLOSE:
+        attempt = entries[hashes[body["attempt"]]] if body["attempt"] in hashes else None
+        if attempt is None or attempt.type != ATTEMPT or attempt.seq != body["attempt_seq"]:
+            return "an attempt's close names no earlier attempt"
+        if _closes(entries, attempt) is not None:
+            return f"attempt {attempt.seq} is closed twice"
+        return None
+    # A result closing a holdout run.
+    if body["status"] != COMPLETED:
+        return None
+    if _holdout_completed(entries):
+        return "a second completed holdout result: one result spends the seal (section 11, item 6)"
+    attempt = next(
+        (e for e in entries if e.type == ATTEMPT and e.body["opens"] == body["opens"]), None
+    )
+    closed = _closes(entries, attempt) if attempt is not None else None
+    if closed is None or closed.body["outcome"] != RETURNED:
+        return "a completed holdout result needs its own attempt, closed as returned"
+    return None
 
 
 def _unseal_error(body: dict, entries: list[Entry], hashes: dict[str, int]) -> str | None:
@@ -421,6 +515,12 @@ def parse_ledger(data: bytes) -> tuple[Entry, ...]:
                     raise _fail(index, f"its {key} differs from the open entry's")
         if body["type"] == UNSEAL:
             problem = _unseal_error(body, entries, hashes)
+            if problem:
+                raise _fail(index, problem)
+        if body["type"] in (ATTEMPT, ATTEMPT_CLOSE) or (
+            body["type"] == RESULT and entries[hashes[body["opens"]]].body["kind"] == HOLDOUT
+        ):
+            problem = _attempt_error(body, entries, hashes)
             if problem:
                 raise _fail(index, problem)
         entry = Entry(line, sha256_hex(line.encode("ascii")), body)

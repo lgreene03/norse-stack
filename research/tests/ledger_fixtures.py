@@ -180,6 +180,15 @@ def peeks(config, data):
     data.load("spot/klines/XUSDT/1d", datetime(2025, 12, 30, tzinfo=utc),
               datetime(2026, 1, 3, tzinfo=utc))
     return _series(config, 0.002)
+
+
+def leaks_late(config, data):
+    if config["window"]["last_return_day"] > "2025-12-31":
+        utc = timezone.utc
+        rows = data.load("spot/klines/XUSDT/1d", datetime(2025, 12, 30, tzinfo=utc),
+                         datetime(2026, 1, 3, tzinfo=utc)).rows
+        raise RuntimeError(f"holdout close {rows[-1][4]!r} at {rows[-1][0]}")
+    return _series(config, 0.002)
 '''
 
 # Functions that reach past the source checks on purpose; a module holding them fails
@@ -381,7 +390,7 @@ class World:
         namespace: dict = {}
         exec(compile(self.source(self.ids[cid]), "<synthetic strategy>", "exec"), namespace)
         function = self.pins[cid]["function"]
-        if function in ("skilled", "drifts_late", "peeks"):
+        if function in ("skilled", "drifts_late", "peeks", "leaks_late"):
             series = namespace["_series"](configuration, 0.002)
         else:
             series = namespace[function](configuration, None)

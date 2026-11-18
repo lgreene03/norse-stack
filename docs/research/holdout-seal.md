@@ -143,10 +143,28 @@ unsealed run; its returns must cover every day and its development part must mat
 series again. The result entry commits the whole series. It records no statistic of the holdout
 returns: HOLD-1 and the verdict read the committed series afterwards (G3.2, G3.3).
 
+The unsealed run is bracketed in the ledger (security review H2). Before the strategy is first
+given the unseal, an `attempt` entry is appended under the append lock; after it, an
+`attempt_close` records the outcome (`returned` or `failed`) and whether the runner handed the
+strategy any row from 2026-01-01 on. A process killed in between leaves the attempt open; the next
+run closes it as `abandoned`, which counts as having served holdout rows. Attempts run one at a
+time: the ledger refuses an attempt while another is open, and the whole holdout run holds a lock
+on its clone, so a second run there is refused while the first is in flight (M1). On another clone
+the second run closes the first's attempt as abandoned, and the first can then neither close its
+attempt nor complete. A completed holdout result needs its own attempt closed as returned, and
+there is only one.
+
 A failed attempt is ledgered and may be retried under the same unseal, for the same configuration
-only, at the candidate's commit plus changes to data loading or the seal (item 6). The first
-completed result spends the seal: every later holdout run is refused, and a holdout entry written
-by hand after it fails verification. The holdout run is outside N.
+only, at the candidate's commit plus changes to data loading or the seal (item 6), with one more
+rule. A retry at an earlier attempt's own commit is always allowed, since the same code and data
+give the same series and it cannot fish for a better one. A retry at a commit with other data
+loading or seal files is allowed only while every earlier attempt was closed with no holdout row
+served. Once an attempt served a holdout row, or was never closed, every later run must be at that
+attempt's commit. The ledger and replay enforce this. Once the strategy has been given the unseal,
+a failure's own message is withheld from the public ledger, which records only the exception's
+type, because the message may carry holdout values (L7); the harness's own check messages are
+kept. The first completed result spends the seal: every later holdout run is refused, and a
+holdout entry written by hand after it fails verification. The holdout run is outside N.
 
 ## Choices made here
 
@@ -162,6 +180,15 @@ run covering the window, the rule a selectable run follows; without one the gate
 call DEV-2 a fail. The modules that count as data loading or the seal are listed above and in
 `gitledger.SEAL_AND_DATA_LOADING`. The passphrase is normalised to Unicode NFC before derivation, so
 the same words typed on another keyboard derive the same key.
+
+The retry rule above is a design decision taken for security review H2 (recorded here for the
+quant role). The review showed that item 6, read alone, let a failed attempt whose holdout series
+had already been computed be retried after a "data loading" change that rewrote that series. The
+rule keeps item 6's permission to fix data loading or the seal after a failure that saw no holdout
+data, and removes it once any holdout row was served or the attempt's fate is unknown, leaving only
+the identical-commit retry that cannot change the result. The runner's record of rows served is
+kept by the same process that runs the strategy, so a strategy that deliberately rewrites it can
+defeat it; that is the residual T13 already names.
 
 ## What G3.2 and the strategies still own
 

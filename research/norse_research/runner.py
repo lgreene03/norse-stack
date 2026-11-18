@@ -35,6 +35,8 @@ from contextlib import nullcontext
 from pathlib import Path
 from types import MappingProxyType
 
+from .periods import HOLDOUT_START_MS
+
 _BLOCKED_EVENTS = (
     "os.", "socket.", "subprocess.", "shutil.", "urllib.", "http.", "ftplib.", "smtplib.",
     "poplib.", "imaplib.", "nntplib.", "telnetlib.", "webbrowser.", "ctypes.", "sqlite3.",
@@ -89,20 +91,26 @@ def _freeze(value):
 
 
 class DataView:
-    """What a strategy receives: rows through the registered loader, nothing else."""
+    """What a strategy receives: rows through the registered loader, nothing else. It
+    notes whether any row it hands over is from 2026-01-01 on, which the holdout
+    attempt's close records (security review H2)."""
 
-    __slots__ = ("_load",)
+    __slots__ = ("_load", "_served")
 
-    def __init__(self, loader) -> None:
+    def __init__(self, loader, served: list | None = None) -> None:
         self._load = loader.load if loader is not None else None
+        self._served = served if served is not None else [False]
 
     def load(self, series: str, start, end, accept_recorded_gaps: bool = False):
         if self._load is None:
             raise LookupError("this run was given no dataset store")
-        return self._load(series, start, end, accept_recorded_gaps)
+        loaded = self._load(series, start, end, accept_recorded_gaps)
+        if any(row[0] >= HOLDOUT_START_MS for row in loaded.rows):
+            self._served[0] = True
+        return loaded
 
 
-def run(payload: dict) -> list:
+def run(payload: dict, served: list | None = None) -> list:
     from .formats import DatasetSpec
     from .loader import DatasetLoader, inside_ledger_entry
     from .manifest import Manifest
@@ -141,7 +149,7 @@ def run(payload: dict) -> list:
     with inside_ledger_entry(payload["entry"]), sealed:
         exec(compile(source, module_file, "exec"), module.__dict__)
         function = module.__dict__[payload["function"]]
-        series = function(_freeze(payload["configuration"]), DataView(loader))
+        series = function(_freeze(payload["configuration"]), DataView(loader, served))
         return [[str(day), float(value)] for day, value in series]
 
 
@@ -149,9 +157,11 @@ def main() -> None:
     payload = json.loads(sys.stdin.read())
     out = sys.stdout
     sys.stdout = sys.stderr  # anything the strategy prints stays out of the result
+    served = [False]
     try:
-        result = {"ok": True, "returns": run(payload)}
+        result = {"ok": True, "returns": run(payload, served)}
     except BaseException as exc:  # reported to the harness, which ledgers the failure
         result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    result["holdout_rows_served"] = served[0]
     out.write("\n" + RESULT_PREFIX + json.dumps(result) + "\n")
     out.flush()

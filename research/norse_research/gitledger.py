@@ -55,7 +55,7 @@ import re
 import subprocess
 import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -65,6 +65,8 @@ from . import ledger as _ledger
 from .canonical import CanonicalError, loads_strict, sha256_hex
 from .environment import check_environment
 from .ledger import (
+    ATTEMPT,
+    ATTEMPT_CLOSE,
     CODE_BRANCH,
     FORMAT,
     GENESIS,
@@ -120,6 +122,7 @@ TRANSPORT_OVERRIDES = (
 )
 PREREGISTRATION_TAG = "prereg-v1"
 LOCK_NAME = "norse-ledger.lock"
+HOLDOUT_LOCK_NAME = "norse-holdout.lock"
 LEDGER_NAME = "Norse trial ledger"
 LEDGER_EMAIL = "ledger@norse-stack.invalid"
 IDENTITY = {
@@ -345,17 +348,25 @@ class GitLedger:
             return remote
 
     @contextmanager
-    def _lock(self) -> Iterator[None]:
-        path = self.git.git_dir() / LOCK_NAME
+    def _lock(self, name: str = LOCK_NAME, busy: str = "another process is appending to the ledger"
+              ) -> Iterator[None]:
+        path = self.git.git_dir() / name
         fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
         try:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                raise LedgerBusy("another process is appending to the ledger") from None
+                raise LedgerBusy(busy) from None
             yield
         finally:
             os.close(fd)
+
+    def holdout_lock(self) -> AbstractContextManager[None]:
+        """Held for a whole holdout run, so a second one on this clone is refused while
+        the first is in flight (security review M1). The operating system releases it
+        when a process dies, so a killed run never blocks a retry. Across clones the
+        ledger's rule that attempts run one at a time takes over."""
+        return self._lock(HOLDOUT_LOCK_NAME, "another holdout run is in progress on this clone")
 
     # --- reading --------------------------------------------------------------------
 
@@ -442,9 +453,9 @@ class GitLedger:
             if genesis_of(written) is None:
                 raise VerificationError("no entry may precede the genesis entry")
             self.check_remote(written[0].body["remote"]["url"])  # the first genesis's (N5)
-            if body.get("type") in (OPEN, UNSEAL):
+            if body.get("type") in (OPEN, UNSEAL, ATTEMPT, ATTEMPT_CLOSE):
                 frozen = self.freeze_commit(remote) is not None
-                late = body.get("type") == UNSEAL or body.get("kind") in (SENSITIVITY, HOLDOUT)
+                late = body.get("type") != OPEN or body.get("kind") in (SENSITIVITY, HOLDOUT)
                 if frozen != late:
                     raise LedgerOutOfStep(
                         "the ledger is frozen: only the candidates' sensitivity runs, the "
