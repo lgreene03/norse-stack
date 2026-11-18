@@ -64,7 +64,8 @@ externals:
 # ── Core services ──────────────────────────────────────────────────────────
 # Each entry renders one Deployment + one Service. metricsPort/metricsPath feed
 # the Prometheus scrape annotations and the NetworkPolicy scrape-allow rule.
-# huginn is the exception: its metrics share service.httpPort (see below).
+# huginn and sleipnir are the exception: each serves its metrics on its
+# service.httpPort (see below).
 
 huginn:
   enabled: true
@@ -110,11 +111,15 @@ sleipnir:
     tag: ""
   service:
     type: ClusterIP
+    # sleipnir serves its HTTP API AND /metrics from one listener, so this
+    # single port carries both; there is deliberately no separate
+    # sleipnir.metricsPort. The chart passes it to sleipnir as PORT (so do not
+    # set PORT under env), and changing it here moves the real listener, the
+    # Service, the probes and the scrape annotation together.
     httpPort: 8080
   # Execution gateway. Stateless w.r.t. the sim ledger if DB is external;
   # the consumer group lets Kafka shard partitions across replicas, but the
   # rate limiter is per-replica (see docs/SCALING.md).
-  metricsPort: 8080
   metricsPath: /metrics
   env:
     KAFKA_INTENTS_TOPIC: executions.intents.v1
@@ -123,7 +128,6 @@ sleipnir:
     EXCHANGE_BACKEND: sim
     SIM_TX_COST_BPS: "10"
     RATE_LIMIT_RPS: "10.0"
-    PORT: "8080"
     DB_PATH: /app/data/sleipnir.db
     OTEL_EXPORTER_OTLP_INSECURE: "true"
   # Admin token gating mutating endpoints; supply via an existing Secret in prod.

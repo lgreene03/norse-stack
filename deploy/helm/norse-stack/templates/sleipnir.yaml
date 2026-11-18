@@ -1,6 +1,19 @@
 {{- if .Values.sleipnir.enabled -}}
 {{- $svc := .Values.sleipnir -}}
 {{- $name := printf "%s-sleipnir" (include "norse-stack.fullname" .) -}}
+{{- /*
+  sleipnir serves its HTTP API and /metrics from one listener (PORT), so this
+  chart exposes exactly one port for both, driven by service.httpPort, and
+  sets PORT from it. A leftover sleipnir.metricsPort or sleipnir.env.PORT
+  override that disagrees would leave Prometheus or the Service aimed at a
+  port nothing listens on, so fail the render rather than drift.
+*/ -}}
+{{- if and (hasKey $svc "metricsPort") (ne (int $svc.metricsPort) (int $svc.service.httpPort)) -}}
+{{- fail (printf "sleipnir.metricsPort (%v) is no longer used: sleipnir serves /metrics on sleipnir.service.httpPort (%v). Remove sleipnir.metricsPort or set sleipnir.service.httpPort instead." $svc.metricsPort $svc.service.httpPort) -}}
+{{- end -}}
+{{- if and $svc.env (hasKey $svc.env "PORT") (ne (toString $svc.env.PORT) (toString $svc.service.httpPort)) -}}
+{{- fail (printf "sleipnir.env.PORT (%v) conflicts with sleipnir.service.httpPort (%v): the chart sets PORT from sleipnir.service.httpPort. Remove sleipnir.env.PORT." $svc.env.PORT $svc.service.httpPort) -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,7 +32,7 @@ spec:
         {{- include "norse-stack.selectorLabels" (dict "ctx" . "component" "sleipnir") | nindent 8 }}
       annotations:
         prometheus.io/scrape: "true"
-        prometheus.io/port: {{ $svc.metricsPort | quote }}
+        prometheus.io/port: {{ $svc.service.httpPort | quote }}
         prometheus.io/path: {{ $svc.metricsPath | quote }}
     spec:
       {{- with .Values.global.imagePullSecrets }}
@@ -39,11 +52,13 @@ spec:
             capabilities:
               drop: ["ALL"]
           ports:
+            # One listener serves the HTTP API and /metrics.
             - name: http
               containerPort: {{ $svc.service.httpPort }}
-            - name: metrics
-              containerPort: {{ $svc.metricsPort }}
           env:
+            # Bind sleipnir to the port the chart exposes, so the two cannot drift.
+            - name: PORT
+              value: {{ $svc.service.httpPort | quote }}
             - name: KAFKA_BROKERS
               value: {{ .Values.externals.kafka.brokers | quote }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
@@ -58,8 +73,11 @@ spec:
               value: {{ $svc.adminTokenDefault | quote }}
               {{- end }}
             {{- range $k, $v := $svc.env }}
+            {{- /* PORT is set above from service.httpPort; skip a matching leftover. */}}
+            {{- if ne $k "PORT" }}
             - name: {{ $k }}
               value: {{ $v | quote }}
+            {{- end }}
             {{- end }}
           readinessProbe:
             # /readyz only goes green after the first intent is consumed, so use
@@ -90,10 +108,8 @@ spec:
   selector:
     {{- include "norse-stack.selectorLabels" (dict "ctx" . "component" "sleipnir") | nindent 4 }}
   ports:
+    # HTTP API and /metrics share this one port.
     - name: http
       port: {{ $svc.service.httpPort }}
       targetPort: http
-    - name: metrics
-      port: {{ $svc.metricsPort }}
-      targetPort: metrics
 {{- end }}
