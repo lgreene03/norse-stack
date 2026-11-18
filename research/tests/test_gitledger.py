@@ -285,6 +285,12 @@ def test_the_freeze_tag_needs_the_freeze_command_and_a_complete_grid(world):
     for name in ("ledger-freeze", f"{FREEZE_ANCHOR}{head}", "ledger-genesis"):
         with pytest.raises(LedgerError, match="reserved name"):
             world.ledger.tag_milestone(name, "too easy")
+    # G1.6 quant review M3: no benchmark may run after the freeze, so it needs both,
+    # whatever allow_incomplete says.
+    with pytest.raises(gate.GateRefused, match=r"\['B-H2'\] have none"):
+        gate.freeze(world.ledger, "M2", allow_incomplete=True)
+    trial(world, "B-H2")
+    head = world.ledger.local_head()
     with pytest.raises(gate.GateRefused, match="14 registered configurations have no selectable"):
         gate.freeze(world.ledger, "M2")
     assert world.ledger.verify().freeze is None

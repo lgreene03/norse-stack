@@ -197,7 +197,7 @@ def test_the_bootstrap_interval_passes_every_registered_argument(monkeypatch):
 
 
 def test_gate_refuses_a_ledger_that_is_not_the_frozen_head(world):
-    for cid in ("H1-01", "B-H1", "H1-02"):
+    for cid in ("H1-01", "B-H1", "B-H2", "H1-02"):
         harness.run(world.repo, {"configuration": cid}, store=world.store)
     before_freeze = gate.gate_ledger(world.ledger)  # provisional, the current ledger
     assert not before_freeze.frozen
@@ -425,6 +425,26 @@ def test_dev_2_without_the_benchmark_run_refuses_rather_than_fails():
     ledger = issued(development_book(benchmark=False), frozen=True)
     with pytest.raises(GateRefused, match="needs a completed B-H1 run"):
         gate.development(ledger, "H1")
+    assert gate.missing_benchmarks(ledger) == ["B-H1", "B-H2"]
+
+
+def test_dev_2_uses_only_a_benchmark_run_on_the_trials_harness_code():
+    # Quant review M2: section 8 gives the benchmark the trials' fills, costs and rule
+    # for halted pairs, so r_B must come from the same harness code as the selectable
+    # runs (their recorded harness digest); a run from other code is never used.
+    book = development_book(benchmark=False)
+    other_code = {"harness": "2" * 64, "H1": "1" * 64, "H2": "1" * 64}
+    book.run("B-H1", lcg_returns(999, days(book, "H1"), 0.0, scale=0.04), trees=other_code)
+    ledger = issued(book, frozen=True)
+    with pytest.raises(GateRefused, match="on the harness code its selectable runs used"):
+        gate.benchmark_returns(ledger, "H1")
+    assert gate.missing_benchmarks(ledger) == ["B-H1", "B-H2"]
+    same = lcg_returns(998, days(book, "H1"), 0.0, scale=0.04)
+    book.run("B-H1", same, rerun={**FIX})
+    book.run("B-H2", lcg_returns(997, days(book, "H2")))  # H2 has no runs: any code
+    ledger = issued(book, frozen=True)
+    assert gate.benchmark_returns(ledger, "H1") == tuple(same)
+    assert gate.missing_benchmarks(ledger) == []
 
 
 def judged_at(h, **values):

@@ -176,8 +176,11 @@ DEV-2 to DEV-5 and the decision whether a hypothesis passes were not yet in `gat
 candidate cannot be chosen without them, so they are built here exactly as section 10 registers them,
 with D15's beta-matched excess for H2 (`benchmark.beta_matched`, with a hand-computed known answer,
 which section 15, item 7 asks for). DEV-2's benchmark returns come from the benchmark's last completed
-run covering the window, the rule a selectable run follows; without one the gate refuses rather than
-call DEV-2 a fail. The modules that count as data loading or the seal are listed above and in
+run covering the window on the same harness code as the hypothesis's selectable runs (the quant's
+reading of section 8, in gate-statistics.md); without one the gate refuses rather than call DEV-2 a
+fail, and the freeze refuses while either benchmark lacks one, since no benchmark may run after it.
+Both candidate rules rank by the DSR's z rather than its floating-point value, which rounds to 1.0
+for strong runs; the order is the registered one. The modules that count as data loading or the seal are listed above and in
 `gitledger.SEAL_AND_DATA_LOADING`. The passphrase is normalised to Unicode NFC before derivation, so
 the same words typed on another keyboard derive the same key.
 

@@ -311,19 +311,26 @@ def bootstrap_interval(run: SelectableRun) -> BootstrapResult:
 # --- the development criteria and the holdout candidate (section 10; section 11) -----
 
 
-def benchmark_returns(ledger: RegisteredLedger, hypothesis: str) -> tuple[float, ...]:
-    """r_B for DEV-2: the hypothesis's benchmark run chosen as a selectable run is, its
-    last completed entry whose returns cover the window. Refused when there is none,
-    since DEV-2 then cannot be computed."""
-    snapshot, registration = _require(ledger).snapshot, ledger.registration
-    bid = next(
+def _benchmark_id(registration: Registration, hypothesis: str) -> str:
+    return next(
         b for b, spec in registration.benchmarks.items()
         if spec["window"].rsplit(".", 1)[-1] == hypothesis
     )
+
+
+def _benchmark_series(
+    ledger: RegisteredLedger, hypothesis: str, harness_tree: str | None
+) -> tuple[float, ...] | None:
+    """The hypothesis's benchmark's last completed run covering its window, from the
+    harness tree ``harness_tree`` (any tree when None), or None."""
+    snapshot, registration = ledger.snapshot, ledger.registration
+    bid = _benchmark_id(registration, hypothesis)
     days = registration.windows[hypothesis].day_list()
     chosen = None
     for opened in snapshot.opens(BENCHMARK):
         if opened.body["configuration_id"] != bid:
+            continue
+        if harness_tree is not None and opened.body["trees"]["harness"] != harness_tree:
             continue
         result = snapshot.result_of(opened)
         if result is None or result.body["status"] != COMPLETED:
@@ -331,11 +338,42 @@ def benchmark_returns(ledger: RegisteredLedger, hypothesis: str) -> tuple[float,
         series = snapshot.returns_of(result)
         if [d for d, _ in series] == days:
             chosen = tuple(v for _, v in series)
+    return chosen
+
+
+def benchmark_returns(ledger: RegisteredLedger, hypothesis: str) -> tuple[float, ...]:
+    """r_B for DEV-2: the hypothesis's benchmark run chosen as a selectable run is, its
+    last completed entry whose returns cover the window, and run on the same harness
+    code as the hypothesis's selectable runs, since section 8 gives the benchmark the
+    same fills, costs and rule for halted pairs (quant review M2). Refused when there is
+    none, since DEV-2 then cannot be computed."""
+    runs = selectable_runs(_require(ledger)).get(hypothesis, ())
+    bid = _benchmark_id(ledger.registration, hypothesis)
+    if not runs:
+        raise GateRefused(f"{hypothesis} has no selectable runs to compare with {bid}")
+    tree = runs[0].open_entry.body["trees"]["harness"]  # one tree for them all (run rule 4)
+    chosen = _benchmark_series(ledger, hypothesis, tree)
     if chosen is None:
         raise GateRefused(
-            f"DEV-2 needs a completed {bid} run covering {hypothesis}'s window; there is none"
+            f"DEV-2 needs a completed {bid} run covering {hypothesis}'s window on the harness "
+            "code its selectable runs used; there is none"
         )
     return chosen
+
+
+def missing_benchmarks(ledger: RegisteredLedger) -> list[str]:
+    """Benchmarks DEV-2 could not use: with no completed run covering their window, or,
+    for a hypothesis with selectable runs, none on those runs' harness code (quant
+    review M3). The freeze refuses while any is missing, since no benchmark may run
+    after it and DEV-2, and with it every candidate, would be refused for ever."""
+    family = selectable_runs(_require(ledger))
+    missing = []
+    for h in HYPOTHESES:
+        runs = family.get(h, ())
+        tree = runs[0].open_entry.body["trees"]["harness"] if runs else None
+        if _benchmark_series(ledger, h, tree) is None:
+            missing.append(_benchmark_id(ledger.registration, h))
+    return missing
 
 
 def excess_series(ledger: RegisteredLedger, run: SelectableRun) -> list[float]:
@@ -513,13 +551,20 @@ def missing_selectable_runs(ledger: RegisteredLedger) -> list[str]:
 def freeze(git_ledger: GitLedger, message: str, *, allow_incomplete: bool = False) -> str:
     """Tag the ledger head with its freeze anchor, ``ledger-freeze-<head commit>``, which
     is irreversible (G2.7). Refused while a registered configuration lacks a selectable
-    run, unless the caller states that the freeze leaves it unrun (review M6, N3), and
-    under any environment override (N10). A ledger the gate issued before the freeze
-    stays provisional: check ``frozen`` before relying on one (N14)."""
+    run, unless the caller states that the freeze leaves it unrun (review M6, N3); while
+    either benchmark lacks a completed run DEV-2 can use, with no override (G1.6 quant
+    review M3); and under any environment override (N10). A ledger the gate issued
+    before the freeze stays provisional: check ``frozen`` before relying on one (N14)."""
     check_environment(None, git_ledger.git.repo)
     ledger = gate_ledger(git_ledger)
     if ledger.frozen:
         raise GateRefused("the ledger is already frozen")
+    lacking = missing_benchmarks(ledger)
+    if lacking:
+        raise GateRefused(
+            f"the freeze needs a completed run of each benchmark that DEV-2 can use, and "
+            f"{lacking} have none; no benchmark may run after the freeze (section 8)"
+        )
     missing = missing_selectable_runs(ledger)
     if missing and not allow_incomplete:
         raise GateRefused(

@@ -343,6 +343,7 @@ def test_a_trial_admitted_before_the_freeze_cannot_land_after_it(world, monkeypa
     # Another session freezes the ledger between this run's admission and its open
     # entry. The freeze does not move the ledger head, so only a check under the append
     # lock catches it (review N2).
+    world.runs_by_hand(["B-H1", "B-H2"])  # the freeze needs both benchmarks (G1.6 quant M3)
     original = GitLedger.append
     state = {"done": False}
 
@@ -949,6 +950,7 @@ def test_verification_refuses_entries_the_harness_would_never_write(tmp_path, mo
     folder.mkdir()
     world = a_world(folder, monkeypatch)
     try:
+        world.runs_by_hand(["B-H1", "B-H2"])
         gate.freeze(world.ledger, "M2", allow_incomplete=True)
         _hand_append(world, world.open_body("H1-01"))
         with pytest.raises(ledger.VerificationError, match="trial run after the freeze"):
@@ -1046,6 +1048,7 @@ def test_sensitivity_runs_are_bounded():
 
 def test_a_frozen_ledger_refuses_trials_through_the_harness(world):
     run(world, "B-H1")
+    run(world, "B-H2")
     gate.freeze(world.ledger, "M2: the ledger freeze", allow_incomplete=True)
     assert world.ledger.verify().freeze is not None
     assert any(n.startswith(FREEZE_ANCHOR) for n in world.ledger.milestone_tags())

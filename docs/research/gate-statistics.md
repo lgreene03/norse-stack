@@ -334,6 +334,17 @@ evaluation benchmark may do but a trader could not. A strategy that times volati
 rather than direction is compared with a constant-exposure benchmark, which is the
 intended comparison but not the only reasonable one.
 
+**Which benchmark run DEV-2 uses (G1.6).** Section 8 of the pre-registration gives the
+benchmarks "the same fills, costs and rule for halted pairs" as the trials. The quant role
+reads that as the same harness code (G1.6 quant review, finding 2), and the gate applies that
+reading: r_B is the benchmark's last completed run covering the window whose recorded harness
+digest equals that of the hypothesis's selectable runs, which run rule 4 already requires to
+share one. A benchmark run from other harness code, such as one left from before a harness fix
+the trials were rerun for, is never compared with them, and without a matching run the gate
+refuses DEV-2 rather than calling it a fail. Because no benchmark may run after the ledger
+freeze, the freeze refuses while either benchmark lacks such a run (finding 3). H2's excess is
+beta matched instead of volatility matched (decision D15; `benchmark.beta_matched`).
+
 ## What these are not
 
 huginn's walk-forward tools reported figures named "PBO" and "deflated Sharpe" that are

@@ -455,8 +455,9 @@ class World:
 def grid_world(tmp: Path, *, skilled: str | None = "H1-03", benchmark: bool = True,
                freeze: bool = True, behaviours=None) -> World:
     """A world whose ledger holds every H1 configuration's selectable run, with
-    ``skilled`` the one that passes development (none if None), B-H1's run, and the
-    freeze anchor. H2 has no runs, so H2 has no candidate."""
+    ``skilled`` the one that passes development (none if None), both benchmarks' runs,
+    which the freeze needs, and the freeze anchor. H2 has no runs, so H2 has no
+    candidate."""
     from norse_research import gate
 
     registration = Registration.from_bytes(REAL_PREREG_JSON.read_bytes())
@@ -465,7 +466,7 @@ def grid_world(tmp: Path, *, skilled: str | None = "H1-03", benchmark: bool = Tr
     if skilled is not None:
         pinned[skilled] = "skilled"
     world = World(tmp, behaviours={**pinned, **(behaviours or {})})
-    world.runs_by_hand([*registration.order["H1"], *(["B-H1"] if benchmark else [])])
+    world.runs_by_hand([*registration.order["H1"], *(["B-H1", "B-H2"] if benchmark else [])])
     if freeze:
         gate.freeze(world.ledger, "M2: the ledger freeze", allow_incomplete=True)
     return world
