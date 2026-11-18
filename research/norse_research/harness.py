@@ -46,10 +46,10 @@ harness:
 ``{"configuration": "holdout", "candidate_sha256": <the unseal's configuration hash>}``
 and takes steps 1 to 6 and 8 as above. It is then refused without the unseal entry,
 for any configuration but the unseal's (T22), once a holdout result has spent the
-seal, when the candidate's configuration no longer resolves the same at HEAD, when
-the code a run executes changed since the candidate's run outside data loading and
-the seal, when the committed holdout manifest is not the registered one, and when the
-holdout files on disk do not all verify against it. Its open entry is appended as
+seal or after three runs, when the candidate's configuration no longer resolves the
+same at HEAD, at any commit but the one the unseal records (item 6's rule was applied
+there, once), when the committed holdout manifest is not the registered one, and when
+the holdout files on disk do not all verify against it. Its open entry is appended as
 any other; then, before any holdout row is read, the remote's ledger must hold the
 unseal entry and that open entry (T23). The strategy first runs over the candidate's
 own development window, without the unseal, and must reproduce the candidate's
@@ -57,12 +57,11 @@ committed series exactly, so no holdout return is computed unless it does; only 
 does it run once from the start of the development window through 2026-10-31,
 positions carried across the boundary, inside the unsealed run, whose development
 part must match again. That unsealed run is bracketed by an attempt entry, written
-first, and its close, recording the outcome and whether any row from 2026-01-01 on
-reached the strategy; the run holds the clone's holdout lock throughout, so a second
-one there is refused (security review H2, M1). A failure is ledgered and may be
-retried under the same unseal: at the same commit always, at a commit with other data
-loading or seal files only while no earlier attempt served a holdout row or was left
-open. Once the strategy has been given the unseal, a failure's own text is withheld
+first, and its close, recording the outcome; the run holds the clone's holdout lock
+throughout, so a second one there is refused (security review H2, M1). A failure is
+ledgered and may be retried under the same unseal, at the same commit, at most three
+runs in all (security review round 2, N1). Once the strategy has been given the
+unseal, a failure's own text is withheld
 from the ledger (L7). A completed result spends the seal. HOLD-1 and the verdict read
 that result later (G3.2, G3.3); nothing here computes a statistic of holdout returns.
 """
@@ -93,7 +92,6 @@ from .gitledger import (
     Git,
     GitLedger,
     LedgerBusy,
-    holdout_commit_error,
     period_constants,
     registered_ids,
     tree_digests,
@@ -251,14 +249,11 @@ def _run_strategy(
     entry: str,
     store: ArchiveStore | None,
     unsealed: tuple[str, str] | None = None,
-    report: dict | None = None,
 ) -> list:
     """The strategy's daily returns, computed in a fresh ``python -I -B`` process with
     an empty environment from the files committed at ``head``. ``unsealed`` is the
     holdout run's alone: the committed holdout manifest's path and the unseal entry,
-    which the runner needs to read holdout rows (G1.6). ``report``, when given, gets
-    ``holdout_rows_served``: whether the runner handed the strategy any row from
-    2026-01-01 on, taken as true when the process gave no answer."""
+    which the runner needs to read holdout rows (G1.6)."""
     holdout_manifest, unseal_entry = unsealed if unsealed is not None else (None, None)
     with tempfile.TemporaryDirectory(prefix="norse-strategy-") as tmp:
         code_root, pycache = Path(tmp) / "code", Path(tmp) / "pycache"
@@ -288,13 +283,9 @@ def _run_strategy(
         line for line in proc.stdout.decode(errors="replace").splitlines()
         if line.startswith(RESULT_PREFIX)
     ]
-    result = json.loads(lines[-1][len(RESULT_PREFIX):]) if lines else None
-    if report is not None:
-        report["holdout_rows_served"] = (
-            result.get("holdout_rows_served") is not False if result is not None else True
-        )
-    if result is None:
+    if not lines:
         raise StrategyFailed(f"the strategy process exited with {proc.returncode} and no result")
+    result = json.loads(lines[-1][len(RESULT_PREFIX):])
     if not result.get("ok"):
         raise StrategyFailed(result.get("error", "the strategy failed"))
     return result["returns"]
@@ -682,14 +673,13 @@ def _holdout_failure(exc: BaseException, unsealed: bool, repo: Path, store) -> s
 def _close_abandoned_attempts(ledger: GitLedger) -> None:
     """Close, as abandoned, every attempt a killed run left open. This run holds the
     clone's holdout lock, so none is in flight here; one in flight on another clone is
-    ended by it and cannot then complete. An abandoned attempt counts as having served
-    holdout rows (security review H2, M1)."""
+    ended by it and cannot then complete (security review M1)."""
     entries = ledger.snapshot(ledger.local_head()).entries
     closed = {e.body["attempt"] for e in entries if e.type == ATTEMPT_CLOSE}
     for attempt in (e for e in entries if e.type == ATTEMPT and e.hash not in closed):
         ledger.append(
             {"type": ATTEMPT_CLOSE, "attempt": attempt.hash, "attempt_seq": attempt.seq,
-             "outcome": ABANDONED, "holdout_rows_served": True},
+             "outcome": ABANDONED},
             expected_head=ledger.local_head(),
         )
 
@@ -784,11 +774,11 @@ def _run_holdout_locked(
     ):
         raise RunRefused(f"{cid}'s configuration does not resolve at HEAD as the candidate's did")
     paths = genesis.body["tree_paths"]
-    problem = holdout_commit_error(
-        git, candidate.body["commit"], head, [*paths["harness"], *paths[h]]
-    )
-    if problem:
-        raise RunRefused(problem)
+    if head != unseal.body["commit"]:
+        raise RunRefused(
+            f"every holdout run is at the unseal's commit {unseal.body['commit']}, where item 6's "
+            f"rule was applied; HEAD is {head} (security review round 2, N1)"
+        )
     resolved = registration.resolve_holdout(candidate.body, genesis.body["manifests"]["holdout"])
     error = run_rule_error(
         snapshot.entries,
@@ -858,28 +848,25 @@ def _run_holdout_locked(
                 "no holdout return was computed (section 11, item 5)"
             )
         # The attempt bracket (security review H2): written before the strategy is first
-        # given the unseal, closed after it with the outcome and whether any row from
-        # 2026-01-01 on reached it. A process killed in between leaves it open, and the
-        # next run closes it as abandoned.
+        # given the unseal, closed after it with the outcome. A process killed in between
+        # leaves it open, and the next run closes it as abandoned.
         _close_abandoned_attempts(ledger)
         attempt = ledger.append(
             {"type": ATTEMPT, "opens": opened.hash, "open_seq": opened.seq, "commit": head},
             expected_head=ledger.local_head(),
         )
         unsealed = True
-        report: dict = {}
         outcome = FAILED
         try:
             returned = _run_strategy(
                 git, head, pin, paths[h], manifest_rel, resolved.configuration, opened.hash,
-                store, unsealed=(seal.HOLDOUT_MANIFEST, unseal.hash), report=report,
+                store, unsealed=(seal.HOLDOUT_MANIFEST, unseal.hash),
             )
             outcome = RETURNED
         finally:
             ledger.append(
                 {"type": ATTEMPT_CLOSE, "attempt": attempt.hash, "attempt_seq": attempt.seq,
-                 "outcome": outcome,
-                 "holdout_rows_served": report.get("holdout_rows_served", True)},
+                 "outcome": outcome},
                 require_in_step=False,
                 attempts=3,
             )

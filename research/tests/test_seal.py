@@ -150,6 +150,7 @@ def unseal_body(world, cid=CANDIDATE, **changes):
         "holdout_manifest_sha256": genesis.body["manifests"]["holdout"],
         "key_record_sha256": genesis.body["key_record"]["sha256"],
         "proof": proof_of(),
+        "commit": git(world.repo, "rev-parse", "HEAD"),
         **changes,
     }
 
@@ -573,7 +574,8 @@ def test_holdout_run_reads_holdout_rows_once_and_spends_the_seal(frozen, monkeyp
     attempts = [e for e in remote_entries(frozen) if e.type in ("attempt", "attempt_close")]
     assert [e.type for e in attempts] == ["attempt", "attempt_close"]
     assert attempts[1].body["outcome"] == "returned"
-    assert attempts[1].body["holdout_rows_served"] is True  # it read across the boundary
+    head = git(frozen.repo, "rev-parse", "HEAD")
+    assert entry.body["commit"] == head == attempts[0].body["commit"]  # round 2, N1
     opened = record.open_entry.body
     assert opened["kind"] == "holdout" and opened["configuration_id"] == CANDIDATE
     assert opened["configuration"]["candidate_sha256"] == entry.body["configuration_sha256"]
@@ -647,20 +649,40 @@ def test_no_holdout_return_is_computed_unless_the_development_run_reproduces(
 
 
 def test_a_holdout_run_at_code_changed_outside_data_loading_is_refused(frozen):
-    # Section 11, item 6: the candidate's commit plus only data loading or the seal.
-    unseal(frozen)
+    # Section 11, item 6, applied once, at the unseal (security review round 2, N1): the
+    # unseal is refused at a commit that changed code outside data loading or the seal,
+    # and every holdout run after it is at exactly the commit it records.
     candidate_commit = trial(frozen, CANDIDATE)[0].body["commit"]
-    head = git(frozen.repo, "rev-parse", "HEAD")
+    unsealed_at = git(frozen.repo, "rev-parse", "HEAD")
     paths = ["research/norse_research", "strategies/h1"]
-    assert gitledger.holdout_commit_error(frozen.ledger.git, candidate_commit, head, paths) is None
+    assert gitledger.holdout_commit_error(
+        frozen.ledger.git, candidate_commit, unsealed_at, paths) is None
     frozen.write("research/norse_research/notes.txt", "a change outside data loading\n")
     frozen.commit("a change outside data loading and the seal")
     frozen.push()
-    with pytest.raises(harness.RunRefused, match="outside data loading and the seal"):
-        holdout_run(frozen)
+    read = key()
+    with pytest.raises(SealRefused, match="outside data loading and the seal"):
+        unseal(frozen, read=read)
+    assert read.calls == [] and unseal_of(remote_entries(frozen)) is None
     head = git(frozen.repo, "rev-parse", "HEAD")
+    git(frozen.repo, "checkout", "--quiet", unsealed_at)
+    entry = unseal(frozen)
+    assert entry.body["commit"] == unsealed_at
+    git(frozen.repo, "checkout", "--quiet", head)
+    with pytest.raises(harness.RunRefused, match="every holdout run is at the unseal's commit"):
+        holdout_run(frozen)
     problem = gitledger.holdout_commit_error(frozen.ledger.git, candidate_commit, head, paths)
     assert "notes.txt" in problem
+    # Replay checks the unseal's commit against the candidate's, too: an unseal entry
+    # naming the changed commit fails it.
+    verified = frozen.ledger.verify()
+    forged = ledger.LedgerSnapshot(
+        tuple(e if e.type != "unseal" else ledger.make_entry({**e.body, "commit": head})
+              for e in verified.snapshot.entries),
+        verified.snapshot.series_files,
+    )
+    with pytest.raises(VerificationError, match="outside data loading and the seal"):
+        frozen.ledger._check_unseal(forged, verified.registration, verified.freeze)
     # Security review L3: the runner exports the whole package, so the diff covers it even
     # when the genesis tree paths list less of it.
     narrow = gitledger.holdout_commit_error(frozen.ledger.git, candidate_commit, head,
@@ -971,13 +993,22 @@ def run_at_head_in_a_fresh_process(world, tmp_path):
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
-def test_an_attempt_that_served_holdout_rows_binds_every_retry_to_its_commit(
+def commit_a_data_loading_change(world):
+    """A commit touching only loader.py, which item 6's file rule allows."""
+    loader = world.repo / "research/norse_research/loader.py"
+    loader.write_text(loader.read_text() + "\n# a data loading change\n")
+    world.commit("loader: a data loading change")
+    world.push()
+
+
+def test_a_failed_attempt_then_a_data_loading_change_cannot_run_the_holdout(
     frozen, monkeypatch, tmp_path
 ):
-    # Probes R1 and D1: the holdout series was computed and seen, then the attempt
-    # failed. A retry with a "data loading" change (which item 6 alone would allow) is
-    # refused; a retry at the attempt's own commit is allowed and gives the same series.
-    unseal(frozen)
+    # Probes R1 and F2 (security review round 2, N1): the holdout series was computed
+    # and seen, then the attempt failed. A run at a commit with a data loading change is
+    # refused, whatever the attempt reported; at the unseal's commit the retry is
+    # allowed and gives the same series.
+    entry = unseal(frozen)
     seen = []
 
     def peek_then_fail(returned, window, committed):
@@ -989,28 +1020,68 @@ def test_an_attempt_that_served_holdout_rows_binds_every_retry_to_its_commit(
         first = holdout_run(frozen)
     assert first.status == "failed" and harness.WITHHELD in first.error
     closes = [e for e in remote_entries(frozen) if e.type == "attempt_close"]
-    assert [(c.body["outcome"], c.body["holdout_rows_served"]) for c in closes] == [
-        ("returned", True)]
-    attempt_commit = git(frozen.repo, "rev-parse", "HEAD")
-    loader = frozen.repo / "research/norse_research/loader.py"
-    loader.write_text(loader.read_text() + "\n# a data loading fix\n")
-    frozen.commit("loader: a data loading fix")
-    frozen.push()
+    assert [c.body["outcome"] for c in closes] == ["returned"]
+    commit_a_data_loading_change(frozen)
     out = run_at_head_in_a_fresh_process(frozen, tmp_path)
-    assert "served holdout rows, so a retry runs only at its commit" in out["refused"]
-    assert attempt_commit in out["refused"]
-    git(frozen.repo, "checkout", "--quiet", attempt_commit)
+    assert "every holdout run is at the unseal's commit" in out["refused"]
+    assert entry.body["commit"] in out["refused"]
+    git(frozen.repo, "checkout", "--quiet", entry.body["commit"])
     second = holdout_run(frozen)
     assert second.status == "completed", second.error
     assert frozen.ledger.verify().snapshot.returns_of(second.result_entry) == seen[0]
 
 
-def test_a_killed_attempt_is_closed_as_abandoned_and_binds_the_retry_to_its_commit(
-    frozen, monkeypatch
-):
-    # Probe R1b: the process dies after the unsealed run returned, before the attempt's
-    # close; the ledger still shows the attempt, and only its commit may run again.
+def test_a_close_the_caller_writes_unlocks_nothing(frozen, monkeypatch, tmp_path):
+    # Probe F1: the process stops after the unsealed run returned, and the caller writes
+    # the attempt's close itself. It is a valid close, and changes nothing: a run at a
+    # data loading change is still refused.
     unseal(frozen)
+    original = gitledger.GitLedger.append
+
+    def die_at_the_close(self, body, files=None, **kwargs):
+        if body.get("type") == "attempt_close":
+            raise SystemExit("stand-in for a kill between the unsealed run and its close")
+        return original(self, body, files, **kwargs)
+
+    with monkeypatch.context() as m:
+        m.setattr(gitledger.GitLedger, "append", die_at_the_close)
+        with pytest.raises(SystemExit):
+            holdout_run(frozen)
+    (attempt,) = [e for e in remote_entries(frozen) if e.type == "attempt"]
+    frozen.ledger.append({"type": "attempt_close", "attempt": attempt.hash,
+                          "attempt_seq": attempt.seq, "outcome": "failed"})
+    commit_a_data_loading_change(frozen)
+    out = run_at_head_in_a_fresh_process(frozen, tmp_path)
+    assert "every holdout run is at the unseal's commit" in out["refused"]
+    frozen.ledger.verify()
+
+
+def test_an_off_ledger_peek_then_a_rewriting_first_attempt_is_refused(frozen, tmp_path):
+    # Probe D2: after the unseal the holdout files are on disk and the runner can be
+    # called directly, leaving no entry (T21's residual). The rewrite that would follow
+    # needs a code change, and the first ledgered run at it is refused.
+    entry = unseal(frozen)
+    genesis = genesis_of(frozen)
+    opened = trial(frozen, CANDIDATE)[0]
+    config = frozen.registration.resolve_holdout(
+        opened.body, genesis.body["manifests"]["holdout"]).configuration
+    before = frozen.remote_ledger()
+    peeked = harness._run_strategy(
+        frozen.ledger.git, entry.body["commit"], genesis.body["strategies"][CANDIDATE],
+        genesis.body["tree_paths"]["H1"], "research/manifests/binance-vision-development.json",
+        config, "e" * 64, frozen.store, unsealed=(seal.HOLDOUT_MANIFEST, entry.hash),
+    )
+    assert len(peeked) == 2802 + 304 and frozen.remote_ledger() == before
+    commit_a_data_loading_change(frozen)
+    out = run_at_head_in_a_fresh_process(frozen, tmp_path)
+    assert "every holdout run is at the unseal's commit" in out["refused"]
+    assert not [e for e in remote_entries(frozen) if e.type == "open" and e.body["kind"] == "holdout"]
+
+
+def test_a_killed_attempt_is_closed_as_abandoned_by_the_next_run(frozen, monkeypatch):
+    # Probe R1b: the process dies after the unsealed run returned, before the attempt's
+    # close; the next run, at the unseal's commit, closes it as abandoned and goes on.
+    entry = unseal(frozen)
     original = gitledger.GitLedger.append
 
     def die_before_the_close(self, body, files=None, **kwargs):
@@ -1026,14 +1097,31 @@ def test_a_killed_attempt_is_closed_as_abandoned_and_binds_the_retry_to_its_comm
     (attempt,) = [e for e in entries if e.type == "attempt"]
     assert not any(e.type in ("attempt_close", "result") for e in entries[attempt.seq:])
     frozen.ledger.verify()
-    assert "was never closed" in rules.holdout_retry_error(entries, "0" * 40)
-    assert rules.holdout_retry_error(entries, attempt.body["commit"]) is None
+    assert "unseal's commit" in rules.holdout_commit_rule(entries, "0" * 40)
+    assert rules.holdout_commit_rule(entries, entry.body["commit"]) is None
     again = holdout_run(frozen)
     assert again.status == "completed", again.error
     closes = [e for e in remote_entries(frozen) if e.type == "attempt_close"]
-    assert (closes[0].body["attempt"], closes[0].body["outcome"],
-            closes[0].body["holdout_rows_served"]) == (attempt.hash, "abandoned", True)
+    assert (closes[0].body["attempt"], closes[0].body["outcome"]) == (attempt.hash, "abandoned")
     frozen.ledger.verify()
+
+
+def test_the_holdout_runs_at_most_three_times(frozen, monkeypatch):
+    # Section 11, item 6, implemented conservatively (rules.HOLDOUT_RUNS): three holdout
+    # runs that fail before producing a result, then no more.
+    unseal(frozen)
+
+    def crash(*args, **kwargs):
+        raise RuntimeError("a crash before any holdout return")
+
+    monkeypatch.setattr(harness, "_run_strategy", crash)
+    for _ in range(rules.HOLDOUT_RUNS):
+        assert holdout_run(frozen).status == "failed"
+    with pytest.raises(harness.RunRefused, match="run 3 times"):
+        holdout_run(frozen)
+    hand_append(frozen, holdout_open_body(frozen))
+    with pytest.raises(VerificationError, match="run 3 times"):
+        frozen.ledger.verify()
 
 
 def test_a_second_holdout_run_while_one_is_in_flight_is_refused(frozen, monkeypatch):
@@ -1108,13 +1196,15 @@ def test_a_failed_unsealed_run_publishes_no_text_of_its_own(tmp_path, monkeypatc
         assert record.error == f"RuntimeError: {harness.WITHHELD}"
         assert "holdout close" not in world.remote_ledger().decode()
         (closed,) = [e for e in remote_entries(world) if e.type == "attempt_close"]
-        assert (closed.body["outcome"], closed.body["holdout_rows_served"]) == ("failed", True)
+        assert closed.body["outcome"] == "failed"
     finally:
         world.close()
 
 
 def test_the_attempt_rules_replay_without_git():
-    # The rules the ledger and replay hold attempts to, on a ledger built in memory.
+    # The rules the ledger and replay hold holdout runs and attempts to, on a ledger
+    # built in memory: the unseal's commit only, at most three runs, one attempt at a
+    # time, never closed twice, and a completed result needs its own returned attempt.
     book = Book()
     days = book.registration.windows["H1"].days
     for i, cid in enumerate(book.registration.order["H1"]):
@@ -1124,15 +1214,17 @@ def test_the_attempt_rules_replay_without_git():
                   and e.body["configuration_id"] == CANDIDATE)
     closed = next(e for e in book.entries if e.type == "result" and e.body["opens"] == opened.hash)
     frozen_length = len(book.entries)
+    sealed_at = "1" * 40
     book.add({"type": "unseal", "preregistration": genesis.body["preregistration"],
               "configuration_id": CANDIDATE, "hypothesis": "H1",
               "configuration_sha256": opened.body["configuration_sha256"],
               "candidate": {"open": opened.hash, "result": closed.hash}, "freeze": "f" * 40,
               "holdout_manifest_sha256": genesis.body["manifests"]["holdout"],
-              "key_record_sha256": genesis.body["key_record"]["sha256"], "proof": "ab" * 32})
+              "key_record_sha256": genesis.body["key_record"]["sha256"], "proof": "ab" * 32,
+              "commit": sealed_at})
     resolved = book.registration.resolve_holdout(opened.body, genesis.body["manifests"]["holdout"])
 
-    def holdout_open(on, commit):
+    def holdout_open(on, commit=sealed_at):
         return on.add({**opened.body, "kind": "holdout", "configuration": resolved.configuration,
                        "configuration_sha256": resolved.configuration_sha256,
                        "window": resolved.window.as_dict(), "commit": commit})
@@ -1141,42 +1233,42 @@ def test_the_attempt_rules_replay_without_git():
         return on.add({"type": "attempt", "opens": run.hash, "open_seq": run.seq,
                        "commit": run.body["commit"]})
 
-    def close(on, tried, served, outcome="failed"):
+    def close(on, tried, outcome="failed"):
         return on.add({"type": "attempt_close", "attempt": tried.hash, "attempt_seq": tried.seq,
-                       "outcome": outcome, "holdout_rows_served": served})
+                       "outcome": outcome})
 
-    first = holdout_open(book, "1" * 40)
+    def replay(on):
+        check_run_rules(on.snapshot().entries, on.registration, frozen_length=frozen_length)
+
+    first = holdout_open(book)
     tried = attempt(book, first)
-    assert "was never closed" in rules.holdout_retry_error(book.entries, "2" * 40)
-    clean = copy.deepcopy(book)
-    close(clean, tried, served=False)
-    clean.snapshot()
-    assert rules.holdout_retry_error(clean.entries, "2" * 40) is None  # no holdout row seen
-    second = holdout_open(clean, "2" * 40)
-    check_run_rules(clean.snapshot().entries, clean.registration, frozen_length=frozen_length)
-    served = copy.deepcopy(book)
-    close(served, tried, served=True)
-    assert "served holdout rows" in rules.holdout_retry_error(served.entries, "2" * 40)
-    holdout_open(served, "2" * 40)
-    with pytest.raises(VerificationError, match="a retry runs only at its commit"):
-        check_run_rules(served.snapshot().entries, served.registration,
-                        frozen_length=frozen_length)
-    # One attempt at a time; never closed twice; an abandoned one served rows; a
-    # completed holdout result needs its own attempt closed as returned.
+    close(book, tried)
+    replay(book)
+    assert "unseal's commit" in rules.holdout_commit_rule(book.entries, "2" * 40)
+    elsewhere = copy.deepcopy(book)
+    holdout_open(elsewhere, "2" * 40)
+    with pytest.raises(VerificationError, match="unseal's commit"):
+        replay(elsewhere)
+    capped = copy.deepcopy(book)
+    for _ in range(rules.HOLDOUT_RUNS - 1):
+        holdout_open(capped)
+    replay(capped)
+    holdout_open(capped)
+    with pytest.raises(VerificationError, match="run 3 times"):
+        replay(capped)
     cases = []
-    overlapping = copy.deepcopy(clean)
+    overlapping = copy.deepcopy(book)
+    second = holdout_open(overlapping)
     attempt(overlapping, second)
-    overlap_run = holdout_open(overlapping, "2" * 40)
-    attempt(overlapping, overlap_run)
+    third = holdout_open(overlapping)
+    attempt(overlapping, third)
     cases.append((overlapping, "attempts run one at a time"))
-    twice = copy.deepcopy(clean)
-    close(twice, tried, served=False)
+    twice = copy.deepcopy(book)
+    close(twice, tried)
     cases.append((twice, "closed twice"))
-    lenient = copy.deepcopy(book)
-    close(lenient, tried, served=False, outcome="abandoned")
-    cases.append((lenient, "counts as having served"))
-    unattempted = copy.deepcopy(clean)
-    unattempted.result(second, [0.0] * resolved.window.days, days=resolved.window.day_list())
+    unattempted = copy.deepcopy(book)
+    run = holdout_open(unattempted)
+    unattempted.result(run, [0.0] * resolved.window.days, days=resolved.window.day_list())
     cases.append((unattempted, "needs its own attempt"))
     for ledger_, message in cases:
         with pytest.raises(VerificationError, match=message):

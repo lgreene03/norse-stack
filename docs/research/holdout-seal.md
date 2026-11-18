@@ -89,8 +89,10 @@ that is not the remote's (T23); a ledger that fails anchored verification; a led
 anchor, which is what an early unseal means here (T20); a ledger that already holds an unseal
 entry (T23); a dirty tree, a HEAD not on main, or code running that is not the code at HEAD;
 period constants that differ from the genesis entry's (T20); a pre-registration commit, tag or file
-hash other than the genesis entry's (T24); and a configuration hash other than the holdout
-candidate's, which it computes by the registered rule over the ledger at the freeze anchor (T22).
+hash other than the genesis entry's (T24); a configuration hash other than the holdout
+candidate's, which it computes by the registered rule over the ledger at the freeze anchor (T22);
+and a HEAD at which anything but data loading or the seal has changed since the candidate's
+selectable run (section 11, item 6, applied here once; the entry records that HEAD).
 Only then does it read the passphrase from the terminal and check that the SHA-256 of its scrypt
 output is the key record's verifier, in constant time (T25). A missing or wrong passphrase writes
 nothing.
@@ -125,11 +127,9 @@ The holdout run goes through the harness like any run:
 It takes the harness's usual checks (environment, ledger in step and verified, periods, the
 development manifest, a clean tree, HEAD on main, the code at HEAD), and is then refused without
 the unseal entry, for any configuration hash but the unseal's (T22), once a completed holdout result
-has spent the seal, when the candidate's configuration no longer resolves the same at HEAD, when
-the code a run executes (the harness paths and the hypothesis's paths) changed since the
-candidate's run outside the data loading and seal modules (`seal`, `loader`, `store`, `manifest`,
-`formats`, `binance_archive`, `periods`; section 11, item 6), when the committed holdout manifest is
-not the registered one, and when the holdout files on disk do not all verify against it.
+has spent the seal, after three holdout runs, when the candidate's configuration no longer resolves
+the same at HEAD, at any commit but the one the unseal entry records, when the committed holdout
+manifest is not the registered one, and when the holdout files on disk do not all verify against it.
 
 Its open entry is written and pushed as any other, of kind `holdout`: the candidate's configuration
 with its window running from the start of the development window through 2026-10-31, plus the
@@ -145,26 +145,26 @@ returns: HOLD-1 and the verdict read the committed series afterwards (G3.2, G3.3
 
 The unsealed run is bracketed in the ledger (security review H2). Before the strategy is first
 given the unseal, an `attempt` entry is appended under the append lock; after it, an
-`attempt_close` records the outcome (`returned` or `failed`) and whether the runner handed the
-strategy any row from 2026-01-01 on. A process killed in between leaves the attempt open; the next
-run closes it as `abandoned`, which counts as having served holdout rows. Attempts run one at a
-time: the ledger refuses an attempt while another is open, and the whole holdout run holds a lock
-on its clone, so a second run there is refused while the first is in flight (M1). On another clone
-the second run closes the first's attempt as abandoned, and the first can then neither close its
-attempt nor complete. A completed holdout result needs its own attempt closed as returned, and
-there is only one.
+`attempt_close` records the outcome (`returned` or `failed`). A process killed in between leaves the
+attempt open; the next run closes it as `abandoned`. Attempts run one at a time: the ledger refuses
+an attempt while another is open, and the whole holdout run holds a lock on its clone, so a second
+run there is refused while the first is in flight (M1). On another clone the second run closes the
+first's attempt as abandoned, and the first can then neither close its attempt nor complete. A
+completed holdout result needs its own attempt closed as returned, and there is only one.
 
-A failed attempt is ledgered and may be retried under the same unseal, for the same configuration
-only, at the candidate's commit plus changes to data loading or the seal (item 6), with one more
-rule. A retry at an earlier attempt's own commit is always allowed, since the same code and data
-give the same series and it cannot fish for a better one. A retry at a commit with other data
-loading or seal files is allowed only while every earlier attempt was closed with no holdout row
-served. Once an attempt served a holdout row, or was never closed, every later run must be at that
-attempt's commit. The ledger and replay enforce this. Once the strategy has been given the unseal,
-a failure's own message is withheld from the public ledger, which records only the exception's
-type, because the message may carry holdout values (L7); the harness's own check messages are
-kept. The first completed result spends the seal: every later holdout run is refused, and a
-holdout entry written by hand after it fails verification. The holdout run is outside N.
+Section 11, item 6's file rule is applied once, at the unseal: from the candidate's selectable-run
+commit to the unseal's HEAD, only the data loading and seal modules (`seal`, `loader`, `store`,
+`manifest`, `formats`, `binance_archive`, `periods`) may change anywhere in the package or the
+hypothesis's paths, and the unseal entry records that HEAD. Every holdout run after it, and every
+attempt within one, must be at exactly that commit with a clean tree; no other commit is ever
+accepted. There are at most three holdout runs (`rules.HOLDOUT_RUNS`). The ledger, the harness
+and replay all enforce both rules, and nothing a run reports about itself decides anything. A
+failed run may therefore be retried only where the same code and data give the same series, for a
+failure outside them (a crash, a full disk). Once the strategy has been given the unseal, a
+failure's own message is withheld from the public ledger, which records only the exception's type,
+because the message may carry holdout values (L7); the harness's own check messages are kept. The
+first completed result spends the seal: every later holdout run is refused, and a holdout entry
+written by hand after it fails verification. The holdout run is outside N.
 
 ## Choices made here
 
@@ -184,14 +184,16 @@ for strong runs; the order is the registered one. The modules that count as data
 `gitledger.SEAL_AND_DATA_LOADING`. The passphrase is normalised to Unicode NFC before derivation, so
 the same words typed on another keyboard derive the same key.
 
-The retry rule above is a design decision taken for security review H2 (recorded here for the
-quant role). The review showed that item 6, read alone, let a failed attempt whose holdout series
-had already been computed be retried after a "data loading" change that rewrote that series. The
-rule keeps item 6's permission to fix data loading or the seal after a failure that saw no holdout
-data, and removes it once any holdout row was served or the attempt's fate is unknown, leaving only
-the identical-commit retry that cannot change the result. The runner's record of rows served is
-kept by the same process that runs the strategy, so a strategy that deliberately rewrites it can
-defeat it; that is the residual T13 already names.
+The commit rule above is the coordinator's decision, taken in security review round 2 (finding
+N1) and recorded here for the quant role and the owner. Round 1's rule let a run use changed data
+loading or seal files after the unseal whenever every earlier attempt reported that no holdout row
+had been served; round 2 showed that report is the caller's word, written by the process the
+change runs in, and that a peek off the ledger followed by a rewriting first attempt needed no
+report at all. So item 6's permission to change data loading or the seal is used up at the unseal,
+the code is frozen there, and the cap of three runs implements item 6's retry conservatively. The
+attempt close no longer records a "rows served" flag. The price is that a data loading bug found
+only after the unseal leaves the holdout untested; the rehearsal below exists to find such bugs
+first, and the quant and the owner should accept that price explicitly.
 
 ## What G3.2 and the strategies still own
 

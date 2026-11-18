@@ -23,11 +23,11 @@ The rules:
   nothing else, and after one completed holdout result nothing more: a run that failed
   or never finished may be retried, every attempt ledgered (section 11, items 5 and
   6; T22). The commit rule of item 6 needs git, so ``gitledger`` replays it;
-* a holdout retry at a commit other than an earlier attempt's is allowed only while
-  every earlier attempt was closed with no row from 2026-01-01 on served to the
-  strategy. Once an attempt served one, or was never closed (a killed run), every later
-  run is at that attempt's commit, where the same code and data give the same series,
-  so a retry cannot fish for a better one (security review H2).
+* every holdout run, and every attempt within one, is at exactly the commit the unseal
+  records, where item 6's rule was applied once, and there are at most
+  ``HOLDOUT_RUNS`` of them. Nothing a run reports about itself decides anything: on a
+  machine with one user no such report can be authenticated (security review round 2,
+  N1; the coordinator's decision, in docs/research/holdout-seal.md).
 """
 
 from __future__ import annotations
@@ -36,7 +36,6 @@ from collections.abc import Mapping, Sequence
 
 from .ledger import (
     ATTEMPT,
-    ATTEMPT_CLOSE,
     COMPLETED,
     OPEN,
     RESULT,
@@ -154,25 +153,33 @@ def holdout_rule_error(prior: Sequence[Entry], run: Mapping) -> str | None:
     if any(e.type == RESULT and e.body["opens"] in held and e.body["status"] == COMPLETED
            for e in prior):
         return "one result spends the seal: the holdout run has its result (section 11, item 6)"
-    return holdout_retry_error(prior, run.get("commit"))
+    if len(held) >= HOLDOUT_RUNS:
+        return (
+            f"the holdout has been run {len(held)} times, the most section 11, item 6 allows "
+            f"here ({HOLDOUT_RUNS})"
+        )
+    return holdout_commit_rule(prior, run.get("commit"))
 
 
-def holdout_retry_error(prior: Sequence[Entry], commit: str | None) -> str | None:
-    """Why a holdout run or attempt at ``commit`` may not follow ``prior``, or None
-    (security review H2). An earlier attempt that served a row from 2026-01-01 on, or
-    was never closed, allows later runs only at its own commit."""
-    for attempt in (e for e in prior if e.type == ATTEMPT):
-        closed = next((e for e in prior if e.type == ATTEMPT_CLOSE
-                       and e.body["attempt"] == attempt.hash), None)
-        if closed is not None and not closed.body["holdout_rows_served"]:
-            continue
-        if attempt.body["commit"] != commit:
-            why = "was never closed" if closed is None else "served holdout rows"
-            return (
-                f"holdout attempt {attempt.seq} {why}, so a retry runs only at its commit "
-                f"{attempt.body['commit']}, where the same code and data give the same series "
-                "(section 11, item 6; security review H2)"
-            )
+# Section 11, item 6 lets a holdout run that fails before producing a result be retried,
+# with no limit stated. This implements it conservatively: at most three holdout runs
+# follow the unseal, every one at the unseal's commit, so a retry can only repeat a run
+# that failed for a reason outside the code and data (a crash, a full disk), never
+# change what it computes (security review round 2, N1 and N3).
+HOLDOUT_RUNS = 3
+
+
+def holdout_commit_rule(prior: Sequence[Entry], commit: str | None) -> str | None:
+    """Why a holdout run or attempt at ``commit`` may not follow ``prior``, or None: it
+    must be at exactly the commit the unseal records (security review round 2, N1)."""
+    unseal = next((e for e in prior if e.type == UNSEAL), None)
+    if unseal is None:
+        return "a holdout run comes only after the unseal entry (section 11, item 4)"
+    if commit != unseal.body["commit"]:
+        return (
+            f"every holdout run is at the unseal's commit {unseal.body['commit']}, where item "
+            f"6's rule was applied, and not at {commit} (security review round 2, N1)"
+        )
     return None
 
 
@@ -286,7 +293,7 @@ def check_run_rules(
                 "the candidate is chosen on the frozen ledger (section 11; T20)"
             )
         if entry.type == ATTEMPT:
-            error = holdout_retry_error(entries[:index], entry.body["commit"])
+            error = holdout_commit_rule(entries[:index], entry.body["commit"])
             if error:
                 raise VerificationError(f"entry {entry.seq} breaks the run rules: {error}")
         if entry.type != OPEN:

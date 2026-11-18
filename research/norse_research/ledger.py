@@ -54,10 +54,10 @@ here; its place after the freeze, its proof and its candidate are checked by
 **Attempt** and **attempt close** (G1.6; security review H2, M1) bracket every unsealed
 run of the holdout: the attempt is written before the strategy is first given the
 unseal, and its close records the outcome (``returned``, ``failed``, or ``abandoned``
-when a later run closes an attempt a killed process left open) and whether any row from
-2026-01-01 on was served to the strategy. Attempts run one at a time, a completed
-holdout result needs its own attempt closed as returned, and there is only one.
-``rules`` holds the retry rule they feed.
+when a later run closes an attempt a killed process left open). Attempts run one at a
+time, a completed holdout result needs its own attempt closed as returned, and there is
+only one. The unseal records the commit item 6's rule was applied to, and ``rules``
+holds every holdout run to exactly that commit (security review round 2, N1).
 
 **N** is the number of open entries of kind ``trial``: every trial opened counts
 once, whether it completes, fails or never finishes, and reruns count again. It is
@@ -93,7 +93,7 @@ from .registration import (
 
 UNSEAL = "unseal"
 # A holdout attempt (G1.6; security review H2): written before every unsealed run, and
-# closed after it with its outcome and whether any row from 2026-01-01 on was served.
+# closed after it with its outcome.
 ATTEMPT = "attempt"
 ATTEMPT_CLOSE = "attempt_close"
 RETURNED = "returned"
@@ -131,9 +131,10 @@ _KEYS = {
        "cost_basis", "result", "result_sha256", "returns_path"},
     UNSEAL: _COMMON
     | {"preregistration", "configuration_id", "hypothesis", "configuration_sha256",
-       "candidate", "freeze", "holdout_manifest_sha256", "key_record_sha256", "proof"},
+       "candidate", "freeze", "holdout_manifest_sha256", "key_record_sha256", "proof",
+       "commit"},
     ATTEMPT: _COMMON | {"opens", "open_seq", "commit"},
-    ATTEMPT_CLOSE: _COMMON | {"attempt", "attempt_seq", "outcome", "holdout_rows_served"},
+    ATTEMPT_CLOSE: _COMMON | {"attempt", "attempt_seq", "outcome"},
 }
 # Fields a result entry copies from the open entry it closes.
 _COPIED = ("configuration_sha256", "commit", "manifest_sha256", "cost_basis")
@@ -310,6 +311,7 @@ def _check_unseal(seq: int, body: dict) -> None:
     proof = body["proof"]
     if not isinstance(proof, str) or not re.fullmatch(r"(?:[0-9a-f]{2}){32,}", proof):
         raise _fail(seq, "the unseal's proof is not a scrypt output (lower-case hex, 32 bytes or more)")
+    _git_id(seq, "commit", body["commit"])
 
 
 def _check_attempt(seq: int, body: dict) -> None:
@@ -325,10 +327,6 @@ def _check_attempt_close(seq: int, body: dict) -> None:
         raise _fail(seq, "attempt_seq is not an entry number")
     if body["outcome"] not in (RETURNED, FAILED, ABANDONED):
         raise _fail(seq, f"unknown attempt outcome {body['outcome']!r}")
-    if type(body["holdout_rows_served"]) is not bool:
-        raise _fail(seq, "holdout_rows_served is true or false")
-    if body["outcome"] == ABANDONED and not body["holdout_rows_served"]:
-        raise _fail(seq, "an abandoned attempt counts as having served holdout rows")
 
 
 _CHECKS = {

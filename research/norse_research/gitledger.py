@@ -666,15 +666,17 @@ class GitLedger:
         from .gate import check_unseal_candidate  # the gate imports this module
 
         check_unseal_candidate(self.snapshot(freeze), registration, freeze, unseal)
+        # Item 6's rule, applied once: the code at the unseal's commit differs from the
+        # candidate's only in data loading or the seal; every holdout run is at exactly
+        # that commit, which ``rules`` replays (security review round 2, N1).
         candidate = next(e for e in snapshot.entries if e.hash == unseal.body["candidate"]["open"])
         paths = snapshot.genesis.body["tree_paths"]
-        for entry in snapshot.opens(HOLDOUT):
-            problem = holdout_commit_error(
-                self.git, candidate.body["commit"], entry.body["commit"],
-                [*paths["harness"], *paths[candidate.body["hypothesis"]]],
-            )
-            if problem:
-                raise VerificationError(f"entry {entry.seq}: {problem}")
+        problem = holdout_commit_error(
+            self.git, candidate.body["commit"], unseal.body["commit"],
+            [*paths["harness"], *paths[candidate.body["hypothesis"]]],
+        )
+        if problem:
+            raise VerificationError(f"entry {unseal.seq}: {problem}")
 
     def _check_rerun_commits(self, snapshot: LedgerSnapshot) -> None:
         """On replay, each rerun's fix is in its own code and was not in the code of

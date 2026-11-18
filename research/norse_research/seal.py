@@ -28,7 +28,9 @@ the freeze anchor, T20); no unseal entry exists yet (T23); the tree is clean, HE
 on main and the code running is the code at HEAD; the period constants are the
 genesis entry's (T20); the request names exactly the pre-registration the genesis entry
 names (T24); a holdout candidate exists on the frozen ledger and the request names its
-configuration hash (section 11, items 1 to 3; T22). Then the passphrase is read and
+configuration hash (section 11, items 1 to 3; T22); and item 6's rule fails between the
+candidate's commit and HEAD (only data loading or the seal may differ). Every holdout run
+is then at exactly the commit the entry records. Then the passphrase is read and
 checked against the key record genesis pins, in constant time (T25). Only then is the
 unseal entry appended, pushed and read back from the remote, and only after that are
 the holdout files fetched again. The entry reveals the scrypt output as its ``proof``:
@@ -84,6 +86,7 @@ from .gitledger import (
     Git,
     GitLedger,
     check_key_record,
+    holdout_commit_error,
     period_constants,
     pinned_key_record,
 )
@@ -411,6 +414,15 @@ def unseal(
             f"registered rule selects {candidate.configuration_id} ({chosen}) on the frozen "
             "ledger; the harness refuses any other (section 11, item 4; T22)"
         )
+    # Item 6's rule, applied once and here: from the candidate's commit to this one only
+    # data loading or the seal may change, and every holdout run is then at exactly this
+    # commit, which the entry records (security review round 2, N1).
+    paths = genesis.body["tree_paths"]
+    problem = holdout_commit_error(
+        git, candidate.open_entry.body["commit"], head, [*paths["harness"], *paths[candidate.hypothesis]]
+    )
+    if problem:
+        raise SealRefused(f"the unseal is refused at this commit: {problem}")
     record = key_record_of(git, genesis)
     proof = check_key(record, (read_key or read_passphrase)("Holdout passphrase: "))
     entry = ledger.append(
@@ -425,6 +437,7 @@ def unseal(
             "holdout_manifest_sha256": genesis.body["manifests"]["holdout"],
             "key_record_sha256": genesis.body["key_record"]["sha256"],
             "proof": proof,
+            "commit": head,
         },
         expected_head=admitted_on,
     )
