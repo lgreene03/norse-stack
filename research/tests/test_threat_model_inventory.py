@@ -136,7 +136,8 @@ def run_and_report(tests: Path, rootdir: Path, names: set[str]) -> dict[str, set
 
 def test_every_threat_model_test_exists_and_is_not_skipped():
     tables = inventory()
-    assert len(tables.get("G1.5", ())) >= 50 and len(tables.get("G1.6", ())) >= 20
+    # G1.6's table holds 22 names since security review round 2 added check-key's test.
+    assert len(tables.get("G1.5", ())) >= 50 and len(tables.get("G1.6", ())) >= 22
     enforced = ALWAYS | (done_goals() & set(tables))
     required = set()
     for goal in enforced:
