@@ -1348,3 +1348,38 @@ def test_the_rehearsal_fails_loudly_on_a_seal_error_and_needs_a_candidate(tmp_pa
             harness.rehearse_holdout(world.repo, store=world.store)
     finally:
         world.close()
+
+
+def test_a_failed_unseal_push_leaves_no_proof_in_the_clone(frozen, monkeypatch):
+    # Probe P2 (security review round 2, N2): a push that fails must not strand the
+    # owner's proof in a commit, a ref or a reflog of the clone, where anyone could use it
+    # later without the owner.
+    reflog = ["reflog", "show", "--format=%H %gs", "refs/heads/ledger"]
+    before = git(frozen.repo, *reflog)
+    original = gitledger.Git.run
+
+    def no_push(self, *args, **kwargs):
+        if args and args[0] == "push":
+            raise gitledger.GitError("git push failed: injected")
+        return original(self, *args, **kwargs)
+
+    with monkeypatch.context() as m:
+        m.setattr(gitledger.Git, "run", no_push)
+        with pytest.raises(LedgerWriteError, match="nothing of it is left in this clone"):
+            unseal(frozen, fetch=False)
+    assert unseal_of(remote_entries(frozen)) is None
+
+    def every_object():
+        return subprocess.run(["git", "cat-file", "--batch-all-objects", "--batch"],
+                              cwd=frozen.repo, capture_output=True, check=True).stdout
+
+    assert proof_of().encode() not in every_object()
+    assert git(frozen.repo, *reflog) == before
+    assert "unseal" not in git(frozen.repo, "log", "-g", "--all", "--format=%gs %s")
+    # When the push succeeds, the proof is public, and the search above finds it.
+    entry = unseal(frozen, fetch=False)
+    assert proof_of().encode() in every_object()
+    assert git(frozen.repo, "rev-parse", "refs/heads/ledger") == git(
+        frozen.remote, "rev-parse", "refs/heads/ledger")
+    frozen.ledger.verify()
+    assert entry.type == "unseal"

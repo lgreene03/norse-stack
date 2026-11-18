@@ -52,6 +52,7 @@ import hmac
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -480,6 +481,8 @@ class GitLedger:
                 problem = holdout_rule_error(written[:-1], run_of(written[-1]))
             if problem:
                 raise VerificationError(f"the entry is refused: {problem}")
+            if body.get("type") == UNSEAL:
+                return self._push_unseal(local, new_data, files, entry)
             try:
                 commit = self._commit(local, new_data, files, _message(entry))
                 self.git.run("update-ref", "-m", "ledger append", self.ref, commit, local or "")
@@ -505,10 +508,14 @@ class GitLedger:
             return entry
 
     def _commit(
-        self, parent: str | None, data: bytes, files: Mapping[str, bytes], message: str
+        self, parent: str | None, data: bytes, files: Mapping[str, bytes], message: str,
+        objects: Mapping[str, str] | None = None,
     ) -> str:
+        """The commit appending ``data``, built with git's plumbing. ``objects``, when
+        given, sends every new object to another object directory (the unseal's)."""
+        objects = dict(objects or {})
         with tempfile.TemporaryDirectory(prefix="norse-ledger-index-") as tmp:
-            env = {"GIT_INDEX_FILE": str(Path(tmp) / "index")}
+            env = {"GIT_INDEX_FILE": str(Path(tmp) / "index"), **objects}
             if parent:
                 self.git.run("read-tree", parent, env=env)
             else:
@@ -516,7 +523,7 @@ class GitLedger:
             for path, content in [(LEDGER_PATH, data), *sorted(files.items())]:
                 if path != LEDGER_PATH and not _RETURNS_FILE.fullmatch(path):
                     raise LedgerWriteError(f"{path} is not a return series path")
-                blob = self.git.text("hash-object", "-w", "--stdin", input=content)
+                blob = self.git.text("hash-object", "-w", "--stdin", input=content, env=objects)
                 self.git.run(
                     "update-index", "--add", "--cacheinfo", f"100644,{blob},{path}", env=env
                 )
@@ -524,7 +531,44 @@ class GitLedger:
         args = ["commit-tree", tree, "-m", message]
         if parent:
             args += ["-p", parent]
-        return self.git.text(*args, env=IDENTITY)
+        return self.git.text(*args, env={**IDENTITY, **objects})
+
+    def _push_unseal(
+        self, local: str | None, data: bytes, files: Mapping[str, bytes], entry: Entry
+    ) -> Entry:
+        """The unseal's commit, built in a temporary object directory and pushed from
+        there; the clone's own object store, refs and reflogs learn of it only once the
+        remote holds it. A failed push leaves nothing behind that holds the proof, so no
+        one can use it later without the owner (security review round 2, N2)."""
+        with tempfile.TemporaryDirectory(prefix="norse-unseal-objects-") as tmp:
+            objects = {
+                "GIT_OBJECT_DIRECTORY": tmp,
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(self.git.git_dir() / "objects"),
+            }
+            try:
+                commit = self._commit(local, data, files, _message(entry), objects)
+                self.git.run("push", "--quiet", "--", self.remote, f"{commit}:{self.ref}",
+                             env=objects)
+            except GitError as exc:
+                raise LedgerWriteError(
+                    f"the unseal could not be pushed ({exc}); nothing of it is left in this "
+                    "clone, so run the unseal again at once, from the same terminal"
+                ) from None
+            # Pushed, so public: the loose objects join the clone's own store, which the
+            # remote-tracking ref the push may have moved already points into.
+            store = self.git.git_dir() / "objects"
+            for made in Path(tmp).rglob("*"):
+                target = store / made.relative_to(tmp)
+                if made.is_file() and not target.exists():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(made, target)
+            after = self.fetch()
+        if after is None or not self.git.is_ancestor(commit, after):
+            raise LedgerWriteError(
+                f"the remote's ledger head {after} does not hold the pushed unseal {commit}"
+            )
+        self.git.run("update-ref", "-m", "ledger append", self.ref, commit, local or "")
+        return entry
 
     # --- verification ---------------------------------------------------------------
 
