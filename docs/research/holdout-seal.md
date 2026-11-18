@@ -77,8 +77,25 @@ python -m norse_research.seal candidate
 It prints, for each hypothesis, its candidate and whether it meets DEV-1 to DEV-5 on the frozen
 ledger, then the pre-registration the genesis entry names and the holdout candidate's
 configuration id and hash. If no hypothesis passes development there is no holdout candidate, and
-then no unseal and no holdout run (section 11, item 3). Otherwise the owner runs, in a terminal of
-their own:
+then no unseal and no holdout run (section 11, item 3).
+
+Then rehearse the holdout run, which also needs no key and writes nothing to the ledger:
+
+```bash
+python -m norse_research.seal rehearse
+```
+
+It takes the checks the unseal and the holdout run take at HEAD, including item 6's rule between the
+candidate's commit and HEAD, then runs the holdout candidate's strategy through the holdout run's own
+loading path on development data only: the development manifest is split at 2025-03 (`--boundary`
+moves it), its last ten months stand in for the holdout's ten, and the run must cross that boundary
+and reproduce the candidate's committed series exactly. Any refusal or failure stops it with the
+reason. Because the code is frozen at the unseal (below), a data loading or seal bug must be found
+here, fixed and committed on main, and the rehearsal run again until it passes. It cannot exercise
+the real boundary at 2026-01-01, whose data stays off disk, so a gap there is still G3.2's to check
+(below).
+
+Otherwise the owner runs, in a terminal of their own:
 
 ```bash
 python -m norse_research.seal unseal --commit <the prereg-v1 commit> --configuration-sha256 <the candidate's hash>

@@ -86,12 +86,13 @@ from typing import Any
 from . import seal
 from .canonical import sha256_hex
 from .environment import ENV_ALLOWED, ENV_REFUSED, check_environment, git_version
-from .gate import RegisteredLedger, candidates, gate_ledger
+from .gate import RegisteredLedger, candidates, gate_ledger, holdout_candidate
 from .gitledger import (
     PACKAGE_PATH,
     Git,
     GitLedger,
     LedgerBusy,
+    holdout_commit_error,
     period_constants,
     registered_ids,
     tree_digests,
@@ -249,12 +250,16 @@ def _run_strategy(
     entry: str,
     store: ArchiveStore | None,
     unsealed: tuple[str, str] | None = None,
+    rehearsal: str | None = None,
 ) -> list:
     """The strategy's daily returns, computed in a fresh ``python -I -B`` process with
     an empty environment from the files committed at ``head``. ``unsealed`` is the
     holdout run's alone: the committed holdout manifest's path and the unseal entry,
-    which the runner needs to read holdout rows (G1.6)."""
+    which the runner needs to read holdout rows (G1.6). ``rehearsal`` is the rehearsal's
+    alone: the development month whose data stands in for the holdout."""
     holdout_manifest, unseal_entry = unsealed if unsealed is not None else (None, None)
+    if rehearsal is not None:
+        unseal_entry = REHEARSAL_TOKEN
     with tempfile.TemporaryDirectory(prefix="norse-strategy-") as tmp:
         code_root, pycache = Path(tmp) / "code", Path(tmp) / "pycache"
         pycache.mkdir()
@@ -272,6 +277,7 @@ def _run_strategy(
             "store_root": str(store.root) if store is not None else None,
             "holdout_manifest": holdout_manifest,
             "unseal": unseal_entry,
+            "rehearsal": rehearsal,
         }
         proc = subprocess.run(
             [sys.executable, "-I", "-B", "-X", f"pycache_prefix={pycache}", "-c", _RUNNER,
@@ -645,6 +651,11 @@ def run(
 # --- the holdout run (G1.6; section 11, items 5 and 6) ---------------------------------
 
 HOLDOUT_REQUEST_KEYS = frozenset({"configuration", "candidate_sha256"})
+# The rehearsal (``seal rehearse``): the last ten development months, 2025-03 to 2025-12,
+# stand in for the holdout's ten, so the holdout run's loading path crosses a boundary
+# on development data only. Its token names no ledger entry.
+REHEARSAL_BOUNDARY = "2025-03"
+REHEARSAL_TOKEN = hashlib.sha256(b"norse-research holdout rehearsal, no ledger entry").hexdigest()
 WITHHELD = (
     "the unsealed run failed; its message is withheld because it may carry holdout values "
     "(security review L7)"
@@ -897,6 +908,84 @@ def _run_holdout_locked(
         attempts=3,
     )
     return RunRecord(status, opened, closed, error)
+
+
+def rehearse_holdout(
+    repo: Path,
+    *,
+    store: ArchiveStore | None,
+    remote: str = "origin",
+    manifest_path: str | Path = DEVELOPMENT_MANIFEST,
+    boundary: str = REHEARSAL_BOUNDARY,
+) -> dict:
+    """``seal rehearse``: the holdout run's path end to end at HEAD, on development data
+    only, writing nothing to the ledger. It takes the checks the unseal and the holdout
+    run take (item 6's rule between the candidate's commit and HEAD among them), then
+    runs the holdout candidate's strategy with the development manifest split at
+    ``boundary``, its later months standing in for the holdout, through the unsealed
+    loading path, and requires the candidate's committed series exactly. Any refusal or
+    failure raises, so a data loading or seal fix is found and committed before the
+    unseal, after which the code cannot change (security review round 2, N1)."""
+    repo = Path(repo)
+    try:
+        check_environment(os.environ, repo)
+    except PermissionError as exc:
+        raise RunRefused(str(exc)) from None
+    ledger = GitLedger(repo, remote)
+    git = ledger.git
+    verified = ledger.verify(ledger.require_in_step())
+    genesis, registration = verified.snapshot.genesis, verified.registration
+    if genesis is None or registration is None:
+        raise RunRefused("the ledger has no genesis entry, so there is nothing to rehearse")
+    check_periods(genesis, registration)
+    manifest, manifest_rel = check_manifest(git, repo, manifest_path, genesis)
+    check_clean_tree(git)
+    head = git.text("rev-parse", "HEAD")
+    check_head_on_main(git, remote, head)
+    frozen = gate_ledger(ledger)
+    if not frozen.frozen:
+        raise RunRefused("the rehearsal runs the holdout candidate, chosen on the frozen ledger")
+    candidate = holdout_candidate(frozen)
+    if candidate is None:
+        raise RunRefused("no hypothesis passes development: no unseal, nothing to rehearse")
+    cid, h = candidate.configuration_id, candidate.hypothesis
+    strategy = load_strategy(git, head, genesis, registration, cid)
+    check_loaded_modules(git, repo, head)
+    if registration.resolve({"configuration": cid}, strategy).configuration != (
+        candidate.open_entry.body["configuration"]
+    ):
+        raise RunRefused(f"{cid}'s configuration does not resolve at HEAD as the candidate's did")
+    paths = genesis.body["tree_paths"]
+    problem = holdout_commit_error(
+        git, candidate.open_entry.body["commit"], head, [*paths["harness"], *paths[h]]
+    )
+    if problem:
+        raise RunRefused(f"the unseal would refuse this commit: {problem}")
+    try:
+        seal.committed_holdout_manifest(git, genesis, head)
+    except seal.SealRefused as exc:
+        raise UnmanifestedData(str(exc)) from None
+    if store is None:
+        raise RunRefused("the rehearsal reads the dataset store; none was given")
+    committed = [(d, float(v)) for d, v in frozen.snapshot.returns_of(candidate.result_entry)]
+    try:
+        returned = _run_strategy(
+            git, head, genesis.body["strategies"][cid], paths[h], manifest_rel,
+            candidate.open_entry.body["configuration"], REHEARSAL_TOKEN, store,
+            rehearsal=boundary,
+        )
+    except StrategyFailed as exc:
+        raise RunRefused(
+            f"the rehearsal failed ({public_error(exc, repo, store)}); fix data loading or the "
+            "seal and commit the fix before the unseal"
+        ) from None
+    if [(str(d), float(v)) for d, v in returned] != committed:
+        raise RunRefused(
+            f"across the rehearsal's boundary {boundary} the candidate's returns differ from its "
+            "committed series; fix data loading and commit the fix before the unseal"
+        )
+    return {"configuration_id": cid, "commit": head, "boundary": boundary,
+            "days": len(committed), "manifest_sha256": manifest.sha256}
 
 
 __all__ = [

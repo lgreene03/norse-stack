@@ -306,7 +306,7 @@ def test_key_is_read_only_from_an_interactive_terminal(monkeypatch):
     source = (RESEARCH / "norse_research" / "seal.py").read_text()
     options = set(re.findall(r'add_argument\(\s*"(--[a-z0-9-]+)"', source))
     assert options == {"--repo", "--remote", "--out", "--commit", "--tag",
-                       "--configuration-sha256"}
+                       "--configuration-sha256", "--boundary"}
     # Nothing in the module reads the environment or a file for it.
     tree = ast.parse(source)
     for node in ast.walk(tree):
@@ -1291,3 +1291,60 @@ def test_append_refuses_the_holdout_entries_replay_would_reject(frozen):
         frozen.ledger.append({"type": "attempt", "opens": runs[-1].hash,
                               "open_seq": runs[-1].seq, "commit": "0" * 40})
     frozen.ledger.verify()
+
+
+# --- the rehearsal (security review round 2, the coordinator's item 4) ------------------
+
+
+def test_the_rehearsal_runs_the_holdout_path_on_development_data_and_writes_nothing(
+    tmp_path, monkeypatch, capsys
+):
+    world = a_grid_world(tmp_path, monkeypatch, behaviours={CANDIDATE: "loads_across"})
+    try:
+        before = world.remote_ledger()
+        seen = []
+        original = harness._run_strategy
+
+        def watched(*args, **kwargs):
+            seen.append((kwargs.get("rehearsal"), kwargs.get("unsealed")))
+            return original(*args, **kwargs)
+
+        with monkeypatch.context() as m:
+            m.setattr(harness, "_run_strategy", watched)
+            done = harness.rehearse_holdout(world.repo, store=world.store, boundary="2025-12")
+        assert (done["configuration_id"], done["boundary"], done["days"]) == (CANDIDATE, "2025-12",
+                                                                              2802)
+        assert done["commit"] == git(world.repo, "rev-parse", "HEAD")
+        assert seen == [("2025-12", None)]  # the rehearsal path, never the real unseal
+        monkeypatch.setenv("NORSE_DATASETS_DIR", str(world.store.root))
+        assert seal.main(["--repo", str(world.repo), "rehearse", "--boundary", "2025-12"]) == 0
+        assert "rehearsal passed" in capsys.readouterr().out
+        assert world.remote_ledger() == before and world.holdout_files_in_mirror() == []
+        # It fails loudly on a data loading error: a development file no longer verifies.
+        spec = DatasetSpec.from_name("spot/klines/XUSDT/1d")
+        path = world.store.path(spec.key("2025-12"))
+        damaged = bytearray(path.read_bytes())
+        damaged[-30] ^= 1
+        path.write_bytes(bytes(damaged))
+        with pytest.raises(harness.RunRefused, match="the rehearsal failed"):
+            harness.rehearse_holdout(world.repo, store=world.store, boundary="2025-12")
+        assert world.remote_ledger() == before
+    finally:
+        world.close()
+
+
+def test_the_rehearsal_fails_loudly_on_a_seal_error_and_needs_a_candidate(tmp_path, monkeypatch):
+    # A candidate that reads 2026 in its development run is stopped by the seal in the
+    # rehearsal, as it would be in the holdout run's reproduction step.
+    world = a_grid_world(tmp_path / "peeks", monkeypatch, behaviours={CANDIDATE: "peeks"})
+    try:
+        with pytest.raises(harness.RunRefused, match="HoldoutSealed"):
+            harness.rehearse_holdout(world.repo, store=world.store, boundary="2025-12")
+    finally:
+        world.close()
+    world = a_grid_world(tmp_path / "unfrozen", monkeypatch, freeze=False)
+    try:
+        with pytest.raises(harness.RunRefused, match="frozen ledger"):
+            harness.rehearse_holdout(world.repo, store=world.store)
+    finally:
+        world.close()

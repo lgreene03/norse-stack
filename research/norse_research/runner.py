@@ -21,7 +21,10 @@ For the holdout run alone (G1.6), the payload also names the committed holdout
 manifest and the unseal entry: the loader is then given the holdout manifest, its
 files join the readable set, and the strategy runs inside the unsealed run, so its
 loads may reach 2026. The harness names the unseal only after it has pushed the run's
-open entry and found the unseal entry on the remote's ledger.
+open entry and found the unseal entry on the remote's ledger. For the rehearsal
+(``seal rehearse``), the payload names a development month instead: the development
+manifest is split there, its later months stand in for the holdout, and the same
+loading path runs across that boundary on development data only.
 """
 
 from __future__ import annotations
@@ -104,19 +107,22 @@ class DataView:
 
 def run(payload: dict) -> list:
     from .formats import DatasetSpec
-    from .loader import DatasetLoader, inside_ledger_entry
+    from .loader import DatasetLoader, inside_ledger_entry, rehearsal_split
     from .manifest import Manifest
-    from .periods import inside_unsealed_run
+    from .periods import HOLDOUT_START_MS, inside_unsealed_run
     from .store import ArchiveStore
 
     code_root = payload["code_root"]
     files: set[str] = set()
     loader = None
     unseal = payload.get("unseal")
+    rehearsal = payload.get("rehearsal")  # a development month: ``seal rehearse`` only
     if payload.get("store_root"):
         manifest = Manifest.load(Path(code_root) / payload["manifest"])
-        holdout = None
-        if unseal and payload.get("holdout_manifest"):
+        holdout, boundary = None, HOLDOUT_START_MS
+        if rehearsal:
+            manifest, holdout, boundary = rehearsal_split(manifest, rehearsal)
+        elif unseal and payload.get("holdout_manifest"):
             holdout = Manifest.load(Path(code_root) / payload["holdout_manifest"])
         store = ArchiveStore(Path(payload["store_root"]))
         for pinned in (manifest, holdout):
@@ -126,7 +132,7 @@ def run(payload: dict) -> list:
                     path = store.path(spec.key(month))
                     files.add(os.path.normpath(str(path)))
                     files.add(os.path.normpath(str(path) + ".CHECKSUM"))
-        loader = DatasetLoader(manifest, store, holdout=holdout)
+        loader = DatasetLoader(manifest, store, holdout=holdout, boundary_ms=boundary)
     module_file = os.path.join(code_root, payload["module_path"])
     source = Path(module_file).read_bytes()
     roots = [code_root, payload["pycache"], sys.prefix, sys.base_prefix, sys.exec_prefix,

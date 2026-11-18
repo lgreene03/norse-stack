@@ -479,12 +479,14 @@ def preregistration_at(git: Git, commit: str, tag: str = PREREGISTRATION_TAG) ->
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """``python -m norse_research.seal key-record|check-key|candidate|unseal|fetch-holdout``.
+    """``python -m norse_research.seal key-record|check-key|rehearse|candidate|unseal|fetch-holdout``.
 
     ``key-record --out PATH`` writes the owner's key record (run once, by the owner, in
     a terminal of their own). ``check-key`` checks the typed passphrase against the key
     record the genesis entry on the remote pins and writes nothing; the owner runs it
-    straight after genesis. ``candidate`` prints what the unseal must name, from the
+    straight after genesis. ``rehearse [--boundary YYYY-MM]`` runs the holdout path at
+    HEAD on development data only and writes nothing; the owner runs it before the
+    unseal. ``candidate`` prints what the unseal must name, from the
     frozen ledger, without any key. ``unseal --commit C --configuration-sha256 H``
     writes the single unseal entry after the passphrase verifies, then fetches the
     holdout files again. ``fetch-holdout`` repeats only the re-fetch. No option takes
@@ -498,6 +500,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     record.add_argument("--out", type=Path, required=True)
     commands.add_parser("check-key")
     commands.add_parser("candidate")
+    rehearsal = commands.add_parser("rehearse")
+    rehearsal.add_argument("--boundary", default=None,
+                           help="the development month that stands in for the holdout's start")
     opening = commands.add_parser("unseal")
     opening.add_argument("--commit", required=True, help="the pre-registration tag's commit")
     opening.add_argument("--tag", default=PREREGISTRATION_TAG)
@@ -518,6 +523,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             f"the passphrase verifies against the key record the genesis entry pins (sha256 "
             f"{digest}); compare that SHA-256 with the one kept beside the passphrase"
+        )
+        return 0
+    if args.command == "rehearse":
+        from .harness import REHEARSAL_BOUNDARY, rehearse_holdout  # the harness imports this
+
+        done = rehearse_holdout(args.repo, store=ArchiveStore(datasets_root()), remote=args.remote,
+                                boundary=args.boundary or REHEARSAL_BOUNDARY)
+        print(
+            f"rehearsal passed: {done['configuration_id']} at {done['commit']} reproduced its "
+            f"{done['days']} committed returns across the boundary {done['boundary']}; nothing "
+            "was written to the ledger"
         )
         return 0
     check_environment(os.environ, args.repo)

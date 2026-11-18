@@ -182,6 +182,16 @@ def peeks(config, data):
     return _series(config, 0.002)
 
 
+def loads_across(config, data):
+    # Reads across 2025-12-01, the boundary the rehearsal tests put in development.
+    utc = timezone.utc
+    rows = data.load("spot/klines/XUSDT/1d", datetime(2025, 11, 29, tzinfo=utc),
+                     datetime(2025, 12, 3, tzinfo=utc)).rows
+    if len(rows) != 4:
+        raise AssertionError(f"loaded {len(rows)} rows across the boundary, not 4")
+    return _series(config, 0.002)
+
+
 def leaks_late(config, data):
     if config["window"]["last_return_day"] > "2025-12-31":
         utc = timezone.utc
@@ -390,7 +400,7 @@ class World:
         namespace: dict = {}
         exec(compile(self.source(self.ids[cid]), "<synthetic strategy>", "exec"), namespace)
         function = self.pins[cid]["function"]
-        if function in ("skilled", "drifts_late", "peeks", "leaks_late"):
+        if function in ("skilled", "drifts_late", "peeks", "leaks_late", "loads_across"):
             series = namespace["_series"](configuration, 0.002)
         else:
             series = namespace[function](configuration, None)

@@ -50,6 +50,7 @@ from .periods import (
     HOLDOUT_END_MS,
     HOLDOUT_START,
     HOLDOUT_START_MS,
+    LAST_DEVELOPMENT_MONTH,
     OUT_OF_SAMPLE_START,
     OUT_OF_SAMPLE_START_MS,
     HoldoutSealed,
@@ -116,6 +117,29 @@ def _month(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000, tz=UTC).strftime("%Y-%m")
 
 
+def rehearsal_split(manifest: Manifest, month: str) -> tuple[Manifest, Manifest, int]:
+    """The development manifest split for the holdout rehearsal (``seal rehearse``):
+    the months before ``month``, and the months from it to the end of development, which
+    stand in for the holdout, with the boundary between them. The rehearsal runs the
+    holdout run's loading path, across a boundary, on development data only."""
+    if not (isinstance(month, str) and len(month) == 7 and month <= LAST_DEVELOPMENT_MONTH):
+        raise ValueError(f"a rehearsal boundary is a development month, not {month!r}")
+    before, after = {}, {}
+    for name, entry in manifest.datasets.items():
+        early = [f for f in entry["files"] if f[0] < month]
+        late = [f for f in entry["files"] if f[0] >= month]
+        if early:
+            before[name] = {**entry, "files": early}
+        if late:
+            after[name] = {**entry, "files": late}
+    boundary = int(datetime.strptime(month, "%Y-%m").replace(tzinfo=UTC).timestamp() * 1000)
+    return (
+        Manifest(manifest.path, manifest.sha256, DEVELOPMENT, before),
+        Manifest(manifest.path, manifest.sha256, HOLDOUT, after),
+        boundary,
+    )
+
+
 class DatasetLoader:
     def __init__(
         self,
@@ -123,6 +147,7 @@ class DatasetLoader:
         store: ArchiveStore,
         integrity_audit: bool = False,
         holdout: Manifest | None = None,
+        boundary_ms: int = HOLDOUT_START_MS,
     ) -> None:
         if manifest.period != DEVELOPMENT:
             raise HoldoutSealed(
@@ -132,10 +157,15 @@ class DatasetLoader:
             )
         if holdout is not None and (holdout.period != HOLDOUT or integrity_audit):
             raise HoldoutSealed("the holdout manifest is for the holdout run alone (G1.6)")
+        if boundary_ms > HOLDOUT_START_MS or (boundary_ms != HOLDOUT_START_MS and holdout is None):
+            raise ValueError("a rehearsal boundary lies in development, with its stand-in part")
         self.manifest = manifest
         self.store = store
         self.integrity_audit = integrity_audit
         self.holdout = holdout
+        # The holdout's start, or, in the rehearsal alone, an earlier month whose
+        # development data stands in for the holdout (``rehearsal_split``).
+        self.boundary_ms = boundary_ms
 
     def _entry(self, series: str, reaches_holdout: bool) -> dict:
         """The series' pins: the development manifest's, and inside the holdout run
@@ -161,8 +191,11 @@ class DatasetLoader:
     ) -> Loaded:
         """Rows of ``series`` with time in [start, end), verified against the manifest."""
         start_ms, end_ms = _ms(start), _ms(end)
-        reaches_holdout = end_ms > HOLDOUT_START_MS
-        if reaches_holdout and (self.holdout is None or unsealed_run() is None):
+        rehearsal = self.boundary_ms != HOLDOUT_START_MS
+        reaches_holdout = end_ms > self.boundary_ms
+        if (end_ms > HOLDOUT_START_MS and rehearsal) or (
+            reaches_holdout and (self.holdout is None or unsealed_run() is None)
+        ):
             raise HoldoutSealed(
                 f"{series}: requested until {end.isoformat()}, past the holdout start "
                 f"{HOLDOUT_START.isoformat()}; holdout rows load only inside the holdout "
