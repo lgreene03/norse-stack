@@ -95,7 +95,7 @@ from .registration import (
     TRIAL,
     Registration,
 )
-from .rules import check_run_rules, run_of, same_run
+from .rules import check_run_rules, holdout_commit_rule, holdout_rule_error, run_of, same_run
 from .sources import (
     StrategySourceRefused,
     check_strategy_sources,
@@ -471,6 +471,15 @@ class GitLedger:
                 problem = unseal_proof_error(self.git, genesis_of(written), body)
                 if problem:
                     raise VerificationError(f"the unseal is refused: {problem}")
+            # The holdout rules replay enforces, applied before anything is pushed, so no
+            # entry written through append can fail verification for good (round 2, N4).
+            problem = None
+            if body.get("type") == ATTEMPT:
+                problem = holdout_commit_rule(written[:-1], body.get("commit"))
+            elif body.get("type") == OPEN and body.get("kind") == HOLDOUT:
+                problem = holdout_rule_error(written[:-1], run_of(written[-1]))
+            if problem:
+                raise VerificationError(f"the entry is refused: {problem}")
             try:
                 commit = self._commit(local, new_data, files, _message(entry))
                 self.git.run("update-ref", "-m", "ledger append", self.ref, commit, local or "")

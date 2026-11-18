@@ -1273,3 +1273,21 @@ def test_the_attempt_rules_replay_without_git():
     for ledger_, message in cases:
         with pytest.raises(VerificationError, match=message):
             ledger_.snapshot()
+
+
+def test_append_refuses_the_holdout_entries_replay_would_reject(frozen):
+    # Security review round 2, N4: an entry the public append accepts never fails
+    # verification afterwards, so a hand-written one cannot break the ledger for good.
+    unseal(frozen, fetch=False)
+    before = frozen.remote_ledger()
+    elsewhere = {**holdout_open_body(frozen), "commit": "0" * 40}
+    with pytest.raises(VerificationError, match="unseal's commit"):
+        frozen.ledger.append(elsewhere)
+    assert frozen.remote_ledger() == before
+    runs = [frozen.ledger.append(holdout_open_body(frozen)) for _ in range(rules.HOLDOUT_RUNS)]
+    with pytest.raises(VerificationError, match="run 3 times"):
+        frozen.ledger.append(holdout_open_body(frozen))
+    with pytest.raises(VerificationError, match="commit is not its holdout run's"):
+        frozen.ledger.append({"type": "attempt", "opens": runs[-1].hash,
+                              "open_seq": runs[-1].seq, "commit": "0" * 40})
+    frozen.ledger.verify()
