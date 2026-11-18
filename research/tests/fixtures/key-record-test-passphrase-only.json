@@ -1,0 +1,9 @@
+{
+  "dklen": 32,
+  "kdf": "scrypt",
+  "n": 131072,
+  "p": 1,
+  "r": 8,
+  "salt": "abababababababababababababababab",
+  "verifier_sha256": "353bfffaa244a780083830f2fbbbae1733b091e54e78a6c885e387bc3c21db39"
+}

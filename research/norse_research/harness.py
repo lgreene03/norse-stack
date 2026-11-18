@@ -41,6 +41,29 @@ harness:
     harness killed while the strategy runs leaves the open entry, which counts (T1, T8);
 12. appends the result entry with the committed daily return series and its hash
     (T7).
+
+**The holdout run** (G1.6; section 11, items 5 and 6) is requested as
+``{"configuration": "holdout", "candidate_sha256": <the unseal's configuration hash>}``
+and takes steps 1 to 6 and 8 as above. It is then refused without the unseal entry,
+for any configuration but the unseal's (T22), once a holdout result has spent the
+seal or after three runs, when the candidate's configuration no longer resolves the
+same at HEAD, at any commit but the one the unseal records (item 6's rule was applied
+there, once), when the committed holdout manifest is not the registered one, and when
+the holdout files on disk do not all verify against it. Its open entry is appended as
+any other; then, before any holdout row is read, the remote's ledger must hold the
+unseal entry and that open entry (T23). The strategy first runs over the candidate's
+own development window, without the unseal, and must reproduce the candidate's
+committed series exactly, so no holdout return is computed unless it does; only then
+does it run once from the start of the development window through 2026-10-31,
+positions carried across the boundary, inside the unsealed run, whose development
+part must match again. That unsealed run is bracketed by an attempt entry, written
+first, and its close, recording the outcome; the run holds the clone's holdout lock
+throughout, so a second one there is refused (security review H2, M1). A failure is
+ledgered and may be retried under the same unseal, at the same commit, at most three
+runs in all (security review round 2, N1). Once the strategy has been given the
+unseal, a failure's own text is withheld
+from the ledger (L7). A completed result spends the seal. HOLD-1 and the verdict read
+that result later (G3.2, G3.3); nothing here computes a statistic of holdout returns.
 """
 
 from __future__ import annotations
@@ -55,32 +78,42 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import seal
 from .canonical import sha256_hex
 from .environment import ENV_ALLOWED, ENV_REFUSED, check_environment, git_version
-from .gate import RegisteredLedger, candidates, gate_ledger
+from .gate import RegisteredLedger, candidates, gate_ledger, holdout_candidate
 from .gitledger import (
+    PACKAGE_PATH,
     Git,
     GitLedger,
+    LedgerBusy,
+    holdout_commit_error,
     period_constants,
     registered_ids,
     tree_digests,
 )
 from .ledger import (
+    ABANDONED,
+    ATTEMPT,
+    ATTEMPT_CLOSE,
     CODE_BRANCH,
     COMPLETED,
     FAILED,
     OPEN,
     RESULT,
+    RETURNED,
     Entry,
     LedgerError,
     LedgerSnapshot,
     consecutive_days,
     encode_returns,
     returns_path,
+    unseal_of,
 )
 from .manifest import Manifest
 from .registration import (
@@ -105,13 +138,14 @@ from .sources import (
 from .store import ArchiveStore
 
 DEVELOPMENT_MANIFEST = "research/manifests/binance-vision-development.json"
-PACKAGE_PATH = "research/norse_research"  # where this package lives in the repository
 PACKAGE_DIR = Path(__file__).resolve().parent
 STRATEGIES_DIR = PACKAGE_DIR / "strategies"
 STRATEGIES_PATH = f"{PACKAGE_PATH}/strategies"
 
 _PATHS = re.compile(r"(?<![\w.])/(?:[\w.@~+-]+/)*[\w.@~+-]+")
 _VOLUME = re.compile(r"/Volumes/[^/\n'\"]+")
+# The strategy process's whole environment: string hashing fixed, nothing else (N3).
+STRATEGY_ENVIRONMENT = {"PYTHONHASHSEED": "0"}
 _RUNNER = (
     "import sys; sys.path[:0] = [sys.argv[1], sys.argv[2]]; "
     "from norse_research.runner import main; main()"
@@ -168,7 +202,7 @@ def load_strategy(
     """The strategy the genesis entry pins for configuration ``cid``, read from its
     committed source and never executed here (review H2, N1, N4)."""
     if cid == HOLDOUT:
-        raise RunNotRegistered("the holdout run needs the unseal, which G1.6 builds")
+        raise RunNotRegistered("the holdout run runs the unseal's candidate configuration")
     pins = genesis.body["strategies"]
     if not isinstance(cid, str) or cid not in pins:
         raise RunNotRegistered(f"{cid!r} is not a registered configuration")
@@ -217,13 +251,23 @@ def _run_strategy(
     configuration: Mapping,
     entry: str,
     store: ArchiveStore | None,
+    unsealed: tuple[str, str] | None = None,
+    rehearsal: str | None = None,
 ) -> list:
-    """The strategy's daily returns, computed in a fresh ``python -I -B`` process with
-    an empty environment from the files committed at ``head``."""
+    """The strategy's daily returns, computed in a fresh ``python -s -P -B`` process
+    whose environment holds only ``PYTHONHASHSEED=0``, from the files committed at
+    ``head``. ``unsealed`` is the
+    holdout run's alone: the committed holdout manifest's path and the unseal entry,
+    which the runner needs to read holdout rows (G1.6). ``rehearsal`` is the rehearsal's
+    alone: the development month whose data stands in for the holdout."""
+    holdout_manifest, unseal_entry = unsealed if unsealed is not None else (None, None)
+    if rehearsal is not None:
+        unseal_entry = REHEARSAL_TOKEN
     with tempfile.TemporaryDirectory(prefix="norse-strategy-") as tmp:
         code_root, pycache = Path(tmp) / "code", Path(tmp) / "pycache"
         pycache.mkdir()
-        export(git, head, [PACKAGE_PATH, *code_paths, manifest], code_root)
+        files = [PACKAGE_PATH, *code_paths, manifest, *([holdout_manifest] if unsealed else [])]
+        export(git, head, files, code_root)
         payload = {
             "code_root": str(code_root),
             "pycache": str(pycache),
@@ -234,12 +278,19 @@ def _run_strategy(
             "entry": entry,
             "manifest": manifest,
             "store_root": str(store.root) if store is not None else None,
+            "holdout_manifest": holdout_manifest,
+            "unseal": unseal_entry,
+            "rehearsal": rehearsal,
         }
+        # -s -P instead of -I, whose -E would ignore PYTHONHASHSEED: with string hashing
+        # randomised per process, a strategy that iterates a set of symbols could give a
+        # different series on each run of the same commit (security review round 2, N3).
+        # The environment holds that one variable and nothing else.
         proc = subprocess.run(
-            [sys.executable, "-I", "-B", "-X", f"pycache_prefix={pycache}", "-c", _RUNNER,
+            [sys.executable, "-s", "-P", "-B", "-X", f"pycache_prefix={pycache}", "-c", _RUNNER,
              str(code_root / "research"), str(code_root)],
-            input=json.dumps(payload).encode(), capture_output=True, env={}, cwd=tmp,
-            check=False,
+            input=json.dumps(payload).encode(), capture_output=True, env=STRATEGY_ENVIRONMENT,
+            cwd=tmp, check=False,
         )
     lines = [
         line for line in proc.stdout.decode(errors="replace").splitlines()
@@ -530,6 +581,9 @@ def run(
     head = git.text("rev-parse", "HEAD")
     check_head_on_main(git, remote, head)
     cid = request.get("configuration")
+    if cid == HOLDOUT:
+        return _run_holdout(ledger, snapshot, registration, request, repo, head, manifest,
+                            manifest_rel, store, admitted_on)
     strategy = load_strategy(git, head, genesis, registration, cid)
     check_loaded_modules(git, repo, head)
     resolved = registration.resolve(request, strategy)
@@ -599,6 +653,346 @@ def run(
         attempts=3,
     )
     return RunRecord(status, opened, closed, error)
+
+
+# --- the holdout run (G1.6; section 11, items 5 and 6) ---------------------------------
+
+HOLDOUT_REQUEST_KEYS = frozenset({"configuration", "candidate_sha256"})
+# The rehearsal (``seal rehearse``): the last ten development months, 2025-03 to 2025-12,
+# stand in for the holdout's ten, so the holdout run's loading path crosses a boundary
+# on development data only. Its token names no ledger entry.
+REHEARSAL_BOUNDARY = "2025-03"
+REHEARSAL_TOKEN = hashlib.sha256(b"norse-research holdout rehearsal, no ledger entry").hexdigest()
+WITHHELD = (
+    "the unsealed run failed; its message is withheld because it may carry holdout values "
+    "(security review L7)"
+)
+
+
+class HoldoutCheckFailed(ValueError):
+    """A check the harness makes on a holdout run; its message is the harness's own and
+    holds no value computed from holdout data."""
+
+
+def _holdout_failure(exc: BaseException, unsealed: bool, repo: Path, store) -> str:
+    """A failed holdout attempt's error as the public ledger records it. Once the
+    strategy has been given the unseal, a failure's text is the strategy's and may carry
+    holdout values, so only its type is published, unless the harness or the ledger
+    raised it with a message of its own (security review L7)."""
+    if unsealed and not isinstance(exc, HoldoutCheckFailed | LedgerError):
+        name = type(exc).__name__
+        if isinstance(exc, StrategyFailed):  # the runner reports "<type>: <message>"
+            reported = str(exc).split(":", 1)[0]
+            name = reported if reported.isidentifier() else name
+        return f"{name}: {WITHHELD}"
+    return public_error(exc, repo, store)
+
+
+def _close_abandoned_attempts(ledger: GitLedger) -> None:
+    """Close, as abandoned, every attempt a killed run left open. This run holds the
+    clone's holdout lock, so none is in flight here; one in flight on another clone is
+    ended by it and cannot then complete (security review M1)."""
+    entries = ledger.snapshot(ledger.local_head()).entries
+    closed = {e.body["attempt"] for e in entries if e.type == ATTEMPT_CLOSE}
+    for attempt in (e for e in entries if e.type == ATTEMPT and e.hash not in closed):
+        ledger.append(
+            {"type": ATTEMPT_CLOSE, "attempt": attempt.hash, "attempt_seq": attempt.seq,
+             "outcome": ABANDONED},
+            expected_head=ledger.local_head(),
+        )
+
+
+def _holdout_summary(
+    returned: list, window: Window, committed: list[tuple[str, float]]
+) -> tuple[list[tuple[str, float]], dict]:
+    """The holdout run's series, checked: one return per day of its window, and its
+    development part exactly the candidate's committed series (item 5). No statistic:
+    HOLD-1 reads the committed series later (G3.2)."""
+    pairs = [(str(day), float(value)) for day, value in returned]
+    if [d for d, _ in pairs] != window.day_list():
+        raise HoldoutCheckFailed(
+            "the holdout run's returns are not one per day from the start of the development "
+            "window through the holdout's end"
+        )
+    if pairs[: len(committed)] != committed:
+        raise HoldoutCheckFailed(
+            "its development returns differ from the candidate's committed series"
+        )
+    return pairs, {
+        "days": len(pairs),
+        "first_day": pairs[0][0],
+        "last_day": pairs[-1][0],
+        "covers_window": True,
+        "development_days": len(committed),
+        "holdout_days": len(pairs) - len(committed),
+        "development_reproduced": True,
+    }
+
+
+def _run_holdout(
+    ledger: GitLedger,
+    snapshot: LedgerSnapshot,
+    registration: Registration,
+    request: Mapping[str, Any],
+    repo: Path,
+    head: str,
+    manifest: Manifest,
+    manifest_rel: str,
+    store: ArchiveStore | None,
+    admitted_on: str | None,
+) -> RunRecord:
+    """The one holdout run, or a ledgered attempt at it, holding the clone's holdout
+    lock throughout (security review M1). See the module docstring."""
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(ledger.holdout_lock())
+        except LedgerBusy as exc:
+            raise RunRefused(str(exc)) from None
+        return _run_holdout_locked(ledger, snapshot, registration, request, repo, head,
+                                   manifest, manifest_rel, store, admitted_on)
+
+
+def _run_holdout_locked(
+    ledger: GitLedger,
+    snapshot: LedgerSnapshot,
+    registration: Registration,
+    request: Mapping[str, Any],
+    repo: Path,
+    head: str,
+    manifest: Manifest,
+    manifest_rel: str,
+    store: ArchiveStore | None,
+    admitted_on: str | None,
+) -> RunRecord:
+    git = ledger.git
+    genesis = snapshot.genesis
+    if set(request) != HOLDOUT_REQUEST_KEYS:
+        raise RunNotRegistered(f"a holdout run request holds exactly {sorted(HOLDOUT_REQUEST_KEYS)}")
+    unseal = unseal_of(snapshot.entries)
+    if unseal is None:
+        raise RunRefused("the holdout run needs the unseal entry (section 11, item 4)")
+    if request["candidate_sha256"] != unseal.body["configuration_sha256"]:
+        raise RunRefused(
+            f"the unseal opens the holdout to configuration {unseal.body['configuration_sha256']} "
+            f"({unseal.body['configuration_id']}) alone, not {request['candidate_sha256']!r} "
+            "(section 11, items 4 and 6; T22)"
+        )
+    try:
+        holdout_manifest = seal.committed_holdout_manifest(git, genesis, head)
+    except seal.SealRefused as exc:
+        raise UnmanifestedData(str(exc)) from None
+    held = {e.hash: e for e in snapshot.entries}
+    candidate = held[unseal.body["candidate"]["open"]]
+    candidate_result = held[unseal.body["candidate"]["result"]]
+    cid, h = candidate.body["configuration_id"], candidate.body["hypothesis"]
+    strategy = load_strategy(git, head, genesis, registration, cid)
+    check_loaded_modules(git, repo, head)
+    if registration.resolve({"configuration": cid}, strategy).configuration != (
+        candidate.body["configuration"]
+    ):
+        raise RunRefused(f"{cid}'s configuration does not resolve at HEAD as the candidate's did")
+    paths = genesis.body["tree_paths"]
+    if head != unseal.body["commit"]:
+        raise RunRefused(
+            f"every holdout run is at the unseal's commit {unseal.body['commit']}, where item 6's "
+            f"rule was applied; HEAD is {head} (security review round 2, N1)"
+        )
+    resolved = registration.resolve_holdout(candidate.body, genesis.body["manifests"]["holdout"])
+    error = run_rule_error(
+        snapshot.entries,
+        registration,
+        {
+            "kind": resolved.kind,
+            "hypothesis": h,
+            "configuration_id": cid,
+            "seed": resolved.configuration["seed"],
+            "costs": resolved.configuration["costs"],
+            "rerun": None,
+            "reserve_reason": None,
+            "candidate_sha256": resolved.configuration["candidate_sha256"],
+            "commit": head,
+        },
+    )
+    if error:
+        raise RunRefused(error)
+    if store is None:
+        raise RunRefused("the holdout run reads the dataset store; none was given")
+    try:
+        seal.verify_holdout_files(holdout_manifest, store)
+    except seal.SealRefused as exc:
+        raise RunRefused(str(exc)) from None
+
+    opened = ledger.append(
+        {
+            "type": OPEN,
+            "kind": resolved.kind,
+            "hypothesis": h,
+            "configuration_id": cid,
+            "configuration": resolved.configuration,
+            "configuration_sha256": resolved.configuration_sha256,
+            "commit": head,
+            "trees": tree_digests(git, head, paths),
+            "manifest_sha256": manifest.sha256,
+            "cost_basis": resolved.cost_basis,
+            "window": resolved.window.as_dict(),
+            "label": None,
+            "rerun": None,
+            "reserve_reason": None,
+            "strategy": strategy.module,
+            "environment": {
+                "python": platform.python_version(),
+                "implementation": platform.python_implementation(),
+                "platform": sys.platform,
+                "git": git_version(),
+            },
+        },
+        expected_head=admitted_on,
+    )
+
+    error = None
+    files: dict[str, bytes] = {}
+    pin = genesis.body["strategies"][cid]
+    unsealed = False
+    try:
+        seal.require_unseal_on_remote(ledger, unseal.hash, opened.hash)
+        committed = [(d, float(v)) for d, v in snapshot.returns_of(candidate_result)]
+        reproduced = _run_strategy(
+            git, head, pin, paths[h], manifest_rel, candidate.body["configuration"],
+            opened.hash, store,
+        )
+        if [(str(d), float(v)) for d, v in reproduced] != committed:
+            raise HoldoutCheckFailed(
+                "the development returns do not reproduce the candidate's committed series, so "
+                "no holdout return was computed (section 11, item 5)"
+            )
+        # The attempt bracket (security review H2): written before the strategy is first
+        # given the unseal, closed after it with the outcome. A process killed in between
+        # leaves it open, and the next run closes it as abandoned.
+        _close_abandoned_attempts(ledger)
+        attempt = ledger.append(
+            {"type": ATTEMPT, "opens": opened.hash, "open_seq": opened.seq, "commit": head},
+            expected_head=ledger.local_head(),
+        )
+        unsealed = True
+        outcome = FAILED
+        try:
+            returned = _run_strategy(
+                git, head, pin, paths[h], manifest_rel, resolved.configuration, opened.hash,
+                store, unsealed=(seal.HOLDOUT_MANIFEST, unseal.hash),
+            )
+            outcome = RETURNED
+        finally:
+            ledger.append(
+                {"type": ATTEMPT_CLOSE, "attempt": attempt.hash, "attempt_seq": attempt.seq,
+                 "outcome": outcome},
+                require_in_step=False,
+                attempts=3,
+            )
+        pairs, summary = _holdout_summary(returned, resolved.window, committed)
+        data = encode_returns(pairs)
+        digest = sha256_hex(data)
+        files[returns_path(digest)] = data
+        status = COMPLETED
+    except Exception as exc:  # a failed attempt is still a ledgered attempt (item 6)
+        error = _holdout_failure(exc, unsealed, repo, store)
+        status, summary, digest = FAILED, {"error": error}, None
+    closed = ledger.append(
+        {
+            "type": RESULT,
+            "opens": opened.hash,
+            "open_seq": opened.seq,
+            "status": status,
+            "configuration_sha256": resolved.configuration_sha256,
+            "commit": head,
+            "manifest_sha256": manifest.sha256,
+            "cost_basis": resolved.cost_basis,
+            "result": summary,
+            "result_sha256": digest,
+            "returns_path": returns_path(digest) if digest else None,
+        },
+        files,
+        require_in_step=False,
+        attempts=3,
+    )
+    return RunRecord(status, opened, closed, error)
+
+
+def rehearse_holdout(
+    repo: Path,
+    *,
+    store: ArchiveStore | None,
+    remote: str = "origin",
+    manifest_path: str | Path = DEVELOPMENT_MANIFEST,
+    boundary: str = REHEARSAL_BOUNDARY,
+) -> dict:
+    """``seal rehearse``: the holdout run's path end to end at HEAD, on development data
+    only, writing nothing to the ledger. It takes the checks the unseal and the holdout
+    run take (item 6's rule between the candidate's commit and HEAD among them), then
+    runs the holdout candidate's strategy with the development manifest split at
+    ``boundary``, its later months standing in for the holdout, through the unsealed
+    loading path, and requires the candidate's committed series exactly. Any refusal or
+    failure raises, so a data loading or seal fix is found and committed before the
+    unseal, after which the code cannot change (security review round 2, N1)."""
+    repo = Path(repo)
+    try:
+        check_environment(os.environ, repo)
+    except PermissionError as exc:
+        raise RunRefused(str(exc)) from None
+    ledger = GitLedger(repo, remote)
+    git = ledger.git
+    verified = ledger.verify(ledger.require_in_step())
+    genesis, registration = verified.snapshot.genesis, verified.registration
+    if genesis is None or registration is None:
+        raise RunRefused("the ledger has no genesis entry, so there is nothing to rehearse")
+    check_periods(genesis, registration)
+    manifest, manifest_rel = check_manifest(git, repo, manifest_path, genesis)
+    check_clean_tree(git)
+    head = git.text("rev-parse", "HEAD")
+    check_head_on_main(git, remote, head)
+    frozen = gate_ledger(ledger)
+    if not frozen.frozen:
+        raise RunRefused("the rehearsal runs the holdout candidate, chosen on the frozen ledger")
+    candidate = holdout_candidate(frozen)
+    if candidate is None:
+        raise RunRefused("no hypothesis passes development: no unseal, nothing to rehearse")
+    cid, h = candidate.configuration_id, candidate.hypothesis
+    strategy = load_strategy(git, head, genesis, registration, cid)
+    check_loaded_modules(git, repo, head)
+    if registration.resolve({"configuration": cid}, strategy).configuration != (
+        candidate.open_entry.body["configuration"]
+    ):
+        raise RunRefused(f"{cid}'s configuration does not resolve at HEAD as the candidate's did")
+    paths = genesis.body["tree_paths"]
+    problem = holdout_commit_error(
+        git, candidate.open_entry.body["commit"], head, [*paths["harness"], *paths[h]]
+    )
+    if problem:
+        raise RunRefused(f"the unseal would refuse this commit: {problem}")
+    try:
+        seal.committed_holdout_manifest(git, genesis, head)
+    except seal.SealRefused as exc:
+        raise UnmanifestedData(str(exc)) from None
+    if store is None:
+        raise RunRefused("the rehearsal reads the dataset store; none was given")
+    committed = [(d, float(v)) for d, v in frozen.snapshot.returns_of(candidate.result_entry)]
+    try:
+        returned = _run_strategy(
+            git, head, genesis.body["strategies"][cid], paths[h], manifest_rel,
+            candidate.open_entry.body["configuration"], REHEARSAL_TOKEN, store,
+            rehearsal=boundary,
+        )
+    except StrategyFailed as exc:
+        raise RunRefused(
+            f"the rehearsal failed ({public_error(exc, repo, store)}); fix data loading or the "
+            "seal and commit the fix before the unseal"
+        ) from None
+    if [(str(d), float(v)) for d, v in returned] != committed:
+        raise RunRefused(
+            f"across the rehearsal's boundary {boundary} the candidate's returns differ from its "
+            "committed series; fix data loading and commit the fix before the unseal"
+        )
+    return {"configuration_id": cid, "commit": head, "boundary": boundary,
+            "days": len(committed), "manifest_sha256": manifest.sha256}
 
 
 __all__ = [

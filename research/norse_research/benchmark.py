@@ -30,7 +30,11 @@ Definitions fixed here:
   exposure the excess return removes.
 
 The gate then applies the deflated Sharpe to ``excess_returns(strategy,
-volatility_matched(benchmark, strategy))``.
+volatility_matched(benchmark, strategy))`` for H1. For H2, decision D15 replaces the
+volatility match with a beta match (``beta_matched``): the benchmark scaled by the
+least-squares slope, intercept included, of the strategy's returns on the
+benchmark's over the window (section 10 of docs/PREREGISTRATION.md; its section 15,
+item 7).
 """
 
 from __future__ import annotations
@@ -118,6 +122,25 @@ def volatility_matched(benchmark: Sequence[float], strategy: Sequence[float]) ->
         raise ValueError("the benchmark has no variance to match")
     scale = _sample_sd(strategy) / benchmark_sd
     return [scale * b for b in benchmark]
+
+
+def beta_matched(benchmark: Sequence[float], strategy: Sequence[float]) -> list[float]:
+    """The benchmark scaled by beta, the least-squares slope (intercept included) of
+    the strategy's returns on the benchmark's over the same days (D15):
+    beta = sum((b - mean b)(s - mean s)) / sum((b - mean b)^2)."""
+    if len(benchmark) != len(strategy):
+        raise ValueError("benchmark and strategy must cover the same days")
+    if len(benchmark) < 2:
+        raise ValueError("at least two returns are needed")
+    n = len(benchmark)
+    mean_b = math.fsum(benchmark) / n
+    mean_s = math.fsum(strategy) / n
+    spread = math.fsum((b - mean_b) ** 2 for b in benchmark)
+    if spread == 0:
+        raise ValueError("the benchmark has no variance to regress on")
+    beta = math.fsum((b - mean_b) * (s - mean_s) for b, s in zip(benchmark, strategy, strict=True))
+    beta /= spread
+    return [beta * b for b in benchmark]
 
 
 def excess_returns(strategy: Sequence[float], benchmark: Sequence[float]) -> list[float]:

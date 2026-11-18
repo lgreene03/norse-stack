@@ -11,6 +11,12 @@ the development manifest's SHA-256, which names a small synthetic manifest inste
 
 A strategy runs in a fresh interpreter, so tests choose its behaviour by which
 function the genesis entry pins for a configuration, never by changing module state.
+
+For the seal's tests (G1.6) the world also holds a synthetic holdout manifest, whose
+files sit in a separate "archive" folder standing in for data.binance.vision and never
+in the mirror until the unseal fetches them; the registration names that manifest's
+hash. The key record is derived from ``TEST_PASSPHRASE``, a passphrase that exists
+only in these tests and is never the owner's.
 """
 
 from __future__ import annotations
@@ -21,6 +27,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from norse_research.binance_archive import DOWNLOAD_URL, ArchiveNotFound
 from norse_research.canonical import sha256_hex
 from norse_research.gitledger import (
     GitLedger,
@@ -35,18 +42,20 @@ from norse_research.ledger import (
     FAILED,
     FORMAT,
     GENESIS,
+    LEDGER_PATH,
     OPEN,
     RESULT,
     Entry,
     LedgerSnapshot,
     encode_returns,
     make_entry,
+    parse_ledger,
     returns_path,
 )
 from norse_research.manifest import build, dumps
-from norse_research.periods import DEVELOPMENT
+from norse_research.periods import DEVELOPMENT, HOLDOUT
 from norse_research.registration import Registration
-from norse_research.store import ArchiveStore
+from norse_research.store import MIRROR_DIR, ArchiveStore
 from synthetic_store import make_series
 
 RESEARCH = Path(__file__).resolve().parent.parent
@@ -55,12 +64,16 @@ PACKAGE = RESEARCH / "norse_research"
 REAL_PREREG_JSON = REPO / "docs" / "preregistration.json"
 REAL_PREREG_MD = REPO / "docs" / "PREREGISTRATION.md"
 MANIFEST = "research/manifests/binance-vision-development.json"
+HOLDOUT_MANIFEST = "research/manifests/binance-vision-holdout.json"
 KEY_RECORD = "research/keys/holdout-key-record.json"
-KEY_RECORD_DOC = {
-    "kdf": "scrypt", "n": 2**17, "r": 8, "p": 1, "dklen": 32, "salt": "ab" * 16,
-    "derived_key": "cd" * 32,
-}
-KEY_RECORD_TEXT = json.dumps(KEY_RECORD_DOC) + "\n"
+# Exists only in these tests; never the owner's passphrase.
+TEST_PASSPHRASE = "synthetic test passphrase, never the owner key"
+# The committed sample record for TEST_PASSPHRASE, in the format the owner's record
+# uses, so CI's secret scan reads that format on every pull request. test_seal checks
+# it against a scrypt computed here with hashlib alone.
+KEY_RECORD_SAMPLE = Path(__file__).resolve().parent / "fixtures" / "key-record-test-passphrase-only.json"
+KEY_RECORD_TEXT = KEY_RECORD_SAMPLE.read_text()
+KEY_RECORD_DOC = json.loads(KEY_RECORD_TEXT)
 TREE_PATHS = {"harness": ["research/norse_research"], "H1": ["strategies/h1"],
               "H2": ["strategies/h2"]}
 
@@ -125,6 +138,74 @@ COUNT = [0]
 def counter(config, data):
     COUNT[0] += 1  # module state: in a fresh process every run starts from 0
     return [(day, value + COUNT[0] / 1000) for day, value in run(config, data)]
+
+
+def _series(config, drift):
+    x = sum(ord(c) for c in config["id"]) * 7919 + 17
+    out = []
+    for day in _days(config["window"]):
+        x = (1103515245 * x + 12345) % 2147483648
+        out.append((day, (x / 2147483648 - 0.5) * 0.04 + drift))
+    return out
+
+
+def noise(config, data):
+    return _series(config, 0.0)
+
+
+def market(config, data):
+    return _series(config, 0.0)
+
+
+def skilled(config, data):
+    # Day by day from the window's start, so a longer window keeps the same prefix.
+    if config["window"]["last_return_day"] > "2025-12-31":
+        utc = timezone.utc
+        rows = data.load("spot/klines/XUSDT/1d", datetime(2025, 12, 30, tzinfo=utc),
+                         datetime(2026, 1, 3, tzinfo=utc)).rows
+        if len(rows) != 4:
+            raise AssertionError(f"loaded {len(rows)} rows across the boundary, not 4")
+    return _series(config, 0.002)
+
+
+def drifts_late(config, data):
+    out = _series(config, 0.002)
+    if config["window"]["last_return_day"] > "2025-12-31":
+        out[0] = (out[0][0], out[0][1] + 1.0)  # its development part no longer reproduces
+    return out
+
+
+def peeks(config, data):
+    utc = timezone.utc
+    data.load("spot/klines/XUSDT/1d", datetime(2025, 12, 30, tzinfo=utc),
+              datetime(2026, 1, 3, tzinfo=utc))
+    return _series(config, 0.002)
+
+
+def set_order(config, data):
+    # Depends on the iteration order of a set of names, so on string hashing.
+    order = list({"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT",
+                  "BNBUSDT", "TRXUSDT"})
+    return _series(config, order.index("SOLUSDT") / 10000)
+
+
+def loads_across(config, data):
+    # Reads across 2025-12-01, the boundary the rehearsal tests put in development.
+    utc = timezone.utc
+    rows = data.load("spot/klines/XUSDT/1d", datetime(2025, 11, 29, tzinfo=utc),
+                     datetime(2025, 12, 3, tzinfo=utc)).rows
+    if len(rows) != 4:
+        raise AssertionError(f"loaded {len(rows)} rows across the boundary, not 4")
+    return _series(config, 0.002)
+
+
+def leaks_late(config, data):
+    if config["window"]["last_return_day"] > "2025-12-31":
+        utc = timezone.utc
+        rows = data.load("spot/klines/XUSDT/1d", datetime(2025, 12, 30, tzinfo=utc),
+                         datetime(2026, 1, 3, tzinfo=utc)).rows
+        raise RuntimeError(f"holdout close {rows[-1][4]!r} at {rows[-1][0]}")
+    return _series(config, 0.002)
 '''
 
 # Functions that reach past the source checks on purpose; a module holding them fails
@@ -190,9 +271,11 @@ def git(cwd: Path, *args: str, input: bytes | None = None) -> str:
     return proc.stdout.decode().strip()
 
 
-def synthetic_registration_bytes(manifest_sha256: str) -> bytes:
+def synthetic_registration_bytes(manifest_sha256: str, holdout_sha256: str | None = None) -> bytes:
     doc = json.loads(REAL_PREREG_JSON.read_text())
     doc["data"]["development_manifest"]["sha256"] = manifest_sha256
+    if holdout_sha256 is not None:
+        doc["data"]["holdout_manifest"]["sha256"] = holdout_sha256
     return (json.dumps(doc, indent=2) + "\n").encode()
 
 
@@ -217,6 +300,7 @@ class World:
 
     def __init__(self, tmp: Path, genesis: bool = True, configurations=None,
                  behaviours=None, evasive: bool = False) -> None:
+        tmp.mkdir(parents=True, exist_ok=True)
         self.tmp = tmp
         self.remote = tmp / "remote.git"
         self.repo = tmp / "work"
@@ -227,7 +311,13 @@ class World:
         series = [make_series(self.store, "spot/klines/XUSDT/1d", "2025-11", "2025-12")]
         manifest = dumps(build(self.store, DEVELOPMENT, series))
         self.manifest_sha256 = sha256_hex(manifest)
-        registration_bytes = synthetic_registration_bytes(self.manifest_sha256)
+        # The public archive, off the mirror: the holdout's files are fetched from here
+        # only after the unseal.
+        self.archive = ArchiveStore(tmp / "archive")
+        held = [make_series(self.archive, "spot/klines/XUSDT/1d", "2026-01", "2026-02")]
+        self.holdout_manifest = dumps(build(self.archive, HOLDOUT, held))
+        self.holdout_sha256 = sha256_hex(self.holdout_manifest)
+        registration_bytes = synthetic_registration_bytes(self.manifest_sha256, self.holdout_sha256)
         self.registration = Registration.from_bytes(registration_bytes)
         self.ids = registered_ids(self.registration)
         n = next(_counter)
@@ -237,6 +327,7 @@ class World:
         self.write("docs/PREREGISTRATION.md", REAL_PREREG_MD.read_bytes())
         self.write("docs/preregistration.json", registration_bytes)
         self.write(MANIFEST, manifest)
+        self.write(HOLDOUT_MANIFEST, self.holdout_manifest)
         self.write(KEY_RECORD, KEY_RECORD_TEXT)
         for source in sorted(PACKAGE.rglob("*.py")):
             if "__pycache__" not in source.parts:
@@ -307,6 +398,95 @@ class World:
             location = getattr(module, "__file__", None)
             if isinstance(location, str) and location.startswith(str(self.tmp)):
                 sys.modules.pop(name, None)
+
+    # --- for the seal's tests (G1.6) ---------------------------------------------------
+
+    def returns_of(self, cid: str, configuration: dict) -> list[tuple[str, float]]:
+        """What the pinned function computes for ``configuration``, computed here from
+        the same committed source, so a run by hand matches a run through the harness."""
+        namespace: dict = {}
+        exec(compile(self.source(self.ids[cid]), "<synthetic strategy>", "exec"), namespace)
+        function = self.pins[cid]["function"]
+        if function in ("skilled", "drifts_late", "peeks", "leaks_late", "loads_across"):
+            series = namespace["_series"](configuration, 0.002)
+        else:
+            series = namespace[function](configuration, None)
+        return [(day, float(value)) for day, value in series]
+
+    def runs_by_hand(self, cids, fail=()) -> list[tuple[Entry, Entry]]:
+        """Open and result entries for ``cids``, exactly as the harness writes them, in
+        one ledger commit by plumbing, for speed. A run in ``fail`` has a failed result."""
+        head = self.ledger.local_head()
+        data = self.ledger.git.blob(head, LEDGER_PATH)
+        entries = list(parse_ledger(data))
+        when = entries[-1].body["time"]
+        files: dict[str, bytes] = {}
+
+        def add(body: dict) -> Entry:
+            last = entries[-1]
+            entry = make_entry({**body, "seq": len(entries), "prev": last.hash, "time": when})
+            entries.append(entry)
+            return entry
+
+        pairs = []
+        for cid in cids:
+            opened = add(self.open_body(cid))
+            common = {"type": RESULT, "opens": opened.hash, "open_seq": opened.seq,
+                      **{k: opened.body[k] for k in ("configuration_sha256", "commit",
+                                                     "manifest_sha256", "cost_basis")}}
+            if cid in fail:
+                closed = add({**common, "status": FAILED, "result": {"error": "synthetic"},
+                              "result_sha256": None, "returns_path": None})
+            else:
+                series = encode_returns(self.returns_of(cid, opened.body["configuration"]))
+                digest = sha256_hex(series)
+                files[returns_path(digest)] = series
+                closed = add({**common, "status": COMPLETED, "result": {"synthetic": True},
+                              "result_sha256": digest, "returns_path": returns_path(digest)})
+            pairs.append((opened, closed))
+        new = "".join(e.line + "\n" for e in entries).encode("ascii")
+        commit = self.ledger._commit(head, new, files, "runs written by hand")
+        git(self.repo, "update-ref", "refs/heads/ledger", commit)
+        git(self.repo, "push", "--quiet", "origin", f"{commit}:refs/heads/ledger")
+        return pairs
+
+    def fetcher(self, calls: list | None = None):
+        """A fetcher serving the synthetic archive, recording each key it serves."""
+
+        def fetch(url: str, max_bytes: int) -> bytes:
+            key = url[len(DOWNLOAD_URL):]
+            if calls is not None:
+                calls.append(key)
+            path = self.archive.root / MIRROR_DIR / key
+            if not path.is_file():
+                raise ArchiveNotFound(f"{url}: HTTP 404")
+            return path.read_bytes()
+
+        return fetch
+
+    def holdout_files_in_mirror(self) -> list[str]:
+        root = self.store.root / MIRROR_DIR
+        return sorted(p.name for p in root.rglob("*-2026-*")) if root.exists() else []
+
+
+def grid_world(tmp: Path, *, skilled: str | None = "H1-03", benchmark: bool = True,
+               freeze: bool = True, behaviours=None) -> World:
+    """A world whose ledger holds every H1 configuration's selectable run, with
+    ``skilled`` the one that passes development (none if None), both benchmarks' runs,
+    which the freeze needs, and the freeze anchor. H2 has no runs, so H2 has no
+    candidate."""
+    from norse_research import gate
+
+    registration = Registration.from_bytes(REAL_PREREG_JSON.read_bytes())
+    pinned = {cid: "noise" for cid in registration.order["H1"]}
+    pinned["B-H1"] = "market"
+    if skilled is not None:
+        pinned[skilled] = "skilled"
+    world = World(tmp, behaviours={**pinned, **(behaviours or {})})
+    world.runs_by_hand([*registration.order["H1"], *(["B-H1", "B-H2"] if benchmark else [])])
+    if freeze:
+        gate.freeze(world.ledger, "M2: the ledger freeze", allow_incomplete=True)
+    return world
 
 
 # --- a ledger built in memory, for the pure tests --------------------------------------

@@ -48,6 +48,11 @@ informative only: no trust decision reads the clock, and a test fails if code ou
 * **Result** closes an open entry: the status, a summary, and for a completed run the
   SHA-256 of its committed return series. It repeats the open entry's configuration hash,
   commit, manifest hash and cost basis, so each result entry holds every field G1.5 names.
+* **Unseal** (G1.6) is written at most once, after the freeze anchor, when the owner's
+  passphrase verifies. It names the pre-registration genesis names, the holdout candidate
+  the registered rule selects on the frozen ledger, and the hashes of the holdout manifest
+  and the key record, and reveals the scrypt output the key record commits to; the
+  holdout run follows it. See [holdout-seal.md](holdout-seal.md).
 
 N is the number of open entries of kind `trial`: reruns, failures and runs that never
 finished all count, and nothing is deduplicated by configuration hash (section 9).
@@ -58,8 +63,9 @@ finished all count, and nothing is deduplicated by configuration hash (section 9
 registered configuration and nothing else. The harness never imports or executes a
 strategy. It reads the pinned module's `CONFIGURATIONS`, `PARAMETERS` and `DEFAULTS`,
 which must be literals assigned once, by parsing the committed source; after the open
-entry is pushed, it runs the pinned function in a fresh `python -I -B -X
-pycache_prefix=<an empty folder>` process with an empty environment, built from the files
+entry is pushed, it runs the pinned function in a fresh `python -s -P -B -X
+pycache_prefix=<an empty folder>` process whose environment holds only `PYTHONHASHSEED=0`
+(so the same commit gives the same series; G1.6 security review round 2, N3), built from the files
 committed at HEAD (the package, the hypothesis's strategy paths and the manifest), and
 reads the daily returns back over a pipe. In that process an audit hook, installed before
 the strategy's module-level code runs, lets it read the interpreter's own library, the
@@ -100,7 +106,8 @@ Before it writes anything the harness refuses on any of these:
   recorded defect, or naming a fix commit that the run it repeats already had; a
   benchmark, a control seed or a sensitivity cost run again without a recorded defect;
   past the budget; a reserve draw without its reason; anything but a candidate's
-  sensitivity run after the freeze; a sensitivity run before it.
+  sensitivity run, the unseal or the holdout run after the freeze; a sensitivity run
+  before it.
 
 It then appends the open entry, under a lock, refusing if the ledger moved since the run
 was admitted or if the freeze was tagged meanwhile, and reads the remote back to confirm it
@@ -148,8 +155,9 @@ own command: it refuses while a registered configuration lacks a selectable run,
 computes only on the ledger at the freeze anchor, and only on a ledger the gate itself
 issued; a ledger it issued before the freeze stays provisional, so check `frozen`.
 
-The genesis entry is written once, after G1.6 has committed the holdout key record
-(section 11, item 4):
+The genesis entry is written once, after the owner has created the holdout key record with
+`python -m norse_research.seal key-record` and committed it on main (section 11, item 4;
+[holdout-seal.md](holdout-seal.md)):
 
 ```bash
 python -m norse_research.gitledger genesis --key-record <commit>:<path> \
@@ -164,10 +172,17 @@ main or overlapping (a hypothesis's paths may sit inside the harness paths, whic
 them out of the harness digest; no other overlap is allowed); and a key record that breaks
 its contract.
 
+Straight after the genesis step the owner runs, in a terminal of their own,
+`python -m norse_research.seal check-key`. It checks the typed passphrase against the key
+record the genesis entry on the remote pins and writes nothing. Whoever runs the genesis step
+chooses which record it pins, so this is the check that it pinned the owner's (security review
+M2); the owner also compares the SHA-256 it prints with the one `key-record` printed.
+
 ### The holdout key record contract (for G1.6)
 
 The genesis step accepts the key record only as a JSON object with exactly these keys, and
-G1.6 should build the record to it:
+G1.6's `key-record` command builds the record to it (a test feeds the command's output to
+the genesis step):
 
 | Key | Value |
 |---|---|
@@ -177,11 +192,16 @@ G1.6 should build the record to it:
 | `p` | `1` |
 | `dklen` | an integer, at least 32 |
 | `salt` | lower-case hex, an even number of characters, at least 32 (16 bytes) |
-| `derived_key` | lower-case hex of exactly `dklen` bytes |
+| `verifier_sha256` | lower-case hex SHA-256 of the scrypt output (64 characters) |
 
 The parameters must also be ones `hashlib.scrypt` accepts within `maxmem` of 256 MiB; the
 genesis step makes one trial call to check. The record must be committed on the remote's
-main. Nothing else may be in it: in particular no other hash of the passphrase.
+main. Nothing else may be in it: in particular no other hash of the passphrase, and never the
+scrypt output itself. The record is the commitment of a commit-reveal (security review H1):
+the unseal entry reveals the scrypt output as its `proof`, and the ledger refuses an unseal
+whose proof does not hash to `verifier_sha256`, when it is written and on every replay.
+`research/tests/fixtures/key-record-test-passphrase-only.json` is a sample in this format for
+a passphrase that exists only in the tests.
 
 ## The ledger branch ruleset
 
@@ -209,7 +229,8 @@ clone and by `audit.force_push_findings` over GitHub's activity record.
   tests. The gateway runs in a container that cannot see this tree, so it must either hand
   runs to this harness over an authenticated channel or keep its run endpoint disabled for
   H1 and H2 (threat model finding 9); neither exists yet, which is why G1.5 waits on it.
-* **The unseal and the holdout run** (G1.6): the harness refuses a holdout run until then.
+* **The unseal and the holdout run** are G1.6's, in [holdout-seal.md](holdout-seal.md);
+  HOLD-1 and the verdict on the holdout result are G3.2's and G3.3's.
 * **Strategies** (G1.9, G2.2, G2.3): the harness runs Python strategies. If H1 and H2 are
   built in huginn instead, the source checks and the runner do not apply to them and T13
   needs another design.

@@ -75,14 +75,16 @@ def block_bounds(n_obs: int, blocks: int) -> list[tuple[int, int]]:
     return bounds
 
 
-def _sharpes(count: int, sums: Sequence[float], squares: Sequence[float]) -> list[float]:
+def _sharpes(
+    count: int, sums: Sequence[float], squares: Sequence[float], flat: Sequence[bool]
+) -> list[float]:
+    """Each trial's Sharpe ratio on a half; 0 for a half with no variance, whatever its
+    constant value (section 10; G1.6 quant review L5). ``flat`` comes from the blocks'
+    minima and maxima, since a variance from running sums can round either way."""
     out = []
-    for s, q in zip(sums, squares, strict=True):
+    for s, q, level in zip(sums, squares, flat, strict=True):
         variance = (q - s * s / count) / (count - 1)
-        if variance <= 0:
-            out.append(0.0 if s == 0 else math.copysign(math.inf, s))
-        else:
-            out.append(s / count / math.sqrt(variance))
+        out.append(0.0 if level or variance <= 0 else s / count / math.sqrt(variance))
     return out
 
 
@@ -130,6 +132,12 @@ def cscv(trial_returns: Sequence[Sequence[float]], blocks: int = GATE_BLOCKS) ->
     ]
     total_sums = [sum(column) for column in zip(*sums, strict=True)]
     total_squares = [sum(column) for column in zip(*squares, strict=True)]
+    lows = [[min(series[start:end]) for series in trial_returns] for start, end in bounds]
+    highs = [[max(series[start:end]) for series in trial_returns] for start, end in bounds]
+
+    def flat(chosen: Sequence[int]) -> list[bool]:
+        return [min(lows[b][t] for b in chosen) == max(highs[b][t] for b in chosen)
+                for t in range(n_trials)]
 
     half = blocks // 2
     logits: list[float] = []
@@ -143,8 +151,9 @@ def cscv(trial_returns: Sequence[Sequence[float]], blocks: int = GATE_BLOCKS) ->
         q_j = [sum(column) for column in zip(*(squares[b] for b in chosen), strict=True)]
         s_k = [t - s for t, s in zip(total_sums, s_j, strict=True)]
         q_k = [t - q for t, q in zip(total_squares, q_j, strict=True)]
-        sharpe_j = _sharpes(count, s_j, q_j)
-        sharpe_k = _sharpes(n_obs - count, s_k, q_k)
+        rest = [b for b in range(blocks) if b not in chosen]
+        sharpe_j = _sharpes(count, s_j, q_j, flat(chosen))
+        sharpe_k = _sharpes(n_obs - count, s_k, q_k, flat(rest))
         for in_sample, out_of_sample in ((sharpe_j, sharpe_k), (sharpe_k, sharpe_j)):
             logit, loss = _logit_of_split(in_sample, out_of_sample)
             logits.append(logit)

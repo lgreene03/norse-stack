@@ -16,17 +16,37 @@ The rules:
 * every open entry is exactly what the registration resolves its request to: its kind,
   hypothesis, window, costs, seed and registered parameters, with the strategy the
   genesis entry pins for it (review N7);
-* before the freeze no sensitivity run, after it nothing else (section 8; review N2).
+* before the freeze no sensitivity run, after it nothing else but the unseal and the
+  holdout run (section 8; review N2);
+* the unseal comes after the freeze anchor, and once (section 11, item 4; T20, T23);
+* a holdout run comes after the unseal, runs the unseal's candidate configuration and
+  nothing else, and after one completed holdout result nothing more: a run that failed
+  or never finished may be retried, every attempt ledgered (section 11, items 5 and
+  6; T22). The commit rule of item 6 needs git, so ``gitledger`` replays it;
+* every holdout run, and every attempt within one, is at exactly the commit the unseal
+  records, where item 6's rule was applied once, and there are at most
+  ``HOLDOUT_RUNS`` of them. Nothing a run reports about itself decides anything: on a
+  machine with one user no such report can be authenticated (security review round 2,
+  N1; the coordinator's decision, in docs/research/holdout-seal.md).
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from .ledger import OPEN, Entry, VerificationError
+from .ledger import (
+    ATTEMPT,
+    COMPLETED,
+    OPEN,
+    RESULT,
+    UNSEAL,
+    Entry,
+    VerificationError,
+)
 from .registration import (
     BENCHMARK,
     CONTROL,
+    HOLDOUT,
     SENSITIVITY,
     TRIAL,
     Registration,
@@ -56,6 +76,8 @@ def run_rule_error(
     kind, h, cid = run["kind"], run["hypothesis"], run["configuration_id"]
     rerun, reason = run["rerun"], run["reserve_reason"]
     opens = [e for e in prior if e.type == OPEN]
+    if kind == HOLDOUT:
+        return holdout_rule_error(prior, run)
     if kind in (BENCHMARK, CONTROL, SENSITIVITY):
         before = [e for e in opens if same_run(e, run)]
         what = {
@@ -112,6 +134,55 @@ def run_rule_error(
     return None
 
 
+def holdout_rule_error(prior: Sequence[Entry], run: Mapping) -> str | None:
+    """Why the holdout run ``run`` may not follow ``prior``, or None (section 11)."""
+    unseal = next((e for e in prior if e.type == UNSEAL), None)
+    if unseal is None:
+        return "a holdout run comes only after the unseal entry (section 11, item 4)"
+    if (run["configuration_id"], run.get("candidate_sha256")) != (
+        unseal.body["configuration_id"], unseal.body["configuration_sha256"]
+    ):
+        return (
+            f"the unseal opens the holdout to {unseal.body['configuration_id']}'s "
+            f"configuration {unseal.body['configuration_sha256']} alone (section 11, items 4 "
+            "and 6; T22)"
+        )
+    if run["rerun"] is not None or run["reserve_reason"] is not None:
+        return "a holdout run carries no rerun record or reserve reason"
+    held = {e.hash for e in prior if e.type == OPEN and e.body["kind"] == HOLDOUT}
+    if any(e.type == RESULT and e.body["opens"] in held and e.body["status"] == COMPLETED
+           for e in prior):
+        return "one result spends the seal: the holdout run has its result (section 11, item 6)"
+    if len(held) >= HOLDOUT_RUNS:
+        return (
+            f"the holdout has been run {len(held)} times, the most section 11, item 6 allows "
+            f"here ({HOLDOUT_RUNS})"
+        )
+    return holdout_commit_rule(prior, run.get("commit"))
+
+
+# Section 11, item 6 lets a holdout run that fails before producing a result be retried,
+# with no limit stated. This implements it conservatively: at most three holdout runs
+# follow the unseal, every one at the unseal's commit, so a retry can only repeat a run
+# that failed for a reason outside the code and data (a crash, a full disk), never
+# change what it computes (security review round 2, N1 and N3).
+HOLDOUT_RUNS = 3
+
+
+def holdout_commit_rule(prior: Sequence[Entry], commit: str | None) -> str | None:
+    """Why a holdout run or attempt at ``commit`` may not follow ``prior``, or None: it
+    must be at exactly the commit the unseal records (security review round 2, N1)."""
+    unseal = next((e for e in prior if e.type == UNSEAL), None)
+    if unseal is None:
+        return "a holdout run comes only after the unseal entry (section 11, item 4)"
+    if commit != unseal.body["commit"]:
+        return (
+            f"every holdout run is at the unseal's commit {unseal.body['commit']}, where item "
+            f"6's rule was applied, and not at {commit} (security review round 2, N1)"
+        )
+    return None
+
+
 def run_of(entry: Entry) -> dict:
     body = entry.body
     return {
@@ -122,6 +193,8 @@ def run_of(entry: Entry) -> dict:
         "costs": body["configuration"].get("costs"),
         "rerun": body["rerun"],
         "reserve_reason": body["reserve_reason"],
+        "candidate_sha256": body["configuration"].get("candidate_sha256"),
+        "commit": body["commit"],
     }
 
 
@@ -173,6 +246,35 @@ def registration_error(entry: Entry, registration: Registration, genesis: Entry)
     return None
 
 
+def holdout_registration_error(
+    entry: Entry, prior: Sequence[Entry], registration: Registration, genesis: Entry
+) -> str | None:
+    """Why a holdout open entry is not the holdout run of the unseal's candidate, with
+    the strategy genesis pins and the registered holdout manifest, or None."""
+    unseal = next((e for e in prior if e.type == UNSEAL), None)
+    if unseal is None:
+        return "a holdout run comes only after the unseal entry"
+    candidate = next((e for e in prior if e.hash == unseal.body["candidate"]["open"]), None)
+    if candidate is None:
+        return "the unseal's candidate is not in the ledger"
+    pin = genesis.body["strategies"].get(candidate.body["configuration_id"], {})
+    if entry.body["strategy"] != f"{pin.get('path')}:{pin.get('function')}":
+        return "its strategy is not the one genesis pins for the candidate"
+    try:
+        expected = registration.holdout_configuration(
+            candidate.body["configuration"], candidate.body["configuration_sha256"],
+            genesis.body["manifests"]["holdout"],
+        )
+    except RegistrationError as exc:
+        return str(exc)
+    if entry.body["configuration"] != expected:
+        return (
+            "it is not the holdout run of the unseal's candidate (its configuration, window "
+            "through the holdout's end and the registered holdout manifest; section 11, item 5)"
+        )
+    return None
+
+
 def check_run_rules(
     entries: Sequence[Entry],
     registration: Registration,
@@ -184,16 +286,29 @@ def check_run_rules(
     With ``genesis``, every open entry must also be what the registration resolves it
     to; ``frozen_length`` is the number of entries at the freeze anchor, if any."""
     for index, entry in enumerate(entries):
+        after = frozen_length is not None and index >= frozen_length
+        if entry.type == UNSEAL and not after:
+            raise VerificationError(
+                f"entry {entry.seq} breaks the run rules: an unseal before the freeze anchor; "
+                "the candidate is chosen on the frozen ledger (section 11; T20)"
+            )
+        if entry.type == ATTEMPT:
+            error = holdout_commit_rule(entries[:index], entry.body["commit"])
+            if error:
+                raise VerificationError(f"entry {entry.seq} breaks the run rules: {error}")
         if entry.type != OPEN:
             continue
+        kind = entry.body["kind"]
         error = run_rule_error(entries[:index], registration, run_of(entry))
         if error is None and genesis is not None:
-            error = registration_error(entry, registration, genesis)
+            error = (
+                holdout_registration_error(entry, entries[:index], registration, genesis)
+                if kind == HOLDOUT else registration_error(entry, registration, genesis)
+            )
         if error is None:
-            after = frozen_length is not None and index >= frozen_length
-            if entry.body["kind"] == SENSITIVITY and not after:
+            if kind == SENSITIVITY and not after:
                 error = "a sensitivity run before the freeze"
-            elif entry.body["kind"] != SENSITIVITY and after:
-                error = f"a {entry.body['kind']} run after the freeze"
+            elif kind not in (SENSITIVITY, HOLDOUT) and after:
+                error = f"a {kind} run after the freeze"
         if error:
             raise VerificationError(f"entry {entry.seq} breaks the run rules: {error}")

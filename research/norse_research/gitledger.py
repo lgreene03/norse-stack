@@ -33,7 +33,11 @@ history every committed version of the file is a byte prefix of the next and eve
 return series is never changed (T4, T7); the pre-registration tag still points where
 genesis says (T24); and the run rules of section 9 hold over the whole ledger (M2). A
 ``ledger-*`` tag on a commit that holds no ledger is reported, not fatal, because the
-tag ruleset makes such a tag permanent (M6).
+tag ruleset makes such a tag permanent (M6). An unseal entry (G1.6) must name the
+freeze anchor's commit and the holdout candidate the registered rule selects on the
+ledger at that anchor (``gate.check_unseal_candidate``; T22), and every holdout run
+must be at its candidate's commit plus only changes to data loading or the seal
+(section 11, item 6).
 
 Nothing here reads the clock to decide anything; it is read only for timestamps,
 which never decrease along the chain (T11).
@@ -44,13 +48,15 @@ from __future__ import annotations
 import argparse
 import fcntl
 import hashlib
+import hmac
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -60,6 +66,8 @@ from . import ledger as _ledger
 from .canonical import CanonicalError, loads_strict, sha256_hex
 from .environment import check_environment
 from .ledger import (
+    ATTEMPT,
+    ATTEMPT_CLOSE,
     CODE_BRANCH,
     FORMAT,
     GENESIS,
@@ -67,6 +75,7 @@ from .ledger import (
     LEDGER_PATH,
     OPEN,
     TIME_FORMAT,
+    UNSEAL,
     ZERO_HASH,
     Entry,
     LedgerError,
@@ -75,9 +84,11 @@ from .ledger import (
     genesis_of,
     make_entry,
     parse_ledger,
+    unseal_of,
 )
 from .periods import HOLDOUT_START, LAST_DEVELOPMENT_MONTH, OUT_OF_SAMPLE_START
 from .registration import (
+    HOLDOUT,
     HYPOTHESES,
     PREREGISTRATION_FILES,
     PREREGISTRATION_JSON,
@@ -85,7 +96,7 @@ from .registration import (
     TRIAL,
     Registration,
 )
-from .rules import check_run_rules, run_of, same_run
+from .rules import check_run_rules, holdout_commit_rule, holdout_rule_error, run_of, same_run
 from .sources import (
     StrategySourceRefused,
     check_strategy_sources,
@@ -112,6 +123,7 @@ TRANSPORT_OVERRIDES = (
 )
 PREREGISTRATION_TAG = "prereg-v1"
 LOCK_NAME = "norse-ledger.lock"
+HOLDOUT_LOCK_NAME = "norse-holdout.lock"
 LEDGER_NAME = "Norse trial ledger"
 LEDGER_EMAIL = "ledger@norse-stack.invalid"
 IDENTITY = {
@@ -122,8 +134,20 @@ IDENTITY = {
 }
 REMOTE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 # The holdout key record's contract (T25; G1.6 commits the record; genesis pins it).
-KEY_RECORD_KEYS = frozenset({"kdf", "n", "r", "p", "dklen", "salt", "derived_key"})
+KEY_RECORD_KEYS = frozenset({"kdf", "n", "r", "p", "dklen", "salt", "verifier_sha256"})
 _RETURNS_FILE = re.compile(r"ledger/returns/[0-9a-f]{64}\.csv")
+# Section 11, item 6: a holdout run may be retried "at the commit of its selectable run
+# plus only commits that touch data loading or the seal". These are the files of data
+# loading and of the seal; any other change to the code a run executes (the harness
+# paths and the hypothesis's paths) between the candidate's commit and the holdout
+# run's refuses the run and fails verification.
+SEAL_AND_DATA_LOADING = frozenset(
+    f"research/norse_research/{name}.py"
+    for name in ("seal", "loader", "store", "manifest", "formats", "binance_archive", "periods")
+)
+# Where this package lives in the repository. The runner exports all of it to every run,
+# so item 6's diff always covers it, whatever the genesis tree paths list (review L3).
+PACKAGE_PATH = "research/norse_research"
 
 
 class GitError(LedgerError):
@@ -328,17 +352,25 @@ class GitLedger:
             return remote
 
     @contextmanager
-    def _lock(self) -> Iterator[None]:
-        path = self.git.git_dir() / LOCK_NAME
+    def _lock(self, name: str = LOCK_NAME, busy: str = "another process is appending to the ledger"
+              ) -> Iterator[None]:
+        path = self.git.git_dir() / name
         fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
         try:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                raise LedgerBusy("another process is appending to the ledger") from None
+                raise LedgerBusy(busy) from None
             yield
         finally:
             os.close(fd)
+
+    def holdout_lock(self) -> AbstractContextManager[None]:
+        """Held for a whole holdout run, so a second one on this clone is refused while
+        the first is in flight (security review M1). The operating system releases it
+        when a process dies, so a killed run never blocks a retry. Across clones the
+        ledger's rule that attempts run one at a time takes over."""
+        return self._lock(HOLDOUT_LOCK_NAME, "another holdout run is in progress on this clone")
 
     # --- reading --------------------------------------------------------------------
 
@@ -425,13 +457,32 @@ class GitLedger:
             if genesis_of(written) is None:
                 raise VerificationError("no entry may precede the genesis entry")
             self.check_remote(written[0].body["remote"]["url"])  # the first genesis's (N5)
-            if body.get("type") == OPEN:
+            if body.get("type") in (OPEN, UNSEAL, ATTEMPT, ATTEMPT_CLOSE):
                 frozen = self.freeze_commit(remote) is not None
-                if frozen != (body.get("kind") == SENSITIVITY):
+                late = body.get("type") != OPEN or body.get("kind") in (SENSITIVITY, HOLDOUT)
+                if frozen != late:
                     raise LedgerOutOfStep(
-                        "the ledger is frozen: only the candidates' sensitivity runs remain"
-                        if frozen else "a sensitivity run comes only after the ledger freeze"
+                        "the ledger is frozen: only the candidates' sensitivity runs, the "
+                        "unseal and the holdout run remain"
+                        if frozen else
+                        "sensitivity runs, the unseal and the holdout run come only after the "
+                        "ledger freeze"
                     )
+            if body.get("type") == UNSEAL:
+                problem = unseal_proof_error(self.git, genesis_of(written), body)
+                if problem:
+                    raise VerificationError(f"the unseal is refused: {problem}")
+            # The holdout rules replay enforces, applied before anything is pushed, so no
+            # entry written through append can fail verification for good (round 2, N4).
+            problem = None
+            if body.get("type") == ATTEMPT:
+                problem = holdout_commit_rule(written[:-1], body.get("commit"))
+            elif body.get("type") == OPEN and body.get("kind") == HOLDOUT:
+                problem = holdout_rule_error(written[:-1], run_of(written[-1]))
+            if problem:
+                raise VerificationError(f"the entry is refused: {problem}")
+            if body.get("type") == UNSEAL:
+                return self._push_unseal(local, new_data, files, entry)
             try:
                 commit = self._commit(local, new_data, files, _message(entry))
                 self.git.run("update-ref", "-m", "ledger append", self.ref, commit, local or "")
@@ -457,10 +508,14 @@ class GitLedger:
             return entry
 
     def _commit(
-        self, parent: str | None, data: bytes, files: Mapping[str, bytes], message: str
+        self, parent: str | None, data: bytes, files: Mapping[str, bytes], message: str,
+        objects: Mapping[str, str] | None = None,
     ) -> str:
+        """The commit appending ``data``, built with git's plumbing. ``objects``, when
+        given, sends every new object to another object directory (the unseal's)."""
+        objects = dict(objects or {})
         with tempfile.TemporaryDirectory(prefix="norse-ledger-index-") as tmp:
-            env = {"GIT_INDEX_FILE": str(Path(tmp) / "index")}
+            env = {"GIT_INDEX_FILE": str(Path(tmp) / "index"), **objects}
             if parent:
                 self.git.run("read-tree", parent, env=env)
             else:
@@ -468,7 +523,7 @@ class GitLedger:
             for path, content in [(LEDGER_PATH, data), *sorted(files.items())]:
                 if path != LEDGER_PATH and not _RETURNS_FILE.fullmatch(path):
                     raise LedgerWriteError(f"{path} is not a return series path")
-                blob = self.git.text("hash-object", "-w", "--stdin", input=content)
+                blob = self.git.text("hash-object", "-w", "--stdin", input=content, env=objects)
                 self.git.run(
                     "update-index", "--add", "--cacheinfo", f"100644,{blob},{path}", env=env
                 )
@@ -476,7 +531,44 @@ class GitLedger:
         args = ["commit-tree", tree, "-m", message]
         if parent:
             args += ["-p", parent]
-        return self.git.text(*args, env=IDENTITY)
+        return self.git.text(*args, env={**IDENTITY, **objects})
+
+    def _push_unseal(
+        self, local: str | None, data: bytes, files: Mapping[str, bytes], entry: Entry
+    ) -> Entry:
+        """The unseal's commit, built in a temporary object directory and pushed from
+        there; the clone's own object store, refs and reflogs learn of it only once the
+        remote holds it. A failed push leaves nothing behind that holds the proof, so no
+        one can use it later without the owner (security review round 2, N2)."""
+        with tempfile.TemporaryDirectory(prefix="norse-unseal-objects-") as tmp:
+            objects = {
+                "GIT_OBJECT_DIRECTORY": tmp,
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(self.git.git_dir() / "objects"),
+            }
+            try:
+                commit = self._commit(local, data, files, _message(entry), objects)
+                self.git.run("push", "--quiet", "--", self.remote, f"{commit}:{self.ref}",
+                             env=objects)
+            except GitError as exc:
+                raise LedgerWriteError(
+                    f"the unseal could not be pushed ({exc}); nothing of it is left in this "
+                    "clone, so run the unseal again at once, from the same terminal"
+                ) from None
+            # Pushed, so public: the loose objects join the clone's own store, which the
+            # remote-tracking ref the push may have moved already points into.
+            store = self.git.git_dir() / "objects"
+            for made in Path(tmp).rglob("*"):
+                target = store / made.relative_to(tmp)
+                if made.is_file() and not target.exists():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(made, target)
+            after = self.fetch()
+        if after is None or not self.git.is_ancestor(commit, after):
+            raise LedgerWriteError(
+                f"the remote's ledger head {after} does not hold the pushed unseal {commit}"
+            )
+        self.git.run("update-ref", "-m", "ledger append", self.ref, commit, local or "")
+        return entry
 
     # --- verification ---------------------------------------------------------------
 
@@ -604,7 +696,40 @@ class GitLedger:
             frozen_length = len(parse_ledger(self.git.blob(freeze, LEDGER_PATH)))
         check_run_rules(snapshot.entries, registration, genesis, frozen_length)
         self._check_rerun_commits(snapshot)
+        self._check_unseal(snapshot, registration, freeze)
         return Verified(snapshot, head, remote, tags, ignored, registration, freeze)
+
+    def _check_unseal(
+        self, snapshot: LedgerSnapshot, registration: Registration, freeze: str | None
+    ) -> None:
+        """On replay, the unseal names the freeze anchor's commit and the candidate the
+        registered rule selects on the ledger at it (T20, T22), and every holdout run
+        is at the candidate's commit plus only data loading or the seal (item 6)."""
+        unseal = unseal_of(snapshot.entries)
+        if unseal is None:
+            return
+        if unseal.body["freeze"] != freeze:
+            raise VerificationError(
+                f"entry {unseal.seq}: the unseal names the freeze {unseal.body['freeze']}, "
+                f"but the freeze anchor marks {freeze}"
+            )
+        problem = unseal_proof_error(self.git, snapshot.genesis, unseal.body)
+        if problem:
+            raise VerificationError(f"entry {unseal.seq}: {problem}")
+        from .gate import check_unseal_candidate  # the gate imports this module
+
+        check_unseal_candidate(self.snapshot(freeze), registration, freeze, unseal)
+        # Item 6's rule, applied once: the code at the unseal's commit differs from the
+        # candidate's only in data loading or the seal; every holdout run is at exactly
+        # that commit, which ``rules`` replays (security review round 2, N1).
+        candidate = next(e for e in snapshot.entries if e.hash == unseal.body["candidate"]["open"])
+        paths = snapshot.genesis.body["tree_paths"]
+        problem = holdout_commit_error(
+            self.git, candidate.body["commit"], unseal.body["commit"],
+            [*paths["harness"], *paths[candidate.body["hypothesis"]]],
+        )
+        if problem:
+            raise VerificationError(f"entry {unseal.seq}: {problem}")
 
     def _check_rerun_commits(self, snapshot: LedgerSnapshot) -> None:
         """On replay, each rerun's fix is in its own code and was not in the code of
@@ -730,6 +855,26 @@ def _message(entry: Entry) -> str:
     return f"ledger: entry {entry.seq}, {what.strip()}\n\nentry {entry.hash}\n"
 
 
+def holdout_commit_error(git: Git, candidate: str, commit: str, paths: Sequence[str]) -> str | None:
+    """Why a holdout run at ``commit`` is not at its candidate's commit plus only
+    changes to data loading or the seal under ``paths`` and the whole package, which the
+    runner exports to every run (section 11, item 6; review L3), or None."""
+    known = git.try_text("cat-file", "-t", candidate) == "commit"
+    if not known or not git.is_ancestor(candidate, commit):
+        return f"the holdout run's commit {commit} does not descend from its candidate's {candidate}"
+    changed = git.text(
+        "diff", "--name-only", "--no-renames", candidate, commit, "--", PACKAGE_PATH, *paths
+    ).splitlines()
+    other = sorted(p for p in changed if p not in SEAL_AND_DATA_LOADING)
+    if other:
+        return (
+            f"the code changed since the candidate's run outside data loading and the seal "
+            f"({other[:5]}); section 11, item 6 allows a holdout run only at the candidate's "
+            "commit plus changes to data loading or the seal"
+        )
+    return None
+
+
 # --- the registration through the genesis entry ----------------------------------------
 
 
@@ -808,9 +953,15 @@ def check_key_record(data: bytes) -> None:
     """The holdout key record, exactly (T25, review N8): a JSON object with the keys
     ``kdf`` ("scrypt"), ``n`` (a power of two, at least 2^17), ``r`` (8), ``p`` (1),
     ``dklen`` (at least 32), ``salt`` (lower-case hex, even length, at least 32
-    characters) and ``derived_key`` (lower-case hex of exactly ``dklen`` bytes), and
-    nothing else; the parameters must be ones ``hashlib.scrypt`` accepts within 256 MiB.
-    G1.6 writes the record; this is the contract genesis holds it to."""
+    characters) and ``verifier_sha256`` (the lower-case hex SHA-256 of the scrypt
+    output), and nothing else; the parameters must be ones ``hashlib.scrypt`` accepts
+    within 256 MiB. G1.6 writes the record; this is the contract genesis holds it to.
+
+    The record is the commitment of a commit-reveal (G1.6 security review H1): it holds
+    a hash of the scrypt output, never the output itself, and the unseal entry reveals
+    the output as its ``proof``, which the ledger checks against this hash when the
+    entry is written and on every replay. Offline guessing still costs one scrypt per
+    guess."""
     try:
         record = loads_strict(data)
     except CanonicalError as exc:
@@ -820,7 +971,7 @@ def check_key_record(data: bytes) -> None:
         problem = f"the keys are exactly {sorted(KEY_RECORD_KEYS)}"
     else:
         n, r, p, dklen = record["n"], record["r"], record["p"], record["dklen"]
-        salt, derived = record["salt"], record["derived_key"]
+        salt, verifier = record["salt"], record["verifier_sha256"]
         integers = all(type(v) is int for v in (n, r, p, dklen))
         if record["kdf"] != "scrypt" or not integers:
             problem = "kdf is scrypt and n, r, p and dklen are integers"
@@ -828,14 +979,39 @@ def check_key_record(data: bytes) -> None:
             problem = "n is a power of two of at least 2^17, r is 8 and p is 1"
         elif not isinstance(salt, str) or not re.fullmatch(r"(?:[0-9a-f]{2}){16,}", salt):
             problem = "salt is lower-case hex of at least 16 bytes"
-        elif dklen < 32 or not isinstance(derived, str) or not re.fullmatch(
-            rf"[0-9a-f]{{{2 * dklen}}}", derived
-        ):
-            problem = "dklen is at least 32 and derived_key is lower-case hex of dklen bytes"
+        elif dklen < 32:
+            problem = "dklen is at least 32"
+        elif not isinstance(verifier, str) or not re.fullmatch(r"[0-9a-f]{64}", verifier):
+            problem = "verifier_sha256 is a lower-case hex SHA-256"
         elif not _scrypt_accepts(n, r, p, dklen):
             problem = "hashlib.scrypt refuses these parameters within 256 MiB"
     if problem:
         raise LedgerError(f"the key record breaks its contract (threat model T25): {problem}")
+
+
+def pinned_key_record(git: Git, genesis: Entry) -> dict:
+    """The key record the genesis entry pins, read from its commit and checked against
+    its SHA-256 and the contract; never the working tree's copy (T25)."""
+    pin = genesis.body["key_record"]
+    data = git.blob(pin["commit"], pin["path"])
+    if data is None:
+        raise VerificationError(f"no key record at {pin['commit']}:{pin['path']}, which genesis pins")
+    if sha256_hex(data) != pin["sha256"]:
+        raise VerificationError("the key record at its pinned commit does not match the genesis entry")
+    check_key_record(data)
+    return loads_strict(data)
+
+
+def unseal_proof_error(git: Git, genesis: Entry, body: Mapping) -> str | None:
+    """Why an unseal entry's ``proof`` is not the scrypt output whose SHA-256 the key
+    record genesis pins, or None (security review H1). Compared in constant time."""
+    record = pinned_key_record(git, genesis)
+    proof = body.get("proof")
+    if not isinstance(proof, str) or not re.fullmatch(rf"[0-9a-f]{{{2 * record['dklen']}}}", proof):
+        return "its proof is not the scrypt output of the pinned key record's length"
+    if not hmac.compare_digest(sha256_hex(bytes.fromhex(proof)), record["verifier_sha256"]):
+        return "its proof does not verify against the key record genesis pins: no owner's key (T25)"
+    return None
 
 
 def tree_digests(git: Git, commit: str, tree_paths: Mapping[str, Sequence[str]]) -> dict:

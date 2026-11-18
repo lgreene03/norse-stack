@@ -285,6 +285,12 @@ def test_the_freeze_tag_needs_the_freeze_command_and_a_complete_grid(world):
     for name in ("ledger-freeze", f"{FREEZE_ANCHOR}{head}", "ledger-genesis"):
         with pytest.raises(LedgerError, match="reserved name"):
             world.ledger.tag_milestone(name, "too easy")
+    # G1.6 quant review M3: no benchmark may run after the freeze, so it needs both,
+    # whatever allow_incomplete says.
+    with pytest.raises(gate.GateRefused, match=r"\['B-H2'\] have none"):
+        gate.freeze(world.ledger, "M2", allow_incomplete=True)
+    trial(world, "B-H2")
+    head = world.ledger.local_head()
     with pytest.raises(gate.GateRefused, match="14 registered configurations have no selectable"):
         gate.freeze(world.ledger, "M2")
     assert world.ledger.verify().freeze is None
@@ -353,12 +359,14 @@ def test_the_key_record_contract_is_exact():
         {**good, "salt": "a" * 33},  # odd length
         {**good, "salt": "ab" * 15},  # under 16 bytes
         {**good, "salt": "AB" * 16},  # not lower-case
-        {**good, "dklen": 16, "derived_key": "cd" * 16},
-        {**good, "derived_key": "cd" * 31},  # not dklen bytes
+        {**good, "dklen": 16},
+        {**good, "verifier_sha256": "cd" * 31},  # not a full SHA-256
+        {**good, "verifier_sha256": "CD" * 32},  # not lower-case
         {**good, "kdf": "sha256"},
         {**good, "n": float(2**17)},
         {**good, "sha256_of_passphrase": "ab" * 32},  # an extra field
-        {k: v for k, v in good.items() if k != "derived_key"},
+        {**good, "derived_key": "cd" * 32},  # the scrypt output is never in the record (H1)
+        {k: v for k, v in good.items() if k != "verifier_sha256"},
         {k: v for k, v in good.items() if k != "dklen"},
     ]
     for record in bad:

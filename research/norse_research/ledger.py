@@ -38,6 +38,27 @@ committed return series (T7). It repeats the open entry's configuration hash,
 commit, manifest hash and cost basis, so each result entry holds every field G1.5
 names on its own.
 
+**Unseal** (G1.6) is written at most once, after the freeze anchor exists, before any
+holdout file is fetched again and before any holdout run. It names the commit and file
+hashes of the pre-registration tag the genesis entry names, the holdout candidate's
+configuration id, hypothesis and configuration hash, the open and result entries of
+its selectable run, the frozen ledger commit the candidate was chosen on, and the
+hashes of the holdout manifest and the key record genesis pins (section 11, item 4),
+and its ``proof``: the scrypt output of the owner's passphrase, whose SHA-256 the key
+record holds (a commit-reveal; security review H1). Only someone who knows the
+passphrase can produce it, and ``gitledger`` checks it against the pinned record when
+the entry is written and on every replay. A second unseal entry fails verification
+here; its place after the freeze, its proof and its candidate are checked by
+``gitledger`` and ``gate``.
+
+**Attempt** and **attempt close** (G1.6; security review H2, M1) bracket every unsealed
+run of the holdout: the attempt is written before the strategy is first given the
+unseal, and its close records the outcome (``returned``, ``failed``, or ``abandoned``
+when a later run closes an attempt a killed process left open). Attempts run one at a
+time, a completed holdout result needs its own attempt closed as returned, and there is
+only one. The unseal records the commit item 6's rule was applied to, and ``rules``
+holds every holdout run to exactly that commit (security review round 2, N1).
+
 **N** is the number of open entries of kind ``trial``: every trial opened counts
 once, whether it completes, fails or never finishes, and reruns count again. It is
 never deduplicated by configuration hash (section 9; T1).
@@ -70,6 +91,14 @@ from .registration import (
     TRIAL,
 )
 
+UNSEAL = "unseal"
+# A holdout attempt (G1.6; security review H2): written before every unsealed run, and
+# closed after it with its outcome.
+ATTEMPT = "attempt"
+ATTEMPT_CLOSE = "attempt_close"
+RETURNED = "returned"
+ABANDONED = "abandoned"
+
 FORMAT = "norse-stack/trial-ledger/v1"
 LEDGER_BRANCH = "ledger"
 CODE_BRANCH = "main"
@@ -100,6 +129,12 @@ _KEYS = {
     RESULT: _COMMON
     | {"opens", "open_seq", "status", "configuration_sha256", "commit", "manifest_sha256",
        "cost_basis", "result", "result_sha256", "returns_path"},
+    UNSEAL: _COMMON
+    | {"preregistration", "configuration_id", "hypothesis", "configuration_sha256",
+       "candidate", "freeze", "holdout_manifest_sha256", "key_record_sha256", "proof",
+       "commit"},
+    ATTEMPT: _COMMON | {"opens", "open_seq", "commit"},
+    ATTEMPT_CLOSE: _COMMON | {"attempt", "attempt_seq", "outcome"},
 }
 # Fields a result entry copies from the open entry it closes.
 _COPIED = ("configuration_sha256", "commit", "manifest_sha256", "cost_basis")
@@ -170,16 +205,20 @@ def _mapping(seq: int, name: str, value: Any, keys: set | frozenset | None = Non
     return value
 
 
-def _check_genesis(seq: int, body: dict) -> None:
-    if body["format"] != FORMAT:
-        raise _fail(seq, f"format {body['format']!r}, expected {FORMAT}")
+def _check_preregistration(seq: int, body: dict, what: str) -> None:
     prereg = _mapping(seq, "preregistration", body["preregistration"], {"tag", "commit", "files"})
     if not isinstance(prereg["tag"], str) or not prereg["tag"].startswith("prereg-"):
-        raise _fail(seq, "the genesis entry names no prereg-* tag")
+        raise _fail(seq, f"the {what} entry names no prereg-* tag")
     _git_id(seq, "preregistration.commit", prereg["commit"])
     files = _mapping(seq, "preregistration.files", prereg["files"], set(PREREGISTRATION_FILES))
     for name, digest in files.items():
         _sha(seq, f"preregistration.files[{name}]", digest)
+
+
+def _check_genesis(seq: int, body: dict) -> None:
+    if body["format"] != FORMAT:
+        raise _fail(seq, f"format {body['format']!r}, expected {FORMAT}")
+    _check_preregistration(seq, body, "genesis")
     manifests = _mapping(seq, "manifests", body["manifests"], {"development", "holdout"})
     for name, digest in manifests.items():
         _sha(seq, f"manifests.{name}", digest)
@@ -256,7 +295,134 @@ def _check_result(seq: int, body: dict) -> None:
         raise _fail(seq, f"unknown status {body['status']!r}")
 
 
-_CHECKS = {GENESIS: _check_genesis, OPEN: _check_open, RESULT: _check_result}
+def _check_unseal(seq: int, body: dict) -> None:
+    _check_preregistration(seq, body, "unseal")
+    if body["hypothesis"] not in HYPOTHESES:
+        raise _fail(seq, f"unknown hypothesis {body['hypothesis']!r}")
+    if not isinstance(body["configuration_id"], str) or not body["configuration_id"]:
+        raise _fail(seq, "the unseal names no configuration")
+    _sha(seq, "configuration_sha256", body["configuration_sha256"])
+    candidate = _mapping(seq, "candidate", body["candidate"], {"open", "result"})
+    _sha(seq, "candidate.open", candidate["open"])
+    _sha(seq, "candidate.result", candidate["result"])
+    _git_id(seq, "freeze", body["freeze"])
+    _sha(seq, "holdout_manifest_sha256", body["holdout_manifest_sha256"])
+    _sha(seq, "key_record_sha256", body["key_record_sha256"])
+    proof = body["proof"]
+    if not isinstance(proof, str) or not re.fullmatch(r"(?:[0-9a-f]{2}){32,}", proof):
+        raise _fail(seq, "the unseal's proof is not a scrypt output (lower-case hex, 32 bytes or more)")
+    _git_id(seq, "commit", body["commit"])
+
+
+def _check_attempt(seq: int, body: dict) -> None:
+    _sha(seq, "opens", body["opens"])
+    _git_id(seq, "commit", body["commit"])
+    if type(body["open_seq"]) is not int:
+        raise _fail(seq, "open_seq is not an entry number")
+
+
+def _check_attempt_close(seq: int, body: dict) -> None:
+    _sha(seq, "attempt", body["attempt"])
+    if type(body["attempt_seq"]) is not int:
+        raise _fail(seq, "attempt_seq is not an entry number")
+    if body["outcome"] not in (RETURNED, FAILED, ABANDONED):
+        raise _fail(seq, f"unknown attempt outcome {body['outcome']!r}")
+
+
+_CHECKS = {
+    GENESIS: _check_genesis, OPEN: _check_open, RESULT: _check_result, UNSEAL: _check_unseal,
+    ATTEMPT: _check_attempt, ATTEMPT_CLOSE: _check_attempt_close,
+}
+
+
+def _closes(entries: Sequence[Entry], attempt: Entry) -> Entry | None:
+    return next(
+        (e for e in entries if e.type == ATTEMPT_CLOSE and e.body["attempt"] == attempt.hash), None
+    )
+
+
+def _holdout_completed(entries: Sequence[Entry]) -> bool:
+    held = {e.hash for e in entries if e.type == OPEN and e.body["kind"] == HOLDOUT}
+    return any(e.type == RESULT and e.body["opens"] in held and e.body["status"] == COMPLETED
+               for e in entries)
+
+
+def _attempt_error(body: dict, entries: list[Entry], hashes: dict[str, int]) -> str | None:
+    """Why an attempt, an attempt's close or a holdout result does not follow from the
+    entries before it, or None (security review H2 and M1). Attempts are strictly one
+    at a time: each is closed before the next opens. A completed holdout result needs
+    its own attempt closed with outcome ``returned``, and there is at most one."""
+    if body["type"] == ATTEMPT:
+        opened = entries[hashes[body["opens"]]] if body["opens"] in hashes else None
+        if opened is None or opened.type != OPEN or opened.body["kind"] != HOLDOUT:
+            return "an attempt names no earlier holdout run"
+        if opened.seq != body["open_seq"] or opened.body["commit"] != body["commit"]:
+            return "an attempt's open_seq or commit is not its holdout run's"
+        if any(e.type == RESULT and e.body["opens"] == opened.hash for e in entries):
+            return "an attempt for a holdout run that already has its result"
+        attempts = [e for e in entries if e.type == ATTEMPT]
+        if any(a.body["opens"] == opened.hash for a in attempts):
+            return "a second attempt within one holdout run"
+        unclosed = [a.seq for a in attempts if _closes(entries, a) is None]
+        if unclosed:
+            return (
+                f"an attempt while attempt {unclosed[0]} is open: attempts run one at a time "
+                "(security review M1)"
+            )
+        if _holdout_completed(entries):
+            return "an attempt after the holdout result spent the seal (section 11, item 6)"
+        return None
+    if body["type"] == ATTEMPT_CLOSE:
+        attempt = entries[hashes[body["attempt"]]] if body["attempt"] in hashes else None
+        if attempt is None or attempt.type != ATTEMPT or attempt.seq != body["attempt_seq"]:
+            return "an attempt's close names no earlier attempt"
+        if _closes(entries, attempt) is not None:
+            return f"attempt {attempt.seq} is closed twice"
+        return None
+    # A result closing a holdout run.
+    if body["status"] != COMPLETED:
+        return None
+    if _holdout_completed(entries):
+        return "a second completed holdout result: one result spends the seal (section 11, item 6)"
+    attempt = next(
+        (e for e in entries if e.type == ATTEMPT and e.body["opens"] == body["opens"]), None
+    )
+    closed = _closes(entries, attempt) if attempt is not None else None
+    if closed is None or closed.body["outcome"] != RETURNED:
+        return "a completed holdout result needs its own attempt, closed as returned"
+    return None
+
+
+def _unseal_error(body: dict, entries: list[Entry], hashes: dict[str, int]) -> str | None:
+    """Why an unseal entry is not one the seal would write over the entries before it,
+    or None. Its place after the freeze and its candidate need git and the gate."""
+    if any(e.type == UNSEAL for e in entries):
+        raise VerificationError(
+            "a second unseal entry: the holdout is unsealed once (section 11, item 4; T23)"
+        )
+    genesis = genesis_of(entries)
+    if genesis is None:
+        return "an unseal precedes the genesis entry"
+    if body["preregistration"] != genesis.body["preregistration"]:
+        return "it names a pre-registration other than the genesis entry's (T24)"
+    if body["key_record_sha256"] != genesis.body["key_record"]["sha256"]:
+        return "it names a key record other than the one genesis pins (T25)"
+    if body["holdout_manifest_sha256"] != genesis.body["manifests"]["holdout"]:
+        return "it names a holdout manifest other than the registered one"
+    opened = hashes.get(body["candidate"]["open"])
+    closed = hashes.get(body["candidate"]["result"])
+    if opened is None or closed is None:
+        return "its candidate's open or result entry is not earlier in the ledger"
+    opened, closed = entries[opened], entries[closed]
+    if opened.type != OPEN or opened.body["kind"] != TRIAL or any(
+        opened.body[k] != body[k] for k in ("configuration_id", "hypothesis", "configuration_sha256")
+    ):
+        return "its candidate is not a trial entry of the configuration it names"
+    if closed.type != RESULT or closed.body["opens"] != opened.hash or closed.body["status"] != (
+        COMPLETED
+    ):
+        return "its candidate's result is not the completed result of that trial"
+    return None
 
 
 # --- verification ----------------------------------------------------------------------
@@ -345,6 +511,16 @@ def parse_ledger(data: bytes) -> tuple[Entry, ...]:
             for key in _COPIED:
                 if body[key] != entries[opened].body[key]:
                     raise _fail(index, f"its {key} differs from the open entry's")
+        if body["type"] == UNSEAL:
+            problem = _unseal_error(body, entries, hashes)
+            if problem:
+                raise _fail(index, problem)
+        if body["type"] in (ATTEMPT, ATTEMPT_CLOSE) or (
+            body["type"] == RESULT and entries[hashes[body["opens"]]].body["kind"] == HOLDOUT
+        ):
+            problem = _attempt_error(body, entries, hashes)
+            if problem:
+                raise _fail(index, problem)
         entry = Entry(line, sha256_hex(line.encode("ascii")), body)
         hashes[entry.hash] = index
         entries.append(entry)
@@ -367,6 +543,11 @@ def genesis_of(entries: Sequence[Entry]) -> Entry | None:
 def trial_count(entries: Sequence[Entry]) -> int:
     """N: the open entries of kind trial, never deduplicated (section 9)."""
     return sum(1 for e in entries if e.type == OPEN and e.body["kind"] == TRIAL)
+
+
+def unseal_of(entries: Sequence[Entry]) -> Entry | None:
+    """The ledger's unseal entry, if it holds one (it holds at most one)."""
+    return next((e for e in entries if e.type == UNSEAL), None)
 
 
 # --- return series ---------------------------------------------------------------------

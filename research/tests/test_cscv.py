@@ -78,6 +78,45 @@ def test_flat_trial_scores_zero():
     assert result.pbo == 0.0
 
 
+def _brute_force_pbo(columns, blocks, infinite_when_flat=False):
+    """CSCV on concatenated rows, the per-day Sharpe ratio 0 for no variance as section
+    10 registers it (or, to show the old behaviour, plus or minus infinity)."""
+    from itertools import combinations
+    from statistics import fmean, stdev
+
+    def sharpe(values):
+        sd = stdev(values)
+        if sd == 0:
+            mean = fmean(values)
+            return math.copysign(math.inf, mean) if infinite_when_flat and mean else 0.0
+        return fmean(values) / sd
+
+    bounds = block_bounds(len(columns[0]), blocks)
+    low, total = 0, 0
+    for chosen in combinations(range(blocks), blocks // 2):
+        rest = [b for b in range(blocks) if b not in chosen]
+        ins = [sharpe([v for b in chosen for v in c[slice(*bounds[b])]]) for c in columns]
+        outs = [sharpe([v for b in rest for v in c[slice(*bounds[b])]]) for c in columns]
+        best = max(range(len(columns)), key=lambda j: (ins[j], -j))
+        rank = sum(o < outs[best] for o in outs) + (sum(o == outs[best] for o in outs) + 1) / 2
+        w = rank / (len(columns) + 1)
+        low += math.log(w / (1 - w)) <= 0
+        total += 1
+    return low / total
+
+
+def test_a_constant_non_zero_trial_scores_zero_not_infinity():
+    # G1.6 quant review L5: a half with no variance scores 0 whatever its constant, so a
+    # constant positive trial is not the in-sample winner of every split.
+    rng = random.Random(1)
+    columns = [[rng.gauss(0.0, 0.01) for _ in range(40)] for _ in range(4)] + [[0.001] * 40]
+    result = cscv(columns, blocks=4)
+    assert result.pbo == _brute_force_pbo(columns, 4) == pytest.approx(1 / 3)
+    # Scored as plus infinity, the constant column won in sample everywhere and ranked
+    # top out of sample, so no split counted as overfit and the PBO was 0.
+    assert _brute_force_pbo(columns, 4, infinite_when_flat=True) == 0.0
+
+
 def test_rejects_malformed_input():
     with pytest.raises(ValueError):
         cscv([[0.1, 0.2] * 16])  # one trial
