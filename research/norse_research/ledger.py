@@ -87,6 +87,7 @@ from .canonical import (
     sha256_hex,
     value_hash,
 )
+from .formats import DatasetSpec
 from .registration import (
     HOLDOUT,
     HYPOTHESES,
@@ -120,6 +121,10 @@ TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 _TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 _RETURNS_FILE = re.compile(r"ledger/returns/([0-9a-f]{64})\.csv")
+# A gap's ends as the manifests record them (manifest.gap_record).
+_GAP_TIME = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}")
+# The whole package the harness digest must cover (security review round 3).
+HARNESS_PACKAGE = "research/norse_research"
 
 _COMMON = frozenset({"seq", "prev", "type", "time"})
 _KEYS = {
@@ -132,7 +137,7 @@ _KEYS = {
        "reserve_reason", "strategy", "environment"},
     RESULT: _COMMON
     | {"opens", "open_seq", "status", "configuration_sha256", "commit", "manifest_sha256",
-       "cost_basis", "result", "result_sha256", "returns_path"},
+       "cost_basis", "result", "result_sha256", "returns_path", "crossed_gaps"},
     UNSEAL: _COMMON
     | {"preregistration", "configuration_id", "hypothesis", "configuration_sha256",
        "candidate", "accepted_diff", "holdout_manifest_sha256", "key_record_sha256", "proof",
@@ -238,6 +243,9 @@ def _check_genesis(seq: int, body: dict) -> None:
     for group, listed in paths.items():
         if not isinstance(listed, list) or not all(isinstance(p, str) and p for p in listed):
             raise _fail(seq, f"tree_paths.{group} is not a list of paths")
+    if not any(HARNESS_PACKAGE == p or HARNESS_PACKAGE.startswith(p.rstrip("/") + "/")
+               for p in paths["harness"]):
+        raise _fail(seq, f"tree_paths.harness does not cover all of {HARNESS_PACKAGE}")
     key = _mapping(seq, "key_record", body["key_record"], {"commit", "path", "sha256"})
     _git_id(seq, "key_record.commit", key["commit"])
     _sha(seq, "key_record.sha256", key["sha256"])
@@ -295,8 +303,38 @@ def _check_result(seq: int, body: dict) -> None:
     elif body["status"] == FAILED:
         if body["result_sha256"] is not None or body["returns_path"] is not None:
             raise _fail(seq, "a failed run has no return series")
+        if body["crossed_gaps"] != []:
+            raise _fail(seq, "a failed run lists no crossed gaps")
     else:
         raise _fail(seq, f"unknown status {body['status']!r}")
+    _check_crossed_gaps(seq, body["crossed_gaps"])
+
+
+def _check_crossed_gaps(seq: int, gaps: Any) -> None:
+    """Section 5, Gaps: "a gap the committed manifest records is crossed and listed in
+    the run's ledger entry". Only the shape the harness writes: a sorted list, without
+    repeats, of [series, after, before, missing], the times as the manifests record
+    them. The harness checks each against the registered manifest before writing it."""
+    if not isinstance(gaps, list):
+        raise _fail(seq, "crossed_gaps is not a list")
+    for gap in gaps:
+        if not (
+            isinstance(gap, list) and len(gap) == 4
+            and isinstance(gap[0], str) and _is_series(gap[0])
+            and all(isinstance(t, str) and _GAP_TIME.fullmatch(t) for t in gap[1:3])
+            and gap[1] < gap[2]
+            and isinstance(gap[3], int) and not isinstance(gap[3], bool) and gap[3] >= 0
+        ):
+            raise _fail(seq, f"crossed_gaps holds {gap!r}, not [series, after, before, missing]")
+    if any(b <= a for a, b in pairwise(gaps)):
+        raise _fail(seq, "crossed_gaps is not sorted without repeats")
+
+
+def _is_series(name: str) -> bool:
+    try:
+        return DatasetSpec.from_name(name).name == name
+    except ValueError:
+        return False
 
 
 def _check_unseal(seq: int, body: dict) -> None:

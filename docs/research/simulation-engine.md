@@ -289,23 +289,46 @@ refuses a load whose first row is later than its declared run. And `backtest` re
 market read to any horizon but the window's end, since an instrument ends where its data
 stops before the horizon (section 4).
 
-Three things the engine cannot supply, each for the lead:
+Series spans come from the data-loading layer, not from the strategies (quant review,
+finding 3). The loader refuses a range its data does not span and a month the manifest
+pins no file for, so the engine must read each series in its archived runs, split where
+whole months are missing (three spot series, FTTUSDT's ten-month suspension among them).
+`DatasetLoader.coverage` derives those runs from the committed manifests' metadata
+alone, each series' first and last row, its recorded gaps and its pinned months, and the
+runner's `DataView` exposes it as `coverage(series)`. A run is split only at a recorded
+gap that spans a month with no pinned file; a gap inside a pinned month stays inside one
+run and is crossed. In the holdout run the loader holds the holdout manifest beside the
+development one, so the coverage runs on into the holdout from that manifest's metadata
+without reading a holdout file, and in a rehearsal it is the development coverage. No
+strategy commits a span constant, and a wrong span is a fix to the loader, which section
+11, item 6 permits between a candidate's selectable run and its holdout run.
 
-* **Series spans.** The loader refuses a range its data does not span and a month the
-  manifest pins no file for, and the `DataView` does not expose the manifest's coverage,
-  so a strategy must name each series' archived runs: its first and last open, split
-  where whole months are missing (three spot series, FTTUSDT's ten-month suspension
-  among them; the engine then reads each run alone). The strategies can carry these as
-  committed constants from `research/coverage/series-coverage.json`, whose
-  `missing_months` gives the splits; for the holdout run they must include the holdout's
-  spans before any trial runs (section 11, item 6). The alternative is for the runner's
-  `DataView` to expose them, which is a change to `runner.py`.
-* **Recorded gaps crossed.** Section 5 says a crossed gap is listed in the run's ledger
-  entry. The engine collects the gaps each load returns (`Market.crossed_gaps`), but the
-  runner's result carries only the returns, so the harness has no channel for them yet.
-* **huginn's defaults.** G1.9's "Done when" includes aligning huginn's executor and
-  research gateway cost defaults, which live in the huginn repository; a separate huginn
-  pull request does that.
+The gaps a run crossed reach its ledger entry (finding 4; section 5: "a gap the
+committed manifest records is crossed and listed in the run's ledger entry"). The loader
+records each recorded gap a load accepts, the runner returns them beside the returns,
+and the harness writes them to the result entry as `crossed_gaps`, a sorted list of
+`[series, after, before, missing]` in the manifest's own form. The harness first checks
+each against the registered manifests and fails the run on any it cannot find there.
+Replay accepts the field only in that shape, and a failed run lists none. The engine
+still collects the same gaps itself (`Market.crossed_gaps`), which the tests use; the
+ledger takes the loader's.
+
+Strategies may use the engine but not change it (security review round 3). The source
+check refuses assigning to or deleting an attribute or item of any imported name, reading
+one's private attribute, and subclassing a class imported from this package, so no line in
+a hypothesis file can rebind the engine's fill, cost or funding path for its run (E1). It
+also refuses `import norse_research.<x>` and the bare name `norse_research`, since the
+package root reaches every module the runner has already imported, the loader, the store
+and the runner itself; strategies write `from norse_research.sim import ...` instead
+(E2). The check reads names, not values, so a module bound to a second name and changed
+through it is not caught here. That is deliberate evasion visible in the committed diff,
+and the runner's audit hook stands behind it, as for every other source rule. Genesis,
+and replay of a genesis entry, refuse harness paths that do not cover all of
+`research/norse_research`, so the engine is always inside the harness tree digest each
+open entry records.
+
+huginn's executor and research gateway cost defaults, which G1.9's "Done when" also
+names, live in the huginn repository; a separate huginn pull request aligns them.
 
 No drawdown breaker is modelled: the registration has none, and the register's risk about
 huginn's replay breaker concerns huginn, not this engine.

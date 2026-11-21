@@ -219,13 +219,13 @@ class RowsSource(FillSource):
 
 @dataclass(frozen=True)
 class Span:
-    """The open times of the first and last row of one archived run of a series, as the
-    committed coverage metadata (research/coverage/series-coverage.json) records them.
+    """The times of the first and last row of one archived run of a series, as the
+    runner's ``DataView.coverage`` reports them from the committed manifests' metadata.
     The loader refuses a range its data does not span and a month the manifest pins no
     file for, so reads stay inside the runs. A series whose archive skips whole months
-    (FTTUSDT's suspension from 2022-12 to 2023-08, for example, the coverage file's
-    ``missing_months``) is given as a tuple of runs split there; gaps inside a pinned
-    month stay inside one run and are crossed as recorded (section 5, Gaps)."""
+    (FTTUSDT's suspension from 2022-12 to 2023-08, for example) comes as several runs
+    split there; gaps inside pinned months stay inside one run and are crossed as
+    recorded (section 5, Gaps)."""
 
     first_open: int
     last_open: int
@@ -243,15 +243,24 @@ def runs_of(spans) -> tuple[Span, ...]:
 
 def _load_runs(load: Callable, name: str, runs: Sequence[Span], lo: int, hi: int,
                gaps: dict[str, set]) -> list:
-    """Every row of ``name`` in [lo, hi), read run by run, recording crossed gaps."""
-    step = step_of(name) or 1
+    """Every row of ``name`` in [lo, hi), read run by run, recording crossed gaps.
+
+    Coverage times have the manifests' minute precision: exact for a bar, while a
+    funding settlement's ``calc_time`` lies up to a minute after it (the archive's
+    millisecond jitter), so a funding run's read ends a minute after its last time."""
+    step = step_of(name)
     rows: list = []
     for run in runs:
-        start, end = max(lo, run.first_open), min(hi, run.last_open + step)
+        pad = step if step is not None else FUNDING_KNOWN_SLACK_MS
+        start, end = max(lo, run.first_open), min(hi, run.last_open + pad)
         if start < end:
             loaded = load(name, _dt(start), _dt(end), accept_recorded_gaps=True)
             first = loaded.rows[0][0] if loaded.rows else None
-            if start == run.first_open and first != run.first_open:
+            if first is not None:
+                # The first on-grid bar, or the settlement's minute.
+                first = first if step is not None else first - first % 60_000
+            expected = run.first_open if step is None else -(-run.first_open // step) * step
+            if start == run.first_open and first != expected:
                 # A run that starts later than its span says would move the instrument's
                 # first bar (section 4), and with it D13's 120-day rule and section 6's
                 # volatility "over every return of the instrument".
@@ -357,12 +366,14 @@ class Market:
         return cls(rest, RowsSource(fills), horizon)
 
     @classmethod
-    def from_view(cls, data_view, spans: Mapping, horizon: int,
+    def from_view(cls, data_view, series: Iterable[str], horizon: int,
                   history_from: int | None = None) -> Market:
-        """A market read through the runner's ``DataView``: each series in ``spans``
-        (a ``Span`` or a tuple of runs) that is not 15-minute is loaded whole, run by
-        run, from its first archived row to ``horizon``, and 15-minute ones lazily.
-        Section 5, Gaps: every load accepts the gaps the committed manifest records,
+        """A market read through the runner's ``DataView``: each named series that is not
+        15-minute is loaded whole, run by run, from its first archived row to
+        ``horizon``, and 15-minute ones lazily. The runs come from
+        ``data_view.coverage``, which reads the committed manifests' metadata, so no
+        strategy commits a span and a span error is a data-loading fix (section 11, item
+        6). Section 5, Gaps: every load accepts the gaps the committed manifest records,
         and only those. ``backtest`` refuses a ``horizon`` other than the window's end.
 
         ``history_from`` may only start the load at or before every series' first
@@ -373,8 +384,8 @@ class Market:
         whole: dict[str, list] = {}
         fill_spans: dict[str, tuple[Span, ...]] = {}
         gaps: dict[str, set] = {}
-        for name, span in spans.items():
-            runs = runs_of(span)
+        for name in series:
+            runs = runs_of([Span(first, last) for first, last in data_view.coverage(name)])
             if name.endswith("/" + FILL_INTERVAL):
                 fill_spans[name] = runs
                 continue

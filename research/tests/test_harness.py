@@ -115,6 +115,64 @@ def test_every_run_appends_an_entry_holding_the_fields_g15_names(world):
     assert opened.body["strategy"] == world.pin("H1-01")
     assert set(opened.body["trees"]) == {"harness", "H1", "H2"}
     assert opened.body["environment"]["git"].startswith("git version")
+    assert closed.body["crossed_gaps"] == []  # the run's loads crossed no recorded gap
+
+
+def test_a_result_entry_lists_the_recorded_gaps_the_run_crossed(tmp_path, monkeypatch):
+    """Section 5, Gaps: "a gap the committed manifest records is crossed and listed in
+    the run's ledger entry" (quant review 1, finding 4). The strategy also reads the
+    series' coverage through its DataView, from the manifest (finding 3)."""
+    dropped = int(datetime(2025, 12, 10, tzinfo=UTC).timestamp()) * 1000
+    world = a_world(tmp_path, monkeypatch, behaviours={"H1-01": "crosses_gap"}, drop={dropped})
+    try:
+        record = run(world, "H1-01")
+        assert record.status == "completed", record.error
+        manifest = Manifest.load(world.repo / "research/manifests/binance-vision-development.json")
+        (gap,) = manifest.datasets["spot/klines/XUSDT/1d"]["gaps"]
+        assert gap == ["2025-12-09 00:00", "2025-12-11 00:00", 1]
+        result = remote_entries(world)[-1]
+        assert result.hash == record.result_entry.hash
+        assert result.body["crossed_gaps"] == [["spot/klines/XUSDT/1d", *gap]]
+    finally:
+        world.close()
+
+
+def test_the_harness_lists_only_gaps_a_registered_manifest_records(tmp_path):
+    """The runner's report reaches the ledger only as gaps the registered manifests
+    record; anything else fails the run. The holdout run passes both manifests."""
+    from norse_research.formats import DatasetSpec
+    from norse_research.manifest import build, write
+    from norse_research.periods import DEVELOPMENT, HOLDOUT
+    from norse_research.store import ArchiveStore
+    from synthetic_store import make_series, month_times
+
+    store = ArchiveStore(tmp_path / "mirror")
+    name = "spot/klines/XUSDT/1d"
+    times = {m: month_times(DatasetSpec.from_name(name), m)
+             for m in ("2025-12", "2026-01")}
+    make_series(store, name, "2025-11", "2026-02", drop={times["2025-12"][9], times["2026-01"][4]})
+    manifests = []
+    for period in (DEVELOPMENT, HOLDOUT):
+        write(build(store, period, [(DatasetSpec.from_name(name),
+                                     ["2025-11", "2025-12"] if period == DEVELOPMENT
+                                     else ["2026-01", "2026-02"])]), tmp_path / period)
+        manifests.append(Manifest.load(tmp_path / period))
+    development, holdout = manifests
+    (dev_gap,) = development.datasets[name]["gaps"]
+    (held_gap,) = holdout.datasets[name]["gaps"]
+    assert harness.crossed_gaps([], [development]) == []
+    assert harness.crossed_gaps([[name, *dev_gap], [name, *dev_gap]], [development]) == [
+        [name, *dev_gap]]
+    assert harness.crossed_gaps([[name, *held_gap], [name, *dev_gap]],
+                                [development, holdout]) == [[name, *dev_gap], [name, *held_gap]]
+    with pytest.raises(harness.StrategyFailed, match="reported no crossed gaps"):
+        harness.crossed_gaps(None, [development])  # a runner that reports nothing
+    for bad in ([name, *held_gap],  # recorded, but only in the holdout manifest
+                [name, dev_gap[0], dev_gap[1], dev_gap[2] + 1],
+                [name, dev_gap[0], "2025-12-12 00:00", dev_gap[2]],
+                ["spot/klines/YUSDT/1d", *dev_gap], [name, *dev_gap[:2]], name, None):
+        with pytest.raises(harness.StrategyFailed, match="no registered manifest records"):
+            harness.crossed_gaps([bad], [development])
 
 
 # --- T1: every run counts --------------------------------------------------------------
@@ -548,6 +606,61 @@ def test_strategy_modules_import_only_the_allowlist(world, calls):
     with pytest.raises(RunRefused, match=r"strategies/h1/helper\.py reaches outside"):
         run(world)
     assert calls == []
+
+
+def test_a_strategy_cannot_change_or_reach_behind_the_code_it_imports():
+    """Security review round 3, E1 and E2, from its probe (probe_pr61_sources.py). With
+    the engine allowlisted, one line in a hypothesis file could rebind its fill or cost
+    path for that run while the ledger certified the registered rules (E1); and
+    ``import norse_research.<x>`` binds the package root, which reaches every module the
+    runner has imported, the loader, the store and the runner itself (E2)."""
+
+    def problems(source):
+        return disallowed_imports(source, "strategies.h1.probe", False, ["strategies/h1"])
+
+    refused = {
+        "E1": "from norse_research.sim import execution, model\n"
+              "execution._apply = lambda book, costs, unit, rows, scale: []\n"
+              "model.Costs.total = 0.0\n",
+        "E2": "import norse_research.sim\n"
+              "def run(config, data):\n"
+              "    norse_research.periods.inside_unsealed_run('e' * 64)\n"
+              "    norse_research.store.ArchiveStore('x').read('k', holdout_audit=True)\n"
+              "    norse_research.runner.json.dumps = None\n",
+        "E3": "import norse_research.formats\nnorse_research.loader.DatasetLoader\n",
+        "dotted import of a sim submodule": "import norse_research.sim.execution\n",
+        "an alias of the package": "import norse_research.sim as sim\n",
+        "sys through the root": "import norse_research.sim\nnorse_research.runner.sys\n",
+        "deletion": "from norse_research.sim import execution\ndel execution.execute_bar\n",
+        "augmented assignment": "from norse_research.sim import model\nmodel.FEE_BPS += 1\n",
+        "an item of an imported table":
+            "from norse_research.sim import model\nmodel.TABLE['x'] = 1\n",
+        "an imported class's attribute": "from norse_research.sim import Costs\nCosts.fee = 0\n",
+        "a private attribute read": "from norse_research.sim import execution\n"
+                                    "f = execution._apply\n",
+        "a subclass of an engine class": "from norse_research.sim import Book\n"
+                                         "class Free(Book):\n    pass\n",
+        "a standard module changed": "import math\nmath.pi = 3\n",
+    }
+    for case, source in refused.items():
+        assert problems(source), case
+    def lines(source):
+        return {int(p.split(":")[0].split()[1]) for p in problems(source)}
+
+    assert lines(refused["E1"]) == {2, 3}
+    assert lines(refused["E2"]) == {1, 3, 4, 5}  # the import and every reach through it
+    # The engine's public surface is the point of allowlisting it (E4, informational);
+    # changing what a strategy owns is untouched.
+    accepted = (
+        "from norse_research.sim import targeting\ntargeting.rank_month_ends\n",
+        "from norse_research.sim import Book\n"
+        "def run(config, data):\n"
+        "    book = Book(cash=0.0)\n    book.cash = 1.0\n    weights = {}\n"
+        "    weights['X'] = 0.5\n    del weights['X']\n    return []\n",
+        "from dataclasses import dataclass\n@dataclass\nclass Mine:\n    x: int = 0\n",
+    )
+    for source in accepted:
+        assert problems(source) == [], source
 
 
 def test_committed_strategy_code_never_runs_before_its_checks(world, calls):

@@ -1359,7 +1359,7 @@ def test_an_off_ledger_peek_then_a_rewriting_first_attempt_is_refused(ready, tmp
         ready.ledger.git, entry.body["commit"], genesis.body["strategies"][CANDIDATE],
         genesis.body["tree_paths"]["H1"], "research/manifests/binance-vision-development.json",
         config, "e" * 64, ready.store, unsealed=(seal.HOLDOUT_MANIFEST, entry.hash),
-    )
+    ).returns
     assert len(peeked) == 2802 + 304 and ready.remote_ledger() == before
     commit_a_data_loading_change(ready)
     out = run_at_head_in_a_fresh_process(ready, tmp_path)

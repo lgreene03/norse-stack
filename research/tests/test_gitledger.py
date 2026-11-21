@@ -623,6 +623,8 @@ def test_write_genesis_validates_its_inputs(tmp_path, monkeypatch):
             ({"tree_paths": {**TREE_PATHS, "H2": ["strategies/missing"]}}, "is not on the remote"),
             ({"tree_paths": {**TREE_PATHS, "H1": ["strategies"]}}, "overlaps"),
             ({"tree_paths": {**TREE_PATHS, "H1": ["research"]}}, "overlaps"),
+            ({"tree_paths": {**TREE_PATHS, "harness": ["research/norse_research/sim"]}},
+             "must cover all of research/norse_research"),
             ({}, "reaches outside the strategy allowlist"),
             ({"strategies": {k: v for k, v in world.pins.items() if k != "B-H2"}},
              "must pin exactly"),

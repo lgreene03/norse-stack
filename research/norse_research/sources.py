@@ -9,6 +9,11 @@ genesis step read it as text:
   ``open``, ``eval``, ``getattr`` and their kind, and may not touch a dunder attribute or
   a name such as ``sys``, ``modules`` or ``attrgetter`` through which a module it may not
   import could be reached (L4, N9);
+* nothing a module imports may be changed or reached behind: no assignment to or
+  deletion of an imported name's attributes or items, no private attribute of one, no
+  subclass of a class from this package, and no ``import norse_research.<x>`` or bare
+  ``norse_research``, which would reach every module the runner has loaded (security
+  review round 3, E1 and E2);
 * the pinned module declares ``CONFIGURATIONS``, ``PARAMETERS`` and ``DEFAULTS`` as
   literals assigned once, and defines the pinned function at its top level once, so
   what enters the configuration hash is read from the committed text (M4, N1, N4).
@@ -82,17 +87,16 @@ def disallowed_imports(
 
     problems = []
     package = module if is_package else module.rpartition(".")[0]
-    for node in ast.walk(ast.parse(source)):
+    tree = ast.parse(source)
+    imported = _imported_names(tree, package)
+    problems += _engine_tampering(tree, imported)
+    for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             problems += [
                 f"line {node.lineno}: import {a.name}" for a in node.names if not allowed(a.name)
             ]
         elif isinstance(node, ast.ImportFrom):
-            base = node.module or ""
-            if node.level:
-                parts = package.split(".") if package else []
-                parent = parts[: len(parts) - (node.level - 1)] if node.level > 1 else parts
-                base = ".".join([*parent, *([node.module] if node.module else [])])
+            base = _resolved_base(node, package)
             if not allowed(base) and not all(allowed(f"{base}.{a.name}") for a in node.names):
                 problems.append(f"line {node.lineno}: from {base or '.'} import ...")
             problems += [
@@ -113,6 +117,88 @@ def disallowed_imports(
             node.id in ("__builtins__", "__loader__", "__spec__") or node.id in FORBIDDEN_NAMES
         ):
             problems.append(f"line {node.lineno}: name {node.id}")
+    return problems
+
+
+PACKAGE = "norse_research"
+
+
+def _resolved_base(node: ast.ImportFrom, package: str) -> str:
+    base = node.module or ""
+    if node.level:
+        parts = package.split(".") if package else []
+        parent = parts[: len(parts) - (node.level - 1)] if node.level > 1 else parts
+        base = ".".join([*parent, *([node.module] if node.module else [])])
+    return base
+
+
+def _imported_names(tree: ast.AST, package: str) -> dict[str, str]:
+    """Every name an import in the module binds, with the module it came from."""
+    names: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names[alias.asname or alias.name.split(".")[0]] = alias.name
+        elif isinstance(node, ast.ImportFrom):
+            base = _resolved_base(node, package)
+            for alias in node.names:
+                names[alias.asname or alias.name] = f"{base}.{alias.name}"
+    return names
+
+
+def _root(node: ast.AST) -> str | None:
+    while isinstance(node, ast.Attribute | ast.Subscript):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def _engine_tampering(tree: ast.AST, imported: dict[str, str]) -> list[str]:
+    """What would change, or reach behind, code the strategy imports (security review
+    round 3, E1 and E2).
+
+    * Assigning to or deleting an attribute or item of an imported name, as in
+      ``execution._apply = ...`` or ``model.Costs.total = 0.0``, would let one line in a
+      hypothesis file change the shared engine's fills, costs or funding for its run
+      while the ledger certifies the registered rules (E1).
+    * Reading a private (single underscore) attribute of an imported name reaches past
+      the module's public surface (E1).
+    * Subclassing a class imported from this package would let a strategy hand the
+      engine an altered rule object; the engine's interface needs no subclass (E1).
+    * ``import norse_research.<x>`` binds the package root, whose attributes include
+      every module the runner has already imported (the loader, the store, the runner
+      itself), and the bare name ``norse_research`` reaches them; strategies use
+      ``from norse_research.<x> import ...`` instead (E2).
+    """
+    problems = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            problems += [
+                f"line {node.lineno}: import {a.name} binds the package root; use "
+                f"from {a.name} import ..."
+                for a in node.names if a.name == PACKAGE or a.name.startswith(PACKAGE + ".")
+            ]
+        elif isinstance(node, ast.Name) and node.id == PACKAGE:
+            problems.append(f"line {node.lineno}: name {PACKAGE}")
+        elif isinstance(node, ast.Attribute | ast.Subscript):
+            root = _root(node)
+            if root not in imported:
+                continue
+            if isinstance(node.ctx, ast.Store | ast.Del):
+                problems.append(f"line {node.lineno}: changes {root}, which is imported")
+            elif (
+                isinstance(node, ast.Attribute)
+                and node.attr.startswith("_")
+                and not node.attr.startswith("__")
+            ):
+                problems.append(f"line {node.lineno}: private attribute {node.attr} of {root}")
+        elif isinstance(node, ast.ClassDef):
+            for base in node.bases:
+                root = _root(base)
+                if root in imported and imported[root].split(".")[0] == PACKAGE:
+                    problems.append(
+                        f"line {node.lineno}: class {node.name} subclasses {root}, imported "
+                        "from this package"
+                    )
     return problems
 
 

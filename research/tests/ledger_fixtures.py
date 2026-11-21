@@ -133,6 +133,21 @@ def spins(config, data):
         pass
 
 
+def crosses_gap(config, data):
+    # Crosses the bar the gap tests leave out on 2025-12-10; the series' coverage, from
+    # the manifest, is one run, since that gap is inside a pinned month.
+    utc = timezone.utc
+    rows = data.load("spot/klines/XUSDT/1d", datetime(2025, 12, 8, tzinfo=utc),
+                     datetime(2025, 12, 13, tzinfo=utc), accept_recorded_gaps=True).rows
+    if len(rows) != 4:
+        raise AssertionError(f"loaded {len(rows)} rows across the gap, not 4")
+    first = int(datetime(2025, 11, 1, tzinfo=utc).timestamp()) * 1000
+    last = int(datetime(2025, 12, 31, tzinfo=utc).timestamp()) * 1000
+    if data.coverage("spot/klines/XUSDT/1d") != [(first, last)]:
+        raise AssertionError("coverage is not the manifest's one run")
+    return run(config, data)
+
+
 COUNT = [0]
 
 
@@ -301,7 +316,7 @@ class World:
     functions that try to reach past the tripwire."""
 
     def __init__(self, tmp: Path, genesis: bool = True, configurations=None,
-                 behaviours=None, evasive: bool = False) -> None:
+                 behaviours=None, evasive: bool = False, drop=()) -> None:
         tmp.mkdir(parents=True, exist_ok=True)
         self.tmp = tmp
         self.remote = tmp / "remote.git"
@@ -310,7 +325,8 @@ class World:
         git(tmp, "init", "--quiet", "--bare", "-b", "main", str(self.remote))
         git(tmp, "clone", "--quiet", str(self.remote), str(self.repo))
         self.store = ArchiveStore(tmp / "mirror")
-        series = [make_series(self.store, "spot/klines/XUSDT/1d", "2025-11", "2025-12")]
+        # ``drop`` leaves development rows out, so the manifest records a gap.
+        series = [make_series(self.store, "spot/klines/XUSDT/1d", "2025-11", "2025-12", drop)]
         manifest = dumps(build(self.store, DEVELOPMENT, series))
         self.manifest_sha256 = sha256_hex(manifest)
         # The public archive, off the mirror: the holdout's files are fetched from here
@@ -438,13 +454,15 @@ class World:
                                                      "manifest_sha256", "cost_basis")}}
             if cid in fail:
                 closed = add({**common, "status": FAILED, "result": {"error": "synthetic"},
-                              "result_sha256": None, "returns_path": None})
+                              "result_sha256": None, "returns_path": None,
+                              "crossed_gaps": []})
             else:
                 series = encode_returns(self.returns_of(cid, opened.body["configuration"]))
                 digest = sha256_hex(series)
                 files[returns_path(digest)] = series
                 closed = add({**common, "status": COMPLETED, "result": {"synthetic": True},
-                              "result_sha256": digest, "returns_path": returns_path(digest)})
+                              "result_sha256": digest, "returns_path": returns_path(digest),
+                              "crossed_gaps": []})
             pairs.append((opened, closed))
         new = "".join(e.line + "\n" for e in entries).encode("ascii")
         commit = self.ledger._commit(head, new, files, "runs written by hand")
@@ -567,14 +585,16 @@ class Book:
         }
         if values is None:
             return self.add({**common, "status": FAILED, "result": {"error": "synthetic"},
-                             "result_sha256": None, "returns_path": None})
+                             "result_sha256": None, "returns_path": None,
+                              "crossed_gaps": []})
         h = opened.body["hypothesis"]
         days = days or self.registration.windows[h].day_list()
         data = encode_returns(list(zip(days, values, strict=True)))
         digest = sha256_hex(data)
         self.files[returns_path(digest)] = data
         return self.add({**common, "status": COMPLETED, "result": {"days": len(values)},
-                         "result_sha256": digest, "returns_path": returns_path(digest)})
+                         "result_sha256": digest, "returns_path": returns_path(digest),
+                              "crossed_gaps": []})
 
     def run(self, cid: str, values=None, **kwargs) -> tuple[Entry, Entry]:
         opened = self.open(cid, **kwargs)

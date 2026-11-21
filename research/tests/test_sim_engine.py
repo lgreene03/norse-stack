@@ -312,13 +312,22 @@ def test_the_series_the_engine_reads_are_the_ones_the_development_manifest_pins(
 class FakeView:
     """Stands in for the runner's DataView: serves synthetic rows, records each call,
     refuses a range touching a month the manifest pins no file for (as the loader's
-    MissingData does) and returns the recorded gaps inside the range."""
+    MissingData does), returns the recorded gaps inside the range, and reports each
+    series' coverage as the manifests would: given runs, or one run from its first to its
+    last row at minute precision."""
 
-    def __init__(self, rows, unpinned=(), gaps=None):
+    def __init__(self, rows, unpinned=(), gaps=None, coverage=None):
         self.rows = rows
         self.unpinned = set(unpinned)
         self.gaps = gaps or {}
+        self.runs = coverage or {}
         self.calls = []
+
+    def coverage(self, series):
+        if series in self.runs:
+            return self.runs[series]
+        first, last = self.rows[series][0][0], self.rows[series][-1][0]
+        return [(first - first % 60_000, last - last % 60_000)]
 
     def load(self, series, start, end, accept_recorded_gaps=False):
         self.calls.append((series, start, end, accept_recorded_gaps))
@@ -355,15 +364,20 @@ def test_view_source_reads_a_month_at_a_time_inside_each_series_span(rows):
 
 
 def test_market_from_view_loads_whole_series_and_defers_fill_bars(rows):
+    """Spans come from the view's coverage (the manifests), not from the strategy. A
+    funding series' coverage is minute-precise, so its read reaches a minute past its
+    last settlement's minute, which keeps settlements with millisecond jitter."""
     names = ["spot/klines/AAAUSDT/1d", "spot/klines/AAAUSDT/15m", "um/fundingRate/BTCUSDT"]
-    spans = {n: Span(rows[n][0][0], rows[n][-1][0]) for n in names}
     view = FakeView(rows)
     horizon = sim_synthetic.ms(2021, 3, 1)
-    market = Market.from_view(view, spans, horizon, history_from=FIRST)
+    market = Market.from_view(view, names, horizon, history_from=FIRST)
     assert {c[0] for c in view.calls} == {"spot/klines/AAAUSDT/1d", "um/fundingRate/BTCUSDT"}
     assert all(c[3] is True for c in view.calls)
     assert market.series["spot/klines/AAAUSDT/1d"].rows[-1].open_time == horizon - sim.DAY_MS
     assert "spot/klines/AAAUSDT/15m" not in market.series
+    funding = rows["um/fundingRate/BTCUSDT"]
+    assert market.series["um/fundingRate/BTCUSDT"].rows == [
+        f for f in funding if f.calc_time < horizon]
 
 
 def test_a_series_whose_archive_skips_whole_months_is_read_run_by_run(rows):
@@ -377,19 +391,21 @@ def test_a_series_whose_archive_skips_whole_months_is_read_run_by_run(rows):
     # The manifest here pins no February file: the first run ends on 01-31 and the
     # second starts on 03-01. The loader reports one recorded gap in January.
     gap = SimpleNamespace(after=daily[2].open_time, before=daily[3].open_time, missing=0)
-    view = FakeView(rows, unpinned={(n, "2021-02") for n in (name, fifteen)},
-                    gaps={name: [gap]})
+    unpinned = {(n, "2021-02") for n in (name, fifteen)}
     first_run = Span(daily[0].open_time, sim_synthetic.ms(2021, 1, 31))
     second_run = Span(sim_synthetic.ms(2021, 3, 1), daily[-1].open_time)
+    one_run = FakeView(rows, unpinned=unpinned, gaps={name: [gap]})
     with pytest.raises(LookupError):
-        Market.from_view(view, {name: Span(daily[0].open_time, daily[-1].open_time)},
-                         sim_synthetic.ms(2021, 4, 1), history_from=FIRST)
-    view.calls.clear()
-    spans = {name: (first_run, second_run), fifteen: (
-        Span(rows[fifteen][0].open_time, sim_synthetic.ms(2021, 1, 31, 23)),
-        Span(sim_synthetic.ms(2021, 3, 1), rows[fifteen][-1].open_time))}
+        Market.from_view(one_run, [name], sim_synthetic.ms(2021, 4, 1), history_from=FIRST)
+    coverage = {
+        name: [(first_run.first_open, first_run.last_open),
+               (second_run.first_open, second_run.last_open)],
+        fifteen: [(rows[fifteen][0].open_time, sim_synthetic.ms(2021, 1, 31, 23)),
+                  (sim_synthetic.ms(2021, 3, 1), rows[fifteen][-1].open_time)],
+    }
+    view = FakeView(rows, unpinned=unpinned, gaps={name: [gap]}, coverage=coverage)
     horizon = sim_synthetic.ms(2021, 4, 1)
-    market = Market.from_view(view, spans, horizon, history_from=FIRST)
+    market = Market.from_view(view, [name, fifteen], horizon, history_from=FIRST)
     assert len(view.calls) == 2 and all(c[3] is True for c in view.calls)
     series = market.series[name]
     assert series.rows[-1].open_time == horizon - sim.DAY_MS
@@ -410,21 +426,20 @@ def test_a_load_starting_after_a_series_first_row_is_refused(rows):
     would start its instrument late, so D13's close 120 days before a month end and
     section 6's volatility over every return would both come out wrong."""
     name = "spot/klines/AAAUSDT/1d"
-    span = Span(rows[name][0].open_time, rows[name][-1].open_time)
     horizon = sim_synthetic.ms(2021, 3, 1)
     with pytest.raises(SimulationError, match="D13"):
-        Market.from_view(FakeView(rows), {name: span}, horizon,
-                         history_from=FIRST + 10 * sim.DAY_MS)
+        Market.from_view(FakeView(rows), [name], horizon, history_from=FIRST + 10 * sim.DAY_MS)
     view = FakeView(rows)
-    Market.from_view(view, {name: span}, horizon, history_from=FIRST - sim.DAY_MS)
+    Market.from_view(view, [name], horizon, history_from=FIRST - sim.DAY_MS)
     assert view.calls[0][1] == datetime(2021, 1, 1, tzinfo=UTC)  # from its first row
 
 
 def test_a_span_that_starts_before_the_archive_is_refused(rows):
     name = "spot/klines/AAAUSDT/1d"
-    span = Span(rows[name][0].open_time - 5 * sim.DAY_MS, rows[name][-1].open_time)
+    early = [(rows[name][0].open_time - 5 * sim.DAY_MS, rows[name][-1].open_time)]
     with pytest.raises(SimulationError, match="first row"):
-        Market.from_view(FakeView(rows), {name: span}, sim_synthetic.ms(2021, 3, 1))
+        Market.from_view(FakeView(rows, coverage={name: early}), [name],
+                         sim_synthetic.ms(2021, 3, 1))
 
 
 def test_the_market_must_be_read_to_exactly_the_window_end(rows):

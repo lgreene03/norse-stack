@@ -94,20 +94,29 @@ def _freeze(value):
 
 
 class DataView:
-    """What a strategy receives: rows through the registered loader, nothing else."""
+    """What a strategy receives: rows through the registered loader, and each series'
+    archived coverage from the manifests the loader holds (G1.9), nothing else. Both are
+    the loader's, so a fix to either is a data-loading fix (section 11, item 6)."""
 
-    __slots__ = ("_load",)
+    __slots__ = ("_coverage", "_load")
 
     def __init__(self, loader) -> None:
         self._load = loader.load if loader is not None else None
+        self._coverage = loader.coverage if loader is not None else None
 
     def load(self, series: str, start, end, accept_recorded_gaps: bool = False):
         if self._load is None:
             raise LookupError("this run was given no dataset store")
         return self._load(series, start, end, accept_recorded_gaps)
 
+    def coverage(self, series: str) -> list[tuple[int, int]]:
+        if self._coverage is None:
+            raise LookupError("this run was given no dataset store")
+        return self._coverage(series)
 
-def run(payload: dict) -> list:
+
+def run(payload: dict) -> tuple[list, list]:
+    """The strategy's daily returns, and the recorded gaps its loads crossed."""
     from .formats import DatasetSpec
     from .loader import DatasetLoader, inside_ledger_entry, rehearsal_split
     from .manifest import Manifest
@@ -150,7 +159,9 @@ def run(payload: dict) -> list:
         exec(compile(source, module_file, "exec"), module.__dict__)
         function = module.__dict__[payload["function"]]
         series = function(_freeze(payload["configuration"]), DataView(loader))
-        return [[str(day), float(value)] for day, value in series]
+        returns = [[str(day), float(value)] for day, value in series]
+        # Section 5, Gaps: the recorded gaps crossed, for the run's ledger entry.
+        return returns, loader.crossed_gaps() if loader is not None else []
 
 
 def main() -> None:
@@ -158,7 +169,8 @@ def main() -> None:
     out = sys.stdout
     sys.stdout = sys.stderr  # anything the strategy prints stays out of the result
     try:
-        result = {"ok": True, "returns": run(payload)}
+        returns, crossed = run(payload)
+        result = {"ok": True, "returns": returns, "crossed_gaps": crossed}
     except BaseException as exc:  # reported to the harness, which ledgers the failure
         result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     out.write("\n" + RESULT_PREFIX + json.dumps(result) + "\n")

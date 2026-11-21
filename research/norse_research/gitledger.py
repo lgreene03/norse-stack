@@ -1282,6 +1282,13 @@ def write_genesis(
     if set(tree_paths) != {"harness", *HYPOTHESES}:
         raise LedgerError("tree_paths lists the harness paths and each hypothesis's paths")
     groups = {g: list(p) for g, p in tree_paths.items()}
+    if not inside(PACKAGE_PATH, groups["harness"]):
+        # Security review round 3: the harness digest must cover the whole package, the
+        # simulation engine included (G1.9), less the hypotheses' nested paths, or the
+        # engine could change between runs that run rule 4 treats as the same code.
+        raise LedgerError(
+            f"the harness paths must cover all of {PACKAGE_PATH}, not files of it one by one"
+        )
     for group, listed in groups.items():
         for path in listed:
             if git.try_text("rev-parse", "--verify", "--quiet", f"{main}:{path}") is None:
