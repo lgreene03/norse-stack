@@ -21,11 +21,13 @@ Weights scenario, 2021-03-01 to 2021-03-03, band 0.25 (section 6).
   than the cash left, 0.19903984, so it is scaled by cash / cost = 0.54021... and cash
   ends at zero (section 6, Orders). BBB has no bar with volume all day, so its sell
   lapses at 03-03 00:00.
-* 03-03 00:00: BBB's last daily bar was 03-02, so it ends (section 4): its 0.015 is
-  sold at that bar's low 18 less slippage, 17.9964, fee 0.000269946, booked at the
-  bar's close, after the lapse at the same instant. Mark at AAA's close 120. Targets AAA
-  0 (an exit, which sells the whole position) and BBB 0.3, which is held at 0 because
-  BBB has ended ("the slot holds cash"). AAA's exit fills at VWAP 121 x 0.9998.
+* 03-03 00:00: BBB's sell lapses; then the mark, at AAA's close 120 and BBB's last
+  close 21 (BBB still held); then BBB's end (section 4): its last daily bar was 03-02,
+  so its 0.015 is sold at that bar's low 18 less slippage, 17.9964, fee 0.000269946,
+  booked at the bar's close. The mark comes before anything stamped at its instant, so
+  that loss falls in day 03-03's return, not 03-02's. Targets AAA 0 (an exit, which
+  sells the whole position) and BBB 0.3, which is held at 0 because BBB has ended ("the
+  slot holds cash"). AAA's exit fills at VWAP 121 x 0.9998.
 
 Carry scenario, 2021-03-01 to 2021-03-02 (section 7).
 

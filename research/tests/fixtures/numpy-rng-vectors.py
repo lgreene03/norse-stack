@@ -1,8 +1,9 @@
 """Generates fixtures/numpy-rng-vectors.json, the known answers for norse_research.sim.pcg64.
 
-Run once with real numpy, in a throwaway virtual environment outside the repository:
+Run once with real numpy, from a throwaway virtual environment outside the repository
+that has numpy installed:
 
-    /Users/lgreene/norse-worktrees/.venv-numpy-vectors/bin/python -I numpy-rng-vectors.py OUT
+    python -I numpy-rng-vectors.py OUT
 
 It is committed so the vectors can be regenerated and checked; nothing in the research
 package imports numpy. The draws are the ones section 8 of docs/PREREGISTRATION.md

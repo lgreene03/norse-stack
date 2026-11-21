@@ -13,9 +13,14 @@ learn which bar fills an order and when an instrument stops, and the golden-fixt
 test holds them to identical orders, fills, funding and returns.
 
 Events at one instant apply in a fixed order, the same in both drivers: fills on bars
-closing then; lapses of orders whose search ends then (section 5, Fills); closes of
+closing then (a position changes at its fill bar's close, section 5); lapses of orders
+whose search ends then (section 5, Fills); the equity mark (section 3); closes of
 instruments that stopped then (section 4); funding settled then (section 5, Funding);
-the equity mark (section 3); and last the decision (section 3).
+and last the decision (section 3). The mark comes before the closes and the funding,
+so anything stamped exactly at a 00:00 mark counts in the day that starts there: a
+day's return never depends on data stamped after it, and a holdout run's returns up
+to 2025-12-31 equal the development run's exactly (section 11, item 5), whatever is
+stamped at 2026-01-01 00:00:00.000.
 """
 
 from __future__ import annotations
@@ -63,8 +68,36 @@ from .model import (
     spot_series,
 )
 
-FILL, LAPSE, HALT, FUNDING, DATA, MARK, DECIDE = range(7)
+# The order of events at one instant (module docstring). NOTICE and DATA are when paper
+# trading's feed delivers an end notice or a settlement; their effects, HALT and
+# FUNDING, apply after the MARK.
+FILL, LAPSE, NOTICE, DATA, MARK, HALT, FUNDING, DECIDE = range(8)
 FUNDING_MARK_LOOKBACK_MS = 3 * DAY_MS
+# Section 5, Marks, carries a close forward through an exchange-wide outage, while
+# section 4 ends an instrument at any missing daily bar; section 4 notes no such outage
+# in development. Both majors stopping at one instant is taken as an outage, and the
+# run stops rather than halt every instrument at its low.
+OUTAGE_WITNESSES = ("BTCUSDT", "ETHUSDT")
+
+
+def outage_message(at: int) -> str:
+    return (
+        f"BTCUSDT and ETHUSDT spot both stop at {iso_day(at)}: an exchange-wide outage, for "
+        "which section 5 carries closes forward and section 4 would end every instrument; "
+        "neither happened in development, so the run stops rather than choose"
+    )
+
+
+def check_outage(witnesses: list[Series | None], before: int) -> None:
+    """Refuse data in which both majors' spot daily series stop at one instant before
+    ``before`` (the backtest's half of the outage check; paper trading checks its end
+    notices). A witness that is not loaded leaves the check undecided, so it passes."""
+    if any(w is None for w in witnesses):
+        return
+    common = set.intersection(*(set(w.stops()) for w in witnesses))
+    early = sorted(t for t in common if t < before)
+    if early:
+        raise SimulationError(outage_message(early[0]))
 
 
 class BookView:
@@ -195,8 +228,15 @@ class _Run:
 
 def backtest(strategy, market: Market, window: Window, costs: Costs) -> RunResult:
     """Run ``strategy`` over ``window`` on data read up front."""
-    if market.horizon < window.end:
-        raise SimulationError("the market's data ends before the window does")
+    if market.horizon != window.end:
+        # An instrument ends where its data stops before the horizon (section 4), so a
+        # horizon other than the window's end would move every D12 close.
+        raise SimulationError(
+            f"the market was read to {iso_day(market.horizon)}, not to the window's end "
+            f"{iso_day(window.end)}"
+        )
+    check_outage([market.series.get(spot_series(s, "1d")) for s in OUTAGE_WITNESSES],
+                 window.end)
     run = _Run(strategy, window, costs)
     queue: list = []
     counter = itertools.count()
@@ -229,6 +269,7 @@ def backtest(strategy, market: Market, window: Window, costs: Costs) -> RunResul
         history = History(t, strategy.interval, view, segments, ended, run.cache)
         if t in run.mark_times:
             run.mark(history)
+        drain(t, DECIDE)  # closes and funding stamped at t, after the mark
         if t not in run.decision_times:
             continue
         run.decide(history)
@@ -277,7 +318,8 @@ def _schedule_step(run: _Run, market: Market, history: History, t: int, followin
         if series is None:
             raise SimulationError(f"{name} is not in this run's data")
         lo = bisect.bisect_right(series.times, t)
-        hi = bisect.bisect_right(series.times, following)
+        # A settlement at the window's last mark or later falls in no day of the window.
+        hi = bisect.bisect_left(series.times, min(following + 1, run.window.end))
         for settlement in series.rows[lo:hi]:
             schedule(settlement.calc_time, FUNDING, name,
                      lambda s=symbol, f=settlement: run.accrue(
@@ -329,14 +371,15 @@ class SettlementEvent:
 class InstrumentEnded:
     """Notice that an instrument stopped trading at the close of its last daily bar.
     Section 4's backtest learns it by looking one bar ahead; a live feed learns it from
-    the exchange's delisting notice."""
+    the exchange's delisting notice. It arrives before that instant's mark and the close
+    it causes applies after it."""
 
     symbol: str
     last_open: int
 
     @property
     def key(self) -> tuple[int, int, str]:
-        return (self.last_open + DAY_MS, HALT, self.symbol)
+        return (self.last_open + DAY_MS, NOTICE, self.symbol)
 
 
 @dataclass(frozen=True)
@@ -369,6 +412,7 @@ class Paper:
         self._counter = itertools.count()
         self._last_key: tuple = (-1, -1, "")
         self._checks: set[int] = set()
+        self._stops: dict[str, set[int]] = {}
 
     # --- the feed ------------------------------------------------------------------
 
@@ -385,9 +429,10 @@ class Paper:
         elif isinstance(event, SettlementEvent):
             self._append(event.series, event.row, event.row.calc_time)
             symbol = event.series.split("/")[2]
-            self._schedule(event.row.calc_time, FUNDING, event.series,
-                           lambda s=symbol, f=event.row: self.run.accrue(
-                               s, f, self._funding_mark(s, f.calc_time)))
+            if event.row.calc_time < self.window.end:  # later ones fall in no day
+                self._schedule(event.row.calc_time, FUNDING, event.series,
+                               lambda s=symbol, f=event.row: self.run.accrue(
+                                   s, f, self._funding_mark(s, f.calc_time)))
         elif isinstance(event, InstrumentEnded):
             self._end(event)
         elif isinstance(event, Tick):
@@ -454,13 +499,19 @@ class Paper:
             raise SimulationError(f"{event.symbol}: notice of an end without its last bar")
         first_open, _ = self._segments[name].start_of(index)
         self._ended.add(Instrument(event.symbol, first_open))
-        self.run.halt(event.symbol, self._rows[name][index], end)
+        if event.symbol in OUTAGE_WITNESSES:
+            self._stops.setdefault(event.symbol, set()).add(end)
+            if all(end in self._stops.get(s, ()) for s in OUTAGE_WITNESSES):
+                raise SimulationError(outage_message(end))
+        self._schedule(end, HALT, event.symbol,
+                       lambda s=event.symbol, b=self._rows[name][index]: self.run.halt(s, b, end))
 
     def _tick(self, t: int) -> None:
         history = History(t, self.run.strategy.interval, self._view_or_none,
                           self._segments.get, lambda i: i in self._ended, self.run.cache)
         if t in self.run.mark_times:
             self.run.mark(history)
+        self._drain(t, DECIDE)  # closes and funding stamped at t, after the mark
         if t in self.run.decision_times:
             for order in self.run.decide(history):
                 unit = unit_of(order)

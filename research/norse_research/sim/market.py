@@ -154,6 +154,21 @@ class Series:
     def view(self, now: int) -> SeriesView:
         return SeriesView(self.name, self.rows, self.times, self.known(now))
 
+    def stops(self) -> list[int]:
+        """Every instant a run of this daily series stops: the close of each run's last
+        bar where a later day has no bar, the series' last one included when it closes
+        before the horizon."""
+        out = []
+        for i, open_time in enumerate(self.times):
+            following = self.times[i + 1] if i + 1 < len(self.times) else None
+            if following == open_time + DAY_MS:
+                continue
+            close = open_time + DAY_MS
+            if following is None and (self.horizon is None or close >= self.horizon):
+                continue
+            out.append(close)
+        return out
+
     def instrument_end(self, instrument: Instrument) -> int | None:
         """The instant ``instrument`` stops trading: the close of its last daily bar,
         when a later day has no bar. Section 4 looks one bar ahead "only to learn that
@@ -235,6 +250,16 @@ def _load_runs(load: Callable, name: str, runs: Sequence[Span], lo: int, hi: int
         start, end = max(lo, run.first_open), min(hi, run.last_open + step)
         if start < end:
             loaded = load(name, _dt(start), _dt(end), accept_recorded_gaps=True)
+            first = loaded.rows[0][0] if loaded.rows else None
+            if start == run.first_open and first != run.first_open:
+                # A run that starts later than its span says would move the instrument's
+                # first bar (section 4), and with it D13's 120-day rule and section 6's
+                # volatility "over every return of the instrument".
+                raise SimulationError(
+                    f"{name}: the span's run starts at {_dt(run.first_open).isoformat()}, "
+                    f"but the archive's first row there is "
+                    f"{_dt(first).isoformat() if first is not None else 'missing'}"
+                )
             rows.extend(loaded.rows)
             # Section 5, Gaps: "a gap the committed manifest records is crossed and
             # listed in the run's ledger entry".
@@ -332,12 +357,19 @@ class Market:
         return cls(rest, RowsSource(fills), horizon)
 
     @classmethod
-    def from_view(cls, data_view, spans: Mapping, horizon: int, history_from: int) -> Market:
+    def from_view(cls, data_view, spans: Mapping, horizon: int,
+                  history_from: int | None = None) -> Market:
         """A market read through the runner's ``DataView``: each series in ``spans``
         (a ``Span`` or a tuple of runs) that is not 15-minute is loaded whole, run by
-        run, from ``history_from`` to ``horizon``, and 15-minute ones lazily. Section
-        5, Gaps: every load accepts the gaps the committed manifest records, and only
-        those."""
+        run, from its first archived row to ``horizon``, and 15-minute ones lazily.
+        Section 5, Gaps: every load accepts the gaps the committed manifest records,
+        and only those. ``backtest`` refuses a ``horizon`` other than the window's end.
+
+        ``history_from`` may only start the load at or before every series' first
+        archived row: starting later would start each instrument late, so a pair would
+        miss D13's close 120 days before a month end it really has, and its volatility
+        would leave out returns section 6 counts ("over every return of the
+        instrument"). Such a start is refused."""
         whole: dict[str, list] = {}
         fill_spans: dict[str, tuple[Span, ...]] = {}
         gaps: dict[str, set] = {}
@@ -346,7 +378,14 @@ class Market:
             if name.endswith("/" + FILL_INTERVAL):
                 fill_spans[name] = runs
                 continue
-            whole[name] = _load_runs(data_view.load, name, runs, history_from, horizon, gaps)
+            if history_from is not None and history_from > runs[0].first_open:
+                raise SimulationError(
+                    f"{name}: loading from {_dt(history_from).date()} would drop its rows "
+                    f"from {_dt(runs[0].first_open).date()}, starting its instrument late "
+                    "(D13's 120-day rule, section 6's volatility over every return)"
+                )
+            whole[name] = _load_runs(data_view.load, name, runs, runs[0].first_open, horizon,
+                                     gaps)
         market = cls(whole, ViewSource(data_view.load, fill_spans), horizon)
         market.gaps = gaps
         return market

@@ -76,8 +76,9 @@ target names an instrument, not a symbol.
 
 **Halts and delistings (section 4, D12).** When an instrument stops before the end of the
 window, a long position in it is sold at the low of its last daily bar less slippage, with
-the fee, and booked at that bar's close. From then until the next month-end update its
-target is held at zero, so its slot holds cash. The backtest learns that a bar is the last
+the fee, and booked at that bar's close, just after the mark taken at that instant, so the
+loss counts in the day that starts there (choice 7). From then until the next month-end
+update its target is held at zero, so its slot holds cash. The backtest learns that a bar is the last
 one by looking one daily bar ahead, which section 4 permits for exactly this; a series
 whose data simply reaches the window's end has not stopped.
 
@@ -109,13 +110,16 @@ run. Tests show a round trip on one leg costs 24 bps and a carry round trip 48 b
 **Marks (section 5).** Equity at each 00:00 is cash plus each spot position at its daily
 close plus each perpetual position's unrealised profit or loss at the perpetual's own
 daily close. A perpetual's missing daily bar carries its last close forward. A spot
-position never needs that, because a missing spot daily bar ends the instrument and its
-position is closed first.
+position never needs that: a missing spot daily bar ends the instrument, whose position is
+marked at its last bar's close and closed just after that mark, before any mark that would
+need the missing bar.
 
 **Funding (section 5; section 7).** Each published settlement accrues at its `calc_time`
 on the perpetual quantity held at that instant, valued at the close of the latest
 perpetual 15-minute bar closed by then: a short receives quantity times mark times rate
-and pays it when the rate is negative. A missing settlement accrues nothing. Funding is
+and pays it when the rate is negative. A settlement stamped exactly at a 00:00 mark
+accrues after that mark, in the day that starts there (choice 7), and one at or after the
+window's last mark falls in no day of the window. A missing settlement accrues nothing. Funding is
 accrued per settlement, never as a daily rate times three, so section 15, item 17's
 point about G2.3's "every eight hours" does not arise: BTC and ETH settle every eight
 hours, and the engine would follow any other interval the archive publishes.
@@ -206,8 +210,18 @@ is a reading of the registration, not a new parameter, and none changes a pass m
    positions is a sell and fills first, unscaled; a unit that opens or adds to any
    position is a buy, and all buys on a bar share one scale factor.
 7. **Events at one instant apply in a fixed order:** fills on bars closing then, lapses,
-   closes of instruments that stopped, funding, the mark, then the decision. A settlement
-   published a few milliseconds after midnight therefore counts in the next day's return.
+   the mark, closes of instruments that stopped, funding, then the decision. Revised after
+   the quant's review (finding 1): the first version put the closes and the funding before
+   the mark, so a settlement stamped exactly at 00:00:00.000 (44 of 72 development month
+   starts) or a D12 close counted in the day that ends there. At 2026-01-01 that would make
+   the holdout run's 2025-12-31 return differ from the development run's, which has no
+   such data; the harness then refuses the holdout run (section 11, item 5), and item 6
+   allows no engine fix. With the mark first, everything stamped at a 00:00 instant, exact
+   or jittered, counts in the day that starts there, and a day's return never depends on
+   data stamped after it. Both readings honour "booked at that bar's close" and "on the
+   quantity held at that instant"; only this one keeps the development prefix independent
+   of the boundary, which a test checks. Fills on bars closing at the mark still count
+   before it, since a position changes at its fill bar's close.
 8. **A bar closes at its open plus its interval** (the kline's `close_time` plus 1 ms).
    The funding mark is the latest 15-minute bar closed at or before `calc_time`, read
    literally, with no tolerance; a settlement published a few milliseconds before the hour
@@ -221,11 +235,19 @@ is a reading of the registration, not a new parameter, and none changes a pass m
 11. **A missing spot daily bar ends the instrument and is never carried forward;** only a
     perpetual's is. Section 5's carry-forward for an exchange-wide outage and section 4's
     end of an instrument would otherwise conflict; section 4 notes no such outage happened
-    in development.
+    in development. So that a conflict cannot pass silently, a run stops when BTCUSDT and
+    ETHUSDT spot both stop at one instant (quant review, finding 7), rather than close
+    every instrument at its low.
 12. **The universe selection looks no bar ahead.** An instrument whose last bar is the
-    month-end bar has that bar and is eligible, as section 6's rule reads; section 4 then
-    closes it and its slot holds cash for the month. The look-ahead is used only to learn
-    that a bar is the last one.
+    month-end bar has that bar and is eligible, as section 6, step 2 reads ("does not have
+    the month-end daily bar"); section 4 then closes it and its slot holds cash for the
+    month. The quant's review (finding 2) set out the other reading, that a stopped
+    instrument is not "current" and the next eligible pair takes the slot, and asked for a
+    ruling. The lead role decided to keep the literal reading: the frozen registration's
+    text controls, and the other reading needs a look-ahead beyond D12's, which section 4
+    allows "only to learn that a bar is the last one". The owner has not ruled separately.
+    A test pins the behaviour. Section 4 says three candidates end on 2026-04-01, so this
+    may bind in the holdout.
 13. **The short half of D12 has nothing to close,** since no spot position is ever short.
     A carry pair whose spot instrument stopped is not defined by the registration (H2
     "never holds one leg without the other"); it never happens to BTC or ETH in either
@@ -258,6 +280,15 @@ committed manifest. Fifteen-minute bars are read lazily a month at a time, since
 candidates' would not fit in memory, and are never shown to a strategy. The archive holds
 no mark-price series, as section 5 notes; the 15-minute close stands in for it.
 
+Two guards keep a strategy from loading data that would break the registered rules
+(quant review, finding 5). Every series is read from its first archived row: a later
+start would start each instrument late, so a pair would miss D13's close 120 days before
+a month end it really has, and its volatility would leave out returns section 6 counts
+("over every return of the instrument"); `Market.from_view` refuses such a start, and
+refuses a load whose first row is later than its declared run. And `backtest` refuses a
+market read to any horizon but the window's end, since an instrument ends where its data
+stops before the horizon (section 4).
+
 Three things the engine cannot supply, each for the lead:
 
 * **Series spans.** The loader refuses a range its data does not span and a month the
@@ -278,3 +309,11 @@ Three things the engine cannot supply, each for the lead:
 
 No drawdown breaker is modelled: the registration has none, and the register's risk about
 huginn's replay breaker concerns huginn, not this engine.
+
+Two limitations are stated rather than changed. When both H2 coins enter from cash, the
+scaling leaves cash at about zero, and a negative funding settlement then takes it below
+zero at no cost, although section 5 says nothing is borrowed (quant review, finding 6);
+returns differ only by the borrowing cost that is not charged, and H2-06 is always in
+that state. And the backtest values a settlement at the latest perpetual 15-minute close
+within three days, failing beyond that, while paper trading takes the latest of any age
+(finding 8); neither BTC's nor ETH's perpetual 15-minute series has a gap in development.

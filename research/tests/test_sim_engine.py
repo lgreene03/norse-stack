@@ -405,6 +405,57 @@ def test_a_series_whose_archive_skips_whole_months_is_read_run_by_run(rows):
         sim.runs_of((second_run, first_run))
 
 
+def test_a_load_starting_after_a_series_first_row_is_refused(rows):
+    """Quant review 1, finding 5. Loading from later than a series' first archived row
+    would start its instrument late, so D13's close 120 days before a month end and
+    section 6's volatility over every return would both come out wrong."""
+    name = "spot/klines/AAAUSDT/1d"
+    span = Span(rows[name][0].open_time, rows[name][-1].open_time)
+    horizon = sim_synthetic.ms(2021, 3, 1)
+    with pytest.raises(SimulationError, match="D13"):
+        Market.from_view(FakeView(rows), {name: span}, horizon,
+                         history_from=FIRST + 10 * sim.DAY_MS)
+    view = FakeView(rows)
+    Market.from_view(view, {name: span}, horizon, history_from=FIRST - sim.DAY_MS)
+    assert view.calls[0][1] == datetime(2021, 1, 1, tzinfo=UTC)  # from its first row
+
+
+def test_a_span_that_starts_before_the_archive_is_refused(rows):
+    name = "spot/klines/AAAUSDT/1d"
+    span = Span(rows[name][0].open_time - 5 * sim.DAY_MS, rows[name][-1].open_time)
+    with pytest.raises(SimulationError, match="first row"):
+        Market.from_view(FakeView(rows), {name: span}, sim_synthetic.ms(2021, 3, 1))
+
+
+def test_the_market_must_be_read_to_exactly_the_window_end(rows):
+    """Finding 5: a horizon other than the window's end would move every D12 close."""
+    run_window = window(days=10)
+    for horizon in (run_window.end - sim.DAY_MS, run_window.end + sim.DAY_MS):
+        with pytest.raises(SimulationError, match="window's end"):
+            backtest(TrendExample(["AAAUSDT"]), Market.from_rows(rows, horizon), run_window,
+                     COSTS)
+
+
+def test_an_exchange_wide_spot_outage_stops_the_run(rows):
+    """Quant review 1, finding 7. Section 5 carries closes forward through an
+    exchange-wide outage while section 4 would end every instrument at its low; when
+    BTC and ETH spot both stop at one instant the run stops instead of choosing."""
+    outage = sim_synthetic.ms(2021, 2, 20)
+    btc = "spot/klines/BTCUSDT/1d"
+    cut = dict(rows, **{"spot/klines/ETHUSDT/1d": list(rows[btc])})
+    run_window = window(days=30)
+    for name in (btc, "spot/klines/ETHUSDT/1d"):
+        cut[name] = [r for r in cut[name] if r.open_time != outage]
+        strategy = TrendExample(["AAAUSDT"])
+        if name == btc:  # one major missing a day is that pair's own gap: no outage
+            backtest(strategy, Market.from_rows(cut, run_window.end), run_window, COSTS)
+            continue
+        with pytest.raises(SimulationError, match="exchange-wide outage"):
+            backtest(strategy, Market.from_rows(cut, run_window.end), run_window, COSTS)
+        with pytest.raises(SimulationError, match="exchange-wide outage"):
+            paper_run(strategy, cut, run_window, COSTS)
+
+
 def test_paper_refuses_events_out_of_order(rows):
     run_window = window(days=3)
     paper = sim.Paper(Scripted(), run_window, COSTS)

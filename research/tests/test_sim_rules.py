@@ -21,6 +21,7 @@ from norse_research.sim import (
     SPOT,
     Book,
     Costs,
+    Decision,
     History,
     Instrument,
     Market,
@@ -601,3 +602,95 @@ def test_a_spot_pair_maps_to_its_perpetual_including_the_thousand_coin_contracts
     assert perpetual_of("BTCUSDT", perps) == "BTCUSDT"
     assert perpetual_of("1000SATSUSDT", perps) == "1000SATSUSDT"
     assert perpetual_of("ETHBULLUSDT", perps) is None
+
+
+# --- section 3 and section 11, item 5: the development/holdout boundary ------------------
+
+
+def test_nothing_stamped_on_1_january_moves_the_31_december_return():
+    """Quant review 1, finding 1. A carry position held over the 31 December close, a
+    funding settlement stamped exactly 2026-01-01 00:00:00.000 (as 44 of 72 development
+    month starts are) and a pair whose last daily bar is 31 December. A development run's
+    data stops at the boundary; a holdout run's carries on. The mark comes before the
+    settlement and the delisting stamped at its instant, so the holdout run's returns to
+    31 December equal the development run's exactly, as the harness requires (section
+    11, item 5), and both events fall in 1 January's return. Synthetic rows only."""
+    dec20, jan1 = day_ms("2025-12-20"), day_ms("2026-01-01")
+    aug1 = day_ms("2025-08-01")
+    rows = {
+        "spot/klines/BTCUSDT/1d": [kline(dec20 + i * DAY_MS, 40_000.0 + 150 * i, step=DAY_MS)
+                                   for i in range(14)],  # to 2026-01-02
+        "um/klines/BTCUSDT/1d": [kline(dec20 + i * DAY_MS, 40_020.0 + 150 * i, step=DAY_MS)
+                                 for i in range(14)],
+        # 2025-08-01 to 2025-12-31: the pair stops after the 31 December bar.
+        "spot/klines/XXXUSDT/1d": [kline(aug1 + i * DAY_MS, 10.0 + 0.01 * i, step=DAY_MS,
+                                         low=9.0) for i in range(153)],
+        "spot/klines/BTCUSDT/15m": [kline(day_ms("2025-12-29"), 40_000.0)],
+        "spot/klines/XXXUSDT/15m": [kline(day_ms("2025-12-30"), 11.5)],
+        "um/klines/BTCUSDT/15m": sorted(
+            [kline(day_ms("2025-12-29"), 40_030.0)]
+            + [kline(dec20 + k * 8 * HOUR - M15, 40_100.0 + k) for k in range(1, 42)]),
+        # Every eight hours, 3 ms after the hour, except exactly on 1 January's midnight.
+        "um/fundingRate/BTCUSDT": [
+            Funding(dec20 + k * 8 * HOUR + (0 if dec20 + k * 8 * HOUR == jan1 else 3), 8,
+                    0.01 if dec20 + k * 8 * HOUR == jan1 else 0.0001)
+            for k in range(42)],
+    }
+    strategy = Scripted(weights={"2025-12-30": {"XXXUSDT": 0.3}},
+                        carry={"2025-12-29": {"BTCUSDT": ("BTCUSDT", 0.4)}})
+    costs = Costs(10, 2)
+    development = Window("2025-12-29", "2025-12-31", 3)
+    before = {name: [r for r in series if r[0] < jan1] for name, series in rows.items()}
+    dev = backtest(strategy, Market.from_rows(before, development.end), development, costs)
+    holdout = Window("2025-12-29", "2026-01-02", 5)
+    held = backtest(strategy, Market.from_rows(rows, holdout.end), holdout, costs)
+
+    assert held.returns[:3] == dev.returns  # exactly, as section 11, item 5 requires
+    assert [d for d, _ in dev.returns] == ["2025-12-29", "2025-12-30", "2025-12-31"]
+    # Both boundary events happen, and only in the run whose data reaches them.
+    assert [(f.kind, f.symbol, f.at) for f in held.fills if f.kind == "halt"] == [
+        ("halt", "XXXUSDT", jan1)]
+    assert [a.amount > 0 for a in held.accruals if a.calc_time == jan1] == [True]
+    assert not any(f.kind == "halt" for f in dev.fills)
+    assert not any(a.calc_time >= jan1 for a in dev.accruals)
+    # They land in 1 January's return: its mark at 2026-01-01 00:00 is the same in both.
+    assert held.marks[3] == dev.marks[3]
+    assert paper_run(strategy, rows, holdout, costs).returns == held.returns
+
+
+def test_a_pair_whose_last_bar_is_the_month_end_bar_is_selected_and_its_slot_held_in_cash():
+    """Choice 12 (quant review 1, finding 2; kept by the lead's decision). Section 6,
+    step 2 asks only whether the current instrument "has the month-end daily bar", so a
+    pair whose last bar is the month-end bar is still selected, and section 4 then holds
+    its slot in cash for the month: the next pair does not take its place, which would
+    need a look-ahead beyond D12's."""
+    close = day_ms("2021-04-01")
+    first = close - 400 * DAY_MS
+
+    def daily(last_open):
+        return [kline(t, 10.0, step=DAY_MS) for t in range(first, last_open + 1, DAY_MS)]
+
+    rows = {
+        "spot/klines/LSTUSDT/1d": daily(close - DAY_MS),  # last bar: the month-end bar
+        "spot/klines/AAAUSDT/1d": daily(close),
+        "spot/klines/BBBUSDT/1d": daily(close),
+        "spot/klines/AAAUSDT/15m": [kline(close, 10.0)],
+        "spot/klines/BBBUSDT/15m": [kline(close, 10.0)],
+    }
+    chosen = []
+
+    class TwoSlots:
+        interval = "1d"
+
+        def decide(self, history, book):
+            universe = select_universe(history, ["LSTUSDT", "AAAUSDT", "BBBUSDT"], slots=2)
+            chosen.append((universe, [history.ended(i) for i in universe]))
+            return Decision(weights={i: 0.5 for i in universe}, band=0.0)
+
+    window = Window("2021-04-01", "2021-04-01", 1)
+    result = backtest(TwoSlots(), Market.from_rows(rows, window.end), window, Costs(10, 2))
+    assert chosen == [([Instrument("LSTUSDT", first), Instrument("AAAUSDT", first)],
+                       [True, False])]
+    assert [(o.symbol, o.side, o.notional) for o in result.orders] == [("AAAUSDT", BUY, 0.5)]
+    # LST's half of equity stays in cash: 1 - 0.5 x 1.0002 x 1.001.
+    assert result.marks[-1][1] == approx(1 - 0.5 * 1.0002 * 1.001 + 0.05 * 10.0)
