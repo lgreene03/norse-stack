@@ -3,7 +3,7 @@
   "title": "Pre-registration of H1 (dated-universe trend) and H2 (funding carry), G0.7",
   "prose": "docs/PREREGISTRATION.md",
   "precedence": "This file governs wherever it and docs/PREREGISTRATION.md disagree.",
-  "status": "Signed by the owner on 2026-11-14; drafted on 2026-11-11 and revised on 2026-11-13 after the CTPO role's review (PR 52). Binding only once the merged commit on main is tagged prereg-v1 (change_control).",
+  "status": "Signed by the owner on 2026-11-14; drafted on 2026-11-11 and revised on 2026-11-13 after the CTPO role's review (PR 52); revised on 2026-11-21 on the owner's instruction to remove the ledger freeze (D21), as prereg-v2. Binding only once the merged commit on main is tagged (prereg-v1, and for this revision prereg-v2; change_control).",
   "decisions": {
     "D3": "paper short perpetual positions approved for H2",
     "D4": "the owner alone holds the holdout key",
@@ -13,7 +13,8 @@
     "D14": "universe exclusions by category",
     "D15": "H2's second criterion is in excess of a beta-matched buy-and-hold; H1's stays volatility-matched",
     "D16": "rulesets: main cannot be force pushed or deleted and needs the research and validate checks; prereg-* and ledger-* tags cannot be updated or deleted",
-    "D17": "the holdout files stay off the local mirror until the single unseal, then are fetched again and verified against the frozen holdout manifest"
+    "D17": "the holdout files stay off the local mirror until the single unseal, then are fetched again and verified against the frozen holdout manifest",
+    "D21": "there is no ledger freeze: the unseal entry closes development; N, V and the holdout candidate are computed on the entries before it, and no trial, benchmark or control entry may follow it"
   },
   "data": {
     "source": "data.binance.vision",
@@ -89,14 +90,14 @@
     "other_kinds": {
       "benchmark": "a configuration in benchmarks",
       "control": "a configuration in controls with a seed in its registered range",
-      "sensitivity": "a candidate configuration re-costed as in sensitivity, run only after the ledger freeze",
+      "sensitivity": "a candidate configuration re-costed as in sensitivity, run only once every registered configuration of its hypothesis has a selectable run, before or after the unseal (D21)",
       "holdout": "the one holdout run of the holdout candidate"
     },
     "unregistered_configuration": "refused",
     "returns_outside_registered_windows": "refused, except the holdout run after the unseal"
   },
   "n_counting_rule": {
-    "N": "the number of trial entries in the frozen ledger, from the genesis entry to the freeze tag, across H1, H2 and the reserve",
+    "N": "the number of trial entries from the genesis entry to the unseal entry, which closes development (there is no ledger freeze, D21), across H1, H2 and the reserve",
     "counts": "every trial entry opened, whether it completes, fails or is aborted; reruns of the same configuration each count",
     "deduplicate_by_configuration_hash": false,
     "excluded_from_N": ["benchmark", "control", "sensitivity", "holdout"],
@@ -117,12 +118,12 @@
   },
   "run_rules": {
     "order": "every registered configuration of a hypothesis is run in the registered order, whatever earlier results show",
-    "completeness": "a hypothesis is judged only when every one of its registered configurations has a selectable run; otherwise it cannot pass and its entries still count",
+    "completeness": "a hypothesis is judged only when every one of its registered configurations has a selectable run; one that never gets there is NOT RUN at the verdict, or FAIL if its own entries and the reserve are exhausted, and its entries still count",
     "rerun_requires": "a recorded defect: what was wrong and the commit that fixes it, in the rerun's entry. A defect is a departure of the code from this registration, or a failure to complete; the rerun's entry names the section of docs/PREREGISTRATION.md the code departed from, and the fix may only bring the code into line with it",
     "rerun_scope": "a fix to code both hypotheses use (harness, loaders, fills, costs) reruns every configuration already run; a fix confined to one hypothesis's strategy code reruns that hypothesis's configurations already run; a fix to statistics code reruns no trial",
-    "selectable_run": "a configuration's last completed trial entry at the freeze whose returns cover its hypothesis's whole out-of-sample window; the harness runs a grid configuration only over that whole window",
+    "selectable_run": "a configuration's last completed trial entry before the unseal whose returns cover its hypothesis's whole out-of-sample window; the harness runs a grid configuration only over that whole window",
     "consistency": "all selectable runs of a hypothesis come from identical git tree hashes of the harness and strategy paths the genesis entry lists, as their entries record; a hypothesis whose selectable runs do not is treated as lacking a selectable run for every configuration",
-    "statistics_computed": "once, at the freeze, from the committed return series with the code at the freeze tag; any figure displayed before the freeze (G1.8, G2.1) is provisional and binds nothing"
+    "statistics_computed": "on the entries before the unseal entry, from their committed return series; any figure displayed before the unseal (G1.8, G2.1) is provisional and binds nothing"
   },
   "costs": {
     "fee_bps_per_side": 10,
@@ -286,7 +287,7 @@
   ],
   "sensitivity": {
     "who": "each hypothesis's candidate only",
-    "when": "after the ledger freeze",
+    "when": "once every registered configuration of the candidate's hypothesis has a selectable run, before or after the unseal; after it, the candidate chosen on the entries before it (D21); outside N",
     "total_cost_bps_per_side": [7.5, 10, 15],
     "split": "slippage stays 2 bps a side; the fee is the remainder",
     "use": "reported in the tear sheet; never part of a pass criterion"
@@ -358,10 +359,11 @@
     "hypothesis_candidate": "the selectable run with the highest DEV-1 dsr; ties to the earlier registered configuration",
     "hypothesis_passes_development": "its candidate meets DEV-1 to DEV-5; no other configuration of the hypothesis is judged",
     "holdout_candidate": "among hypotheses that pass development, the candidate with the higher DEV-1 dsr; ties to H1",
-    "no_candidate": "no unseal and no holdout run"
+    "no_candidate": "no unseal and no holdout run",
+    "development_closes_without_unseal": "with no holdout candidate, development closes once each hypothesis has a selectable run of every registered configuration or has exhausted its own entries and the reserve, and neither passes development; the verdict is computed on the ledger at that point and records the ledger entry it was computed at; a later trial entry can only be a rerun with a recorded defect, and changes a published verdict only if the defect is recorded and the verdict reissued; no ledger entry marks the point"
   },
   "holdout_run": {
-    "unseal": "names the commit and file hashes of the pre-registration tag the genesis entry names and the holdout candidate's configuration hash, and is accepted only with the owner's key (D4)",
+    "unseal": "names the commit and file hashes of the pre-registration tag the genesis entry names and the holdout candidate's configuration hash, and is accepted only with the owner's key (D4); it closes development: N, V and the holdout candidate are computed on the entries before it, and no trial, benchmark or control entry may follow it (D21); it comes only once each hypothesis has a selectable run of every registered configuration or has exhausted its own entries and the reserve, since candidate_selection compares the two candidates and an earlier unseal would stop the other grid early",
     "simulation": "one simulation of the candidate configuration from the start of its development window through 2026-10-31, positions carried across the boundary; HOLD-1 reads only the returns of 2026-01-01 to 2026-10-31",
     "spent_by": "one holdout result entry",
     "retry": "a run that fails before producing a result may be retried under the same unseal for the same configuration only, at the commit of its selectable run plus only commits that touch data loading or the seal, every attempt ledgered",
@@ -371,15 +373,18 @@
     "development_check": "its returns up to 2025-12-31 must equal the candidate's selectable run's committed series exactly, or the run stops before any holdout return is computed"
   },
   "verdict": {
+    "order": "the first row that holds gives the verdict; VOID and NOT JUDGED come from the iteration's kill criteria and replace every other row for both hypotheses",
+    "VOID": "for both hypotheses, whenever the trial ledger's hash chain fails verification: the iteration is void and restarts from pre-registration, and nothing the ledger holds stands as evidence either way",
+    "NOT JUDGED": "for both hypotheses, whenever the gate did not pass its calibration under G1.7, a calibration that never completed included: no strategy is judged, and no development or holdout figure is reported as evidence",
     "PASS": "the hypothesis passes development and its candidate was the holdout candidate and passes HOLD-1",
     "PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT": "passes development but the other hypothesis's candidate was the holdout candidate",
     "FAIL": "otherwise, once every registered configuration has a selectable run; and whenever the hypothesis's own entries and the reserve are exhausted without a pass",
-    "NOT RUN": "not every registered configuration has a selectable run at the freeze, and the hypothesis's own entries and the reserve are not exhausted; if they are, the verdict is FAIL"
+    "NOT RUN": "not every registered configuration has a selectable run at the verdict, and the hypothesis's own entries and the reserve are not exhausted; if they are, the verdict is FAIL"
   },
   "change_control": {
     "before_the_first_entry_after_genesis": "a change needs a new tag (prereg-v2 and onward) and its reason recorded in the change log of docs/PREREGISTRATION.md",
     "after_the_first_entry_after_genesis": "no change is allowed: the first ledger entry that follows the genesis entry, of any kind (benchmark, control or trial), closes the registration",
-    "signing_and_tag": "the owner signed in conversation on 2026-11-14 and instructed an agent session to record the signature, merge the pull request and create the annotated tag prereg-v1 on the resulting commit on main (D18); no other agent or scheduled task creates a prereg-* tag, and any later one only on the owner's explicit instruction for that tag"
+    "signing_and_tag": "the owner signed in conversation on 2026-11-14 and instructed an agent session to record the signature, merge the pull request and create the annotated tag prereg-v1 on the resulting commit on main (D18); the owner instructed in conversation on 2026-11-21 that the change removing the ledger freeze be tagged prereg-v2 (D21), which the lead creates on the resulting commit on main after the merge; no other agent or scheduled task creates a prereg-* tag, and any later one only on the owner's explicit instruction for that tag"
   },
   "benchmark_computation": "both benchmarks run through the same harness as the trials, not through norse_research.benchmark.equal_weight_buy_and_hold; DEV-2 for H1 applies norse_research.benchmark.excess_returns(r, volatility_matched(r_B, r))",
   "controls_seeds_note": "seed_first to seed_last inclusive: 100 seeds per hypothesis"

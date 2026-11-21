@@ -223,3 +223,37 @@ for it. The pre-registration still defines N on the frozen ledger (its section 1
 one registered freeze at G2.7 stands until a superseding pre-registration says otherwise;
 when it is taken, no run starts from any clone other than the one taking it, which closes
 N2b by process. Making the freeze a chain entry stays a follow-up in the register.
+
+## 2026-11-21
+
+**D21. No ledger freeze; the unseal closes development.** Decided by the owner on
+2026-11-21: "This is local personal dev. No need for freezes." The ledger freeze is
+removed entirely, with the `gate.freeze` command, the `ledger-freeze-*` anchor and its
+verification, and every rule keyed on it. The unseal entry closes development instead: N,
+V and the holdout candidate are computed on the ledger before the unseal entry, and the
+ledger, the harness and replay refuse any trial, benchmark or control entry after it. The
+pre-registration's "by the freeze on 2026-12-01" goes: a hypothesis is judged only when
+every registered configuration has a selectable run, and one that never gets there is NOT
+RUN at the verdict, or FAIL if its own entries and the reserve are exhausted.
+Cost-sensitivity runs (section 8) are allowed for a hypothesis's candidate once every
+registered configuration of that hypothesis has a selectable run, before or after the
+unseal, outside N. The holdout seal stays as merged in
+[#59](https://github.com/lgreene03/norse-stack/pull/59), apart from item 3 of this change
+(the three-run cap counts only runs that reached the unsealed stage, security review round
+3, C1) and item 4 (the unseal shows the data loading and seal diff since the candidate's
+run and records the hash the owner accepts, round 3, T1). D20's surviving registered
+freeze at G2.7 is withdrawn, and with it follow-up N2b, the race between a freeze and a
+run from a second clone: the unseal is a chain entry that moves the ledger head, so a run
+admitted before it is refused at its append. The owner's instruction covers the
+`prereg-v2` tag for this change, as D18 covered `prereg-v1`: the lead creates the
+annotated tag on the merged commit on main. At the coordinator's direction `prereg-v2`
+also settles what the G3.1 drafting ([#64](https://github.com/lgreene03/norse-stack/pull/64),
+its open questions 1, 4, 10 and 11) found D21 leaves open: the unseal waits until each
+hypothesis's grid is complete or its own entries and the reserve are exhausted, so no
+hypothesis is stopped early by the other's unseal; with no holdout candidate, development
+closes at that same point and the verdict records the ledger entry it was computed at; and
+the verdict table gains VOID (a broken hash chain) and NOT JUDGED (a gate that did not pass
+its calibration). It also discloses huginn's fixture `data/btc_test.jsonl`, which holds
+BTC data from 2026-05-18 inside the holdout, as the G2.5 audit
+([#63](https://github.com/lgreene03/norse-stack/pull/63)) found. These are the
+coordinator's clarifications, not further owner decisions.

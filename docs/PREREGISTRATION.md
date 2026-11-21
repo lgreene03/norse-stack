@@ -1,8 +1,9 @@
 # Pre-registration of H1 and H2 (G0.7)
 
 **Status: signed by the owner on 2026-11-14; drafted on 2026-11-11 and revised on
-2026-11-13 after review (PR 52). It binds nothing until the commit holding it is tagged
-`prereg-v1` (section 16).** The owner is the only person on this project. The quant, CTPO, technical,
+2026-11-13 after review (PR 52); revised on 2026-11-21 on the owner's instruction to remove
+the ledger freeze (decision D21), as `prereg-v2`. It binds nothing until the commit holding
+it is tagged (`prereg-v1`, and for this revision `prereg-v2`; section 16).** The owner is the only person on this project. The quant, CTPO, technical,
 security and interface roles named in this document are AI agents the owner runs, defined
 in [.claude/agents](../.claude/agents); the quant role drafted this document and the CTPO
 role reviewed it. Neither is an independent person, and neither signs: the owner alone
@@ -20,7 +21,7 @@ the single holdout candidate, and what each criterion implies in net Sharpe.
 **The machine-readable form governs.** [preregistration.json](preregistration.json)
 holds the same rules in a form the ledger (G1.5) and the seal (G1.6) load and hash. If it
 and this prose ever disagree, the JSON file governs. The genesis entry of the trial ledger
-records the SHA-256 of both files and the `prereg-v1` commit.
+records the SHA-256 of both files and the commit of the `prereg-*` tag it names.
 
 ## Contents
 
@@ -68,6 +69,17 @@ names exist. They are defined by what a token is, apply identically to both peri
 change nothing in development, and the reasoning is recorded in decision D14 so a reader
 can judge it. The arithmetic in section 12 uses only synthetic numbers and stated
 assumptions.
+
+**Disclosure about a committed fixture inside the holdout (added in `prereg-v2`).** The
+G2.5 manifest audit of 2026-11-21 ([#63](https://github.com/lgreene03/norse-stack/pull/63))
+found that huginn's committed walk-forward fixture `data/btc_test.jsonl` holds Binance
+BTC data from 2026-05-18, a day inside the holdout window, and that the seal's tests do
+not scan it. The file predates this pre-registration: it is the fixture of the retired
+OBI strategy, used for that strategy's walk-forward. It is intraday BTC data on that one
+day and holds no daily or four-hour bar of any series H1 or H2 reads beyond what that
+day implies. One row of it was printed during the 2026-11-21 audit, to identify the
+file. The file stays where it is, since huginn's reproduce check depends on it. The
+threat model's T21 residual, that reads outside the harness cannot be refused, covers it.
 
 ## 2. Data and periods
 
@@ -455,10 +467,12 @@ percentile among its hundred controls' Sharpe ratios. A random-sign trend contro
 earns about half the market's drift, so its distribution is not centred on zero; that is
 why it is reported rather than used as a threshold.
 
-**Cost sensitivity.** After the ledger freeze, each hypothesis's candidate (section 11) is
-re-costed at 7.5, 10 and 15 bps a side in total (round trips of 15, 20 and 30 bps, as G2.4
-names them), slippage staying at 2 bps and the fee taking the rest. These runs are
-reported in the tear sheet only. Every gate figure uses 10 bps plus 2 bps a side.
+**Cost sensitivity.** Each hypothesis's candidate (section 11) is re-costed at 7.5, 10 and
+15 bps a side in total (round trips of 15, 20 and 30 bps, as G2.4 names them), slippage
+staying at 2 bps and the fee taking the rest. These runs are allowed once every registered
+configuration of that hypothesis has a selectable run, before or after the unseal (decision
+D21; after it, the candidate is the one chosen on the entries before it), and are outside
+N. They are reported in the tear sheet only. Every gate figure uses 10 bps plus 2 bps a side.
 
 ## 9. What a trial is, how N is counted, and the budget
 
@@ -470,8 +484,9 @@ it resolves to; a run that resolves to no registered configuration is refused, a
 may produce returns outside the registered windows except the holdout run after the
 unseal. This closes threat T18 of the [ledger threat model](research/ledger-threat-model.md).
 
-**N** is the number of trial entries in the frozen ledger, from the genesis entry to the
-freeze tag, across H1, H2 and the reserve. Every trial entry opened counts once, whether
+**N** is the number of trial entries from the genesis entry to the unseal entry, which
+closes development (there is no ledger freeze, decision D21), across H1, H2 and the
+reserve; no trial, benchmark or control entry may follow the unseal. Every trial entry opened counts once, whether
 the run completes, fails or is aborted; every rerun of a configuration counts again; N is
 never deduplicated by configuration hash, and no statistic takes N from a caller.
 Benchmark, control, sensitivity and holdout entries are outside N. The genesis entry pins
@@ -488,20 +503,20 @@ for reruns; no configuration outside the grids is ever run.
    whatever the earlier results show. Stopping early after a good result would make the
    deflated Sharpe's N too small.
 2. A hypothesis is judged only when every one of its registered configurations has a
-   selectable run. If it has not by the freeze on 2026-12-01, it cannot pass and its
-   entries still count.
+   selectable run. One that never gets there is NOT RUN at the verdict, or FAIL if its own
+   entries and the reserve are exhausted (section 11), and its entries still count.
 3. A rerun requires a recorded defect: what was wrong and the commit that fixes it, written
    in the rerun's entry. A defect is a departure of the code from this registration, or a
    failure to complete; the rerun's entry names the section of this document the code
    departed from, and the fix may only bring the code into line with it. A fix to code
    both hypotheses use (the harness, loaders, fills or costs) reruns every configuration
    already run; a fix confined to one hypothesis's strategy code reruns that hypothesis's
-   configurations already run. Every statistic of section 10 is computed once, at the
-   freeze, from the committed return series with the code at the freeze tag, so a fix to
-   statistics code reruns no trial. Any figure displayed before the freeze (G1.8, G2.1) is
-   provisional and binds nothing.
-4. A configuration's selectable run is its last completed trial entry at the freeze whose
-   returns cover its hypothesis's whole out-of-sample window; the harness runs a grid
+   configurations already run. Every statistic of section 10 is computed on the entries
+   before the unseal entry, from their committed return series, so a fix to statistics code
+   reruns no trial. Any figure displayed before the unseal (G1.8, G2.1) is provisional and
+   binds nothing.
+4. A configuration's selectable run is its last completed trial entry before the unseal
+   whose returns cover its hypothesis's whole out-of-sample window; the harness runs a grid
    configuration only over that whole window. All selectable runs of a hypothesis must come
    from identical git tree hashes of the harness and strategy paths the genesis entry
    lists, as their entries record; a hypothesis whose selectable runs do not is treated as
@@ -644,7 +659,8 @@ edge as well as for a single planted column.
 
 ## 11. The holdout candidate, the single holdout run and the verdict
 
-The candidate is chosen by a mechanical rule over the frozen ledger, so neither a look at
+The candidate is chosen by a mechanical rule over the entries before the unseal entry,
+which closes development (there is no ledger freeze, decision D21), so neither a look at
 development results nor a private look at 2026 can change which configuration is judged
 (threat T22).
 
@@ -662,7 +678,13 @@ development results nor a private look at 2026 can change which configuration is
    password manager, with only its salted hash committed under G1.6). The key record
    (scrypt with n of at least 2^17, r 8, p 1 and a 16-byte salt, threat model T25) is
    pinned in the genesis entry, which is written after G1.6 commits it. The harness
-   refuses an unseal that names any other configuration.
+   refuses an unseal that names any other configuration. The unseal closes development:
+   N, V and the holdout candidate are computed on the entries before it, and no trial,
+   benchmark or control entry may follow it (decision D21). It comes only once each
+   hypothesis has a selectable run of every registered configuration or has exhausted its
+   own entries and the reserve: item 3 compares the two candidates, so an unseal while the
+   other grid can still run would stop it early, which run rule 1 forbids within a
+   hypothesis. An earlier unseal is refused, and the ledger refuses one written anyway.
 5. **The holdout run** is one simulation of the candidate configuration from the start of
    its development window through 2026-10-31, with positions carried across the boundary
    and the 2025-12 month-end universe taking effect at 2026-01-01 00:00. HOLD-1 reads only
@@ -680,10 +702,24 @@ development results nor a private look at 2026 can change which configuration is
 
 | Verdict | When |
 |---|---|
+| VOID | for both hypotheses, whenever the trial ledger's hash chain fails verification: the iteration is void and restarts from pre-registration, as its kill criteria say, and nothing the ledger holds stands as evidence either way |
+| NOT JUDGED | for both hypotheses, whenever the gate did not pass its calibration under G1.7 (section 10, "Calibration"), a calibration that never completed included: no strategy is judged, and no development or holdout figure is reported as evidence |
 | PASS | it passes development, its candidate was the holdout candidate, and HOLD-1 holds |
 | PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT | it passes development, but the other hypothesis's candidate was the holdout candidate |
 | FAIL | otherwise, once every registered configuration has a selectable run; and whenever the hypothesis's own entries and the reserve are exhausted without a pass |
-| NOT RUN | not every registered configuration has a selectable run at the freeze, and the hypothesis's own entries and the reserve are not exhausted; if they are, the verdict is FAIL |
+| NOT RUN | not every registered configuration has a selectable run at the verdict, and the hypothesis's own entries and the reserve are not exhausted; if they are, the verdict is FAIL |
+
+The rows are read in order and the first that holds gives the verdict; VOID and NOT JUDGED
+come from the iteration's kill criteria and replace every other row for both hypotheses.
+
+**What closes development when there is no holdout candidate.** Without a holdout
+candidate there is no unseal. Development then closes once each hypothesis has a
+selectable run of every registered configuration or has exhausted its own entries and the
+reserve, and neither passes development: the verdict is then given as the table says,
+computed on the ledger at that point, and records the ledger entry it was computed at.
+Any later trial entry can only be a rerun with a recorded defect (run rule 3); it changes a
+published verdict only if the defect is recorded and the verdict reissued. This is the
+minimum the verdict needs; no ledger entry marks the point.
 
 ## 12. The net Sharpe each criterion implies
 
@@ -814,7 +850,8 @@ hypotheses (section 10).
 All are in [DECISIONS.md](DECISIONS.md). D11 to D15 were decided by the owner on
 2026-11-11, on the quant's recommendation; each entry keeps the options that were rejected
 and why. D16 and D17 are the owner's decisions of the same day on the ledger's and the
-seal's protections.
+seal's protections; D21 is the owner's decision of 2026-11-21 that removes the ledger
+freeze.
 
 | Decision | What it fixes here |
 |---|---|
@@ -827,6 +864,7 @@ seal's protections.
 | D15 | H2's excess return is against a beta-matched buy-and-hold; H1's stays volatility-matched |
 | D16 | rulesets: main cannot be force pushed or deleted and needs the `research` and `validate` checks; `prereg-*` and `ledger-*` tags cannot be moved or deleted |
 | D17 | the holdout files stay off the local mirror until the single unseal, then are fetched again and verified against the frozen holdout manifest |
+| D21 | there is no ledger freeze: the unseal entry closes development, N, V and the holdout candidate are computed on the entries before it, and a hypothesis without a selectable run of every configuration by then is NOT RUN |
 
 ## 15. Where NEXT_ITERATION.md, the register and merged code disagree with this
 
@@ -883,7 +921,8 @@ its JSON file and DECISIONS.md.
 10. **Medium, confirmed.** NEXT_ITERATION.md's kill criteria call an exhausted budget a fail;
     the verdict table says so (section 11), and NOT RUN applies only while budget remains.
 11. **Low, likely.** Sensitivity runs sit outside N, so they must be enforced: follow-up for
-    security and G1.5 to add `test_sensitivity_run_before_the_freeze_is_refused` and
+    security and G1.5 to add `test_sensitivity_run_before_its_hypothesis_is_complete_is_refused`
+    (named for the freeze until decision D21) and
     `test_sensitivity_run_of_a_non_candidate_is_refused`.
 12. **Low, confirmed.** NEXT_ITERATION.md calls benchmark and control runs "recorded but can
     never be selected", G2.1 speaks of "random-sign control runs ... marked unselectable",
@@ -945,13 +984,17 @@ tag but not creating one, so the first `prereg-v1` created anywhere is permanent
 squash merge would orphan a tag placed on this branch. One GitHub identity is shared by
 the owner and every agent, so neither the signature row nor the tag proves who acted; D18
 records the owner's instruction, and what the tag does prove is that these rules were
-fixed before the ledger's genesis entry.
+fixed before the ledger's genesis entry. The owner instructed in conversation on
+2026-11-21 that the change removing the ledger freeze be tagged `prereg-v2` (D21), as D18
+did for `prereg-v1`; the lead creates that annotated tag on the resulting commit on main
+once the pull request merges.
 
 **Change log.**
 
 | Tag | Date | Reason |
 |---|---|---|
 | `prereg-v1` | 2026-11-14 | first version |
+| `prereg-v2` | 2026-11-21 | the ledger freeze removed; the unseal closes development (D21); section 1 discloses huginn's fixture `data/btc_test.jsonl`, BTC data from 2026-05-18 inside the holdout, found by the G2.5 audit; section 11, from the G3.1 drafting (#64): the unseal waits until each hypothesis's grid is complete or its budget exhausted (no early stopping across hypotheses), what closes development with no holdout candidate (minimal, in prose; no ledger entry marks it), and the verdicts VOID and NOT JUDGED |
 
 **Signatures.**
 
