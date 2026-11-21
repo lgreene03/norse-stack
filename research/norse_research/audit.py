@@ -1,7 +1,7 @@
 """Audit checks around the ledger whose decisions are unit-tested offline (G1.5).
 
-Both need the network to run for real, so they are steps of the G2.7 freeze and the
-G3.4 attestation; here they take what they read as arguments.
+Both need the network to run for real, so they are steps of the G2.7 ledger audit before
+the unseal and the G3.4 attestation; here they take what they read as arguments.
 
 * ``force_push_findings`` reads GitHub's repository activity record
   (``GET /repos/{owner}/{repo}/activity``), which keeps force pushes and branch

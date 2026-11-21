@@ -33,11 +33,13 @@ history every committed version of the file is a byte prefix of the next and eve
 return series is never changed (T4, T7); the pre-registration tag still points where
 genesis says (T24); and the run rules of section 9 hold over the whole ledger (M2). A
 ``ledger-*`` tag on a commit that holds no ledger is reported, not fatal, because the
-tag ruleset makes such a tag permanent (M6). An unseal entry (G1.6) must name the
-freeze anchor's commit and the holdout candidate the registered rule selects on the
-ledger at that anchor (``gate.check_unseal_candidate``; T22), and every holdout run
-must be at its candidate's commit plus only changes to data loading or the seal
-(section 11, item 6).
+tag ruleset makes such a tag permanent (M6). There is no ledger freeze (decision D21):
+the unseal entry (G1.6) closes development. It must name the holdout candidate the
+registered rule selects on the entries before it (``gate.check_unseal_candidate``;
+T22), its commit must differ from the candidate's only in data loading or the seal
+(section 11, item 6), and the diff it records as accepted must be that diff (security
+review round 3, T1); every sensitivity run must re-cost its hypothesis's candidate
+(``gate.check_sensitivity_entries``).
 
 Nothing here reads the clock to decide anything; it is read only for timestamps,
 which never decrease along the chain (T11).
@@ -67,7 +69,6 @@ from .canonical import CanonicalError, loads_strict, sha256_hex
 from .environment import check_environment
 from .ledger import (
     ATTEMPT,
-    ATTEMPT_CLOSE,
     CODE_BRANCH,
     FORMAT,
     GENESIS,
@@ -96,7 +97,14 @@ from .registration import (
     TRIAL,
     Registration,
 )
-from .rules import check_run_rules, holdout_commit_rule, holdout_rule_error, run_of, same_run
+from .rules import (
+    after_unseal_error,
+    check_run_rules,
+    holdout_attempt_error,
+    holdout_rule_error,
+    run_of,
+    same_run,
+)
 from .sources import (
     StrategySourceRefused,
     check_strategy_sources,
@@ -105,11 +113,10 @@ from .sources import (
 )
 from .store import REPO_ROOT
 
-# Anchors are named for their content, so a stray tag can never take their name (N3):
-# ledger-genesis-<hash of the first genesis entry> and ledger-freeze-<frozen commit>.
+# The anchor is named for its content, so a stray tag can never take its name (N3):
+# ledger-genesis-<hash of the first genesis entry>. There is no freeze anchor (D21).
 GENESIS_ANCHOR = "ledger-genesis-"
-FREEZE_ANCHOR = "ledger-freeze-"
-RESERVED = ("ledger-genesis", "ledger-freeze")
+RESERVED = ("ledger-genesis",)
 MILESTONE_TAG = re.compile(r"ledger-[a-z0-9][a-z0-9.-]*")
 SCRYPT_MAXMEM = 256 * 1024 * 1024
 # Configuration that would send fetches or pushes elsewhere while the URL still
@@ -121,7 +128,8 @@ TRANSPORT_OVERRIDES = (
     r"^ssh\.variant$",
     r"^http\..*(proxy|ssl).*$",
 )
-PREREGISTRATION_TAG = "prereg-v1"
+# The tag a new genesis entry names by default; replay trusts the tag genesis records.
+PREREGISTRATION_TAG = "prereg-v2"
 LOCK_NAME = "norse-ledger.lock"
 HOLDOUT_LOCK_NAME = "norse-holdout.lock"
 LEDGER_NAME = "Norse trial ledger"
@@ -248,7 +256,6 @@ class Verified:
     tags: dict[str, str]  # ledger-* tag on a ledger commit -> that commit
     ignored_tags: dict[str, str] = field(default_factory=dict)  # stray ledger-* tags
     registration: Registration | None = None
-    freeze: str | None = None  # the commit the freeze anchor marks
 
 
 class GitLedger:
@@ -457,26 +464,21 @@ class GitLedger:
             if genesis_of(written) is None:
                 raise VerificationError("no entry may precede the genesis entry")
             self.check_remote(written[0].body["remote"]["url"])  # the first genesis's (N5)
-            if body.get("type") in (OPEN, UNSEAL, ATTEMPT, ATTEMPT_CLOSE):
-                frozen = self.freeze_commit(remote) is not None
-                late = body.get("type") != OPEN or body.get("kind") in (SENSITIVITY, HOLDOUT)
-                if frozen != late:
-                    raise LedgerOutOfStep(
-                        "the ledger is frozen: only the candidates' sensitivity runs, the "
-                        "unseal and the holdout run remain"
-                        if frozen else
-                        "sensitivity runs, the unseal and the holdout run come only after the "
-                        "ledger freeze"
-                    )
-            if body.get("type") == UNSEAL:
-                problem = unseal_proof_error(self.git, genesis_of(written), body)
-                if problem:
-                    raise VerificationError(f"the unseal is refused: {problem}")
+            if body.get("type") == OPEN:
+                # The unseal closes development (D21); checked under the lock, against the
+                # remote's ledger, since another session may have unsealed meanwhile.
+                closed = after_unseal_error(written[:-1], body.get("kind"))
+                if closed:
+                    raise LedgerOutOfStep(closed)
+            if body.get("type") == UNSEAL or (
+                body.get("type") == OPEN and body.get("kind") == SENSITIVITY
+            ):
+                self._check_before_push(written, local)
             # The holdout rules replay enforces, applied before anything is pushed, so no
             # entry written through append can fail verification for good (round 2, N4).
             problem = None
             if body.get("type") == ATTEMPT:
-                problem = holdout_commit_rule(written[:-1], body.get("commit"))
+                problem = holdout_attempt_error(written[:-1], body.get("commit"))
             elif body.get("type") == OPEN and body.get("kind") == HOLDOUT:
                 problem = holdout_rule_error(written[:-1], run_of(written[-1]))
             if problem:
@@ -506,6 +508,24 @@ class GitLedger:
                     f"the remote's ledger head {after} does not hold the pushed entry {commit}"
                 )
             return entry
+
+    def _check_before_push(self, written: Sequence[Entry], local: str | None) -> None:
+        """What replay checks of an unseal or a sensitivity run, which needs git, the
+        registration and the gate, checked before the entry is pushed, so no entry
+        written through append fails verification for good (round 2, N4; D21)."""
+        series = self.snapshot(local).series_files
+        snapshot = LedgerSnapshot(tuple(written), series)
+        registration = load_registration(self.git, snapshot.genesis)
+        what = "the unseal" if written[-1].type == UNSEAL else "the entry"
+        try:
+            if written[-1].type == UNSEAL:
+                self._check_unseal(snapshot, registration)
+            else:
+                from .gate import check_sensitivity_entries  # the gate imports this module
+
+                check_sensitivity_entries(snapshot, registration)
+        except VerificationError as exc:
+            raise VerificationError(f"{what} is refused: {exc}") from None
 
     def _commit(
         self, parent: str | None, data: bytes, files: Mapping[str, bytes], message: str,
@@ -642,20 +662,6 @@ class GitLedger:
         found = self._remote_refs("ledger-")
         return {name.removeprefix("refs/tags/"): oid for name, oid in found.items()}
 
-    def freeze_commit(self, head: str | None) -> str | None:
-        """The commit the freeze anchor marks, if it is in the ledger ending at ``head``."""
-        if head is None:
-            return None
-        found = []
-        for name, commit in self.milestone_tags().items():
-            if name == f"{FREEZE_ANCHOR}{commit}" and self.git.try_text(
-                "cat-file", "-t", commit
-            ) == "commit" and self.git.is_ancestor(commit, head):
-                found.append(commit)
-        if len(found) > 1:
-            raise VerificationError(f"the ledger has more than one freeze anchor: {found}")
-        return found[0] if found else None
-
     def verify(self, head: str | None = None, *, need_genesis_tag: bool = True) -> Verified:
         """The anchored verification of the threat model's principle 1."""
         self.check_repository()
@@ -690,46 +696,47 @@ class GitLedger:
         self.verify_history(head)
         self.verify_preregistration_tag(snapshot)
         registration = load_registration(self.git, genesis)
-        freeze = self.freeze_commit(head)
-        frozen_length = None
-        if freeze is not None:
-            frozen_length = len(parse_ledger(self.git.blob(freeze, LEDGER_PATH)))
-        check_run_rules(snapshot.entries, registration, genesis, frozen_length)
+        check_run_rules(snapshot.entries, registration, genesis)
         self._check_rerun_commits(snapshot)
-        self._check_unseal(snapshot, registration, freeze)
-        return Verified(snapshot, head, remote, tags, ignored, registration, freeze)
+        self._check_unseal(snapshot, registration)
+        from .gate import check_sensitivity_entries  # the gate imports this module
 
-    def _check_unseal(
-        self, snapshot: LedgerSnapshot, registration: Registration, freeze: str | None
-    ) -> None:
-        """On replay, the unseal names the freeze anchor's commit and the candidate the
-        registered rule selects on the ledger at it (T20, T22), and every holdout run
-        is at the candidate's commit plus only data loading or the seal (item 6)."""
+        check_sensitivity_entries(snapshot, registration)
+        return Verified(snapshot, head, remote, tags, ignored, registration)
+
+    def _check_unseal(self, snapshot: LedgerSnapshot, registration: Registration) -> None:
+        """On replay, the unseal's proof verifies, it names the candidate the registered
+        rule selects on the entries before it (T22), its commit differs from the
+        candidate's only in data loading or the seal (item 6), and the diff it records as
+        accepted is that diff (security review round 3, T1)."""
         unseal = unseal_of(snapshot.entries)
         if unseal is None:
             return
-        if unseal.body["freeze"] != freeze:
-            raise VerificationError(
-                f"entry {unseal.seq}: the unseal names the freeze {unseal.body['freeze']}, "
-                f"but the freeze anchor marks {freeze}"
-            )
         problem = unseal_proof_error(self.git, snapshot.genesis, unseal.body)
         if problem:
             raise VerificationError(f"entry {unseal.seq}: {problem}")
         from .gate import check_unseal_candidate  # the gate imports this module
 
-        check_unseal_candidate(self.snapshot(freeze), registration, freeze, unseal)
+        before = LedgerSnapshot(snapshot.entries[: unseal.seq], snapshot.series_files)
+        check_unseal_candidate(before, registration, unseal)
         # Item 6's rule, applied once: the code at the unseal's commit differs from the
         # candidate's only in data loading or the seal; every holdout run is at exactly
         # that commit, which ``rules`` replays (security review round 2, N1).
         candidate = next(e for e in snapshot.entries if e.hash == unseal.body["candidate"]["open"])
         paths = snapshot.genesis.body["tree_paths"]
+        paths = [*paths["harness"], *paths[candidate.body["hypothesis"]]]
         problem = holdout_commit_error(
-            self.git, candidate.body["commit"], unseal.body["commit"],
-            [*paths["harness"], *paths[candidate.body["hypothesis"]]],
+            self.git, candidate.body["commit"], unseal.body["commit"], paths
         )
         if problem:
             raise VerificationError(f"entry {unseal.seq}: {problem}")
+        _, _, digest = seal_changes(self.git, candidate.body["commit"], unseal.body["commit"])
+        if digest != unseal.body["accepted_diff"]:
+            raise VerificationError(
+                f"entry {unseal.seq}: the unseal records accepting diff "
+                f"{unseal.body['accepted_diff']}, but the data loading and seal diff from the "
+                f"candidate's commit to the unseal's is {digest} (security review round 3, T1)"
+            )
 
     def _check_rerun_commits(self, snapshot: LedgerSnapshot) -> None:
         """On replay, each rerun's fix is in its own code and was not in the code of
@@ -767,7 +774,7 @@ class GitLedger:
                 continue
             if name.startswith(RESERVED):
                 first = tagged.split(b"\n", 1)[0]
-                if name not in (f"{GENESIS_ANCHOR}{sha256_hex(first)}", f"{FREEZE_ANCHOR}{commit}"):
+                if name != f"{GENESIS_ANCHOR}{sha256_hex(first)}":
                     ignored[name] = commit  # a reserved name not matching its content (N3)
                     continue
             if not self.git.is_ancestor(commit, head):
@@ -809,14 +816,14 @@ class GitLedger:
         the remote, after full verification. Returns the tag object's id. The tag
         object is pushed straight to the remote, so a failed push leaves nothing
         behind; an existing tag is never replaced (tags are immutable, D16). The
-        freeze tag is refused here unless ``freeze`` is set, which only
-        ``gate.freeze`` does, after its completeness check (review M6)."""
+        genesis anchor is refused here unless ``_anchor`` is set, which only the
+        genesis step does (review M6)."""
         if not MILESTONE_TAG.fullmatch(name):
             raise ValueError(f"{name!r} is not a lower-case ledger-* milestone tag name")
         if name.startswith(RESERVED) and not _anchor:
             raise LedgerError(
-                f"{name} is a reserved name: the genesis step and gate.freeze write the "
-                "anchors, which are irreversible"
+                f"{name} is a reserved name: the genesis step writes the anchor, which "
+                "is irreversible"
             )
         check_environment(os.environ, self.git.repo)
         with self._lock():
@@ -829,10 +836,6 @@ class GitLedger:
                 f"{GENESIS_ANCHOR}{verified.snapshot.entries[0].hash}"
             ):
                 raise LedgerError(f"{name} does not name this ledger's genesis entry")
-            if name.startswith(FREEZE_ANCHOR) and (
-                name != f"{FREEZE_ANCHOR}{head}" or verified.freeze is not None
-            ):
-                raise LedgerError(f"{name} does not name the head, or the ledger is frozen")
             local_tag = self.git.try_text("rev-parse", "--verify", "--quiet", f"refs/tags/{name}")
             if name in self.milestone_tags() or local_tag:
                 raise LedgerError(f"tag {name} already exists; milestone tags never move")
@@ -873,6 +876,27 @@ def holdout_commit_error(git: Git, candidate: str, commit: str, paths: Sequence[
             "commit plus changes to data loading or the seal"
         )
     return None
+
+
+def seal_changes(git: Git, candidate: str, commit: str) -> tuple[list[str], str, str]:
+    """The data loading and seal files changed from the candidate's commit to
+    ``commit``, git's summary of those changes for the owner to read, and the SHA-256
+    of the diff's raw record (each changed file's path and its blob ids before and
+    after), which names the changed content exactly and, being plumbing, does not depend
+    on anyone's diff settings. The owner accepts that hash at the unseal, which records
+    it, and replay recomputes it (security review round 3, T1). With no change the
+    record is empty and the hash is that of no bytes."""
+    seal_files = sorted(SEAL_AND_DATA_LOADING)
+    raw = git.run(
+        "diff-tree", "-r", "--no-renames", "--no-abbrev", candidate, commit, "--", *seal_files
+    )
+    files = sorted(
+        line.split("\t", 1)[1] for line in raw.decode().splitlines() if "\t" in line
+    )
+    stat = ""
+    if files:
+        stat = git.text("diff", "--stat", "--no-color", candidate, commit, "--", *files)
+    return files, stat, hashlib.sha256(raw).hexdigest()
 
 
 # --- the registration through the genesis entry ----------------------------------------
@@ -1172,7 +1196,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     ``verify`` runs the anchored verification and prints what it checked; ``sync``
     fast-forwards the local ledger to the remote's; ``tag`` marks the ledger head at
-    a milestone (the freeze has its own command, in ``norse_research.gate``);
+    a milestone (there is no freeze, decision D21);
     ``genesis`` writes the genesis entry and its ``ledger-genesis-*`` anchor, a separate and
     deliberate step taken once G1.6 has committed the holdout key record. Never run
     ``git push --tags`` in this repository: a stray ``ledger-*`` tag is permanent.

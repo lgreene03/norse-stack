@@ -67,17 +67,24 @@ and a superseding genesis is still possible until the first entry of any other t
 
 ## What happens at the unseal (G3.2, with the owner holding the key)
 
-The unseal comes after the freeze anchor (G2.7) and after both README outcomes are drafted
-(G3.1). First see what the unseal must name, which needs no key:
+There is no ledger freeze (decision D21, 2026-11-21): the unseal closes development. No trial,
+benchmark or control may run after it, and N, V and the holdout candidate are computed on the
+entries before it, so it comes once every run the owner means to make is in the ledger, after the
+G2.7 ledger audit and after both README outcomes are drafted (G3.1). It is refused until each
+hypothesis has a selectable run of every registered configuration or has exhausted its own
+entries and the reserve (a hypothesis that ran out is FAIL at the verdict), so neither grid is
+stopped early by the other's unseal (section 11, item 4). First see what the unseal must name,
+which needs no key:
 
 ```bash
 python -m norse_research.seal candidate
 ```
 
-It prints, for each hypothesis, its candidate and whether it meets DEV-1 to DEV-5 on the frozen
-ledger, then the pre-registration the genesis entry names and the holdout candidate's
-configuration id and hash. If no hypothesis passes development there is no holdout candidate, and
-then no unseal and no holdout run (section 11, item 3).
+It prints, for each hypothesis, its candidate and whether it meets DEV-1 to DEV-5 on the ledger as
+it stands (provisional until the unseal), then the pre-registration the genesis entry names, the
+holdout candidate's configuration id and hash, the data loading and seal files changed since the
+candidate's run and the hash of that diff at HEAD. If no hypothesis passes development there is no
+holdout candidate, and then no unseal and no holdout run (section 11, item 3).
 
 Then rehearse the holdout run, which also needs no key and writes nothing to the ledger:
 
@@ -98,18 +105,25 @@ the real boundary at 2026-01-01, whose data stays off disk, so a gap there is st
 Otherwise the owner runs, in a terminal of their own:
 
 ```bash
-python -m norse_research.seal unseal --commit <the prereg-v1 commit> --configuration-sha256 <the candidate's hash>
+python -m norse_research.seal unseal --commit <the pre-registration commit> --configuration-sha256 <the candidate's hash> --accept-diff <the hash it prints>
 ```
 
-Before it asks for the passphrase it refuses on any environment override; a local ledger head
-that is not the remote's (T23); a ledger that fails anchored verification; a ledger with no freeze
-anchor, which is what an early unseal means here (T20); a ledger that already holds an unseal
-entry (T23); a dirty tree, a HEAD not on main, or code running that is not the code at HEAD;
-period constants that differ from the genesis entry's (T20); a pre-registration commit, tag or file
-hash other than the genesis entry's (T24); a configuration hash other than the holdout
-candidate's, which it computes by the registered rule over the ledger at the freeze anchor (T22);
-and a HEAD at which anything but data loading or the seal has changed since the candidate's
-selectable run (section 11, item 6, applied here once; the entry records that HEAD).
+`--tag` defaults to the tag the genesis entry names. Before it asks for the passphrase it refuses
+on any environment override; a local ledger head that is not the remote's (T23); a ledger that
+fails anchored verification; a ledger on which a hypothesis has neither a selectable run of every
+registered configuration nor its own entries and the reserve used up, which is what an early
+unseal means here (T20; an unseal while the other grid can still run would stop it early); a ledger that already
+holds an unseal entry (T23); a dirty tree, a HEAD not on main, or code running that is not the code
+at HEAD; period constants that differ from the genesis entry's (T20); a pre-registration commit,
+tag or file hash other than the genesis entry's (T24); a configuration hash other than the holdout
+candidate's, which it computes by the registered rule over the ledger before the unseal (T22); a
+HEAD at which anything but data loading or the seal has changed since the candidate's selectable
+run (section 11, item 6, applied here once; the entry records that HEAD); and an accepted diff hash
+that is not the hash of the data loading and seal diff from the candidate's commit to HEAD. Without
+`--accept-diff`, or with another hash, it prints the files changed, git's summary of the change,
+the command to read it in full and the hash, and refuses, so the owner reads every data loading or
+seal change before anything is unsealed; with nothing changed it prints the hash of the empty diff
+to accept (security review round 3, T1).
 Only then does it read the passphrase from the terminal and check that the SHA-256 of its scrypt
 output is the key record's verifier, in constant time (T25). A missing or wrong passphrase writes
 nothing.
@@ -117,7 +131,8 @@ nothing.
 When the passphrase verifies, the unseal entry is appended through the ledger's ordinary append,
 committed, pushed and read back from the remote. It names the pre-registration, the candidate's
 configuration id, hypothesis and hash, the open and result entries of its selectable run, the
-freeze anchor's commit, and the hashes of the holdout manifest and the key record, and it reveals
+commit the holdout runs at, the accepted diff hash, and the hashes of the holdout manifest and the
+key record, and it reveals
 the scrypt output as its `proof`. The ledger itself checks that proof against the verifier in the
 key record genesis pins, when the entry is written and on every replay, so an unseal written
 without the owner's key, by the seal, by a direct append or by git plumbing, is refused, and with
@@ -132,10 +147,12 @@ since 2026-11-11, restore that file from the encrypted offline copy into the mir
 and fetches the rest. The unseal itself is never repeated.
 
 Verification replays all of this on every later read of the ledger: a second unseal entry, an
-unseal before the freeze anchor, one without a proof that verifies, one naming another
-pre-registration, key record or holdout manifest, or one naming any configuration other than the
-candidate the rule selects on the frozen ledger, each fails verification, so the harness and the
-gate refuse the ledger.
+early unseal, one without a proof that verifies, one naming another pre-registration, key record or
+holdout manifest, one naming any configuration other than the candidate the rule selects on the
+entries before it, or one recording a diff hash other than that of the data loading and seal diff
+from the candidate's commit to its own, each fails verification, so the harness and the gate
+refuse the ledger. The ledger's append makes the same checks before it pushes the entry, so none
+of them can be broken through it.
 
 ## The holdout run
 
@@ -144,7 +161,8 @@ The holdout run goes through the harness like any run:
 It takes the harness's usual checks (environment, ledger in step and verified, periods, the
 development manifest, a clean tree, HEAD on main, the code at HEAD), and is then refused without
 the unseal entry, for any configuration hash but the unseal's (T22), once a completed holdout result
-has spent the seal, after three holdout runs, when the candidate's configuration no longer resolves
+has spent the seal, once three runs have reached the unsealed stage, when the candidate's
+configuration no longer resolves
 the same at HEAD, at any commit but the one the unseal entry records, when the committed holdout
 manifest is not the registered one, and when the holdout files on disk do not all verify against it.
 
@@ -174,8 +192,10 @@ commit to the unseal's HEAD, only the data loading and seal modules (`seal`, `lo
 `manifest`, `formats`, `binance_archive`, `periods`) may change anywhere in the package or the
 hypothesis's paths, and the unseal entry records that HEAD. Every holdout run after it, and every
 attempt within one, must be at exactly that commit with a clean tree; no other commit is ever
-accepted. There are at most three holdout runs (`rules.HOLDOUT_RUNS`). The ledger, the harness
-and replay all enforce both rules, and nothing a run reports about itself decides anything. A
+accepted. At most three runs reach the unsealed stage, an attempt entry each
+(`rules.HOLDOUT_ATTEMPTS`); a run refused or failed before its attempt entry, in the development
+reproduction or on a network error, read nothing of the holdout and does not count (security review
+round 3, C1). The ledger, the harness and replay all enforce both rules, and nothing a run reports about itself decides anything. A
 failed run may therefore be retried only where the same code and data give the same series, for a
 failure outside them (a crash, a full disk). Once the strategy has been given the unseal, a
 failure's own message is withheld from the public ledger, which records only the exception's type,
@@ -186,7 +206,9 @@ written by hand after it fails verification. The holdout run is outside N.
 ## Choices made here
 
 Section 11 leaves a few things to the implementer; each is chosen as close to its text as the code
-allows. "Early" means before the freeze anchor exists. The threat model also names both G3.1 drafts
+allows. "Early" means before each hypothesis has a selectable run of every registered configuration
+or has exhausted its own entries and the reserve, since section 11, item 3 compares the two
+candidates (it meant before the freeze anchor until decision D21 removed the freeze). The threat model also names both G3.1 drafts
 being in the chain, but the drafts have no form the ledger can read and section 11 does not register
 them, so they remain a process control for G3.1 and the security role. The development criteria
 DEV-2 to DEV-5 and the decision whether a hypothesis passes were not yet in `gate.py`, and the holdout
@@ -195,7 +217,8 @@ with D15's beta-matched excess for H2 (`benchmark.beta_matched`, with a hand-com
 which section 15, item 7 asks for). DEV-2's benchmark returns come from the benchmark's last completed
 run covering the window on the same harness code as the hypothesis's selectable runs (the quant's
 reading of section 8, in gate-statistics.md); without one the gate refuses rather than call DEV-2 a
-fail, and the freeze refuses while either benchmark lacks one, since no benchmark may run after it.
+fail, so the unseal is refused while a benchmark DEV-2 needs lacks one; no benchmark may run after
+the unseal.
 Both candidate rules rank by the DSR's z rather than its floating-point value, which rounds to 1.0
 for strong runs; the order is the registered one. The modules that count as data loading or the seal are listed above and in
 `gitledger.SEAL_AND_DATA_LOADING`. The passphrase is normalised to Unicode NFC before derivation, so
@@ -207,7 +230,8 @@ loading or seal files after the unseal whenever every earlier attempt reported t
 had been served; round 2 showed that report is the caller's word, written by the process the
 change runs in, and that a peek off the ledger followed by a rewriting first attempt needed no
 report at all. So item 6's permission to change data loading or the seal is used up at the unseal,
-the code is frozen there, and the cap of three runs implements item 6's retry conservatively. The
+the code is frozen there, and the cap of three runs reaching the unsealed stage (round 3, C1)
+implements item 6's retry conservatively. The
 attempt close no longer records a "rows served" flag. The price is that a data loading bug found
 only after the unseal leaves the holdout untested; the rehearsal below exists to find such bugs
 first, and the quant and the owner should accept that price explicitly.
@@ -234,9 +258,10 @@ the holdout files are on disk, a script that uses either reads holdout rows outs
 This is threat T21's residual: the package stops accidents, not a deliberate read of public data,
 and the mechanical candidate rule is what makes such a read useless.
 
-**"Early" does not see the G3.1 drafts (L4).** The threat model defines an early unseal as one before
-the freeze tag and both G3.1 README drafts are in the chain; the code checks the freeze anchor only,
-and the unseal entry records no commit of the drafts. Until that is built, it is a manual check, which
+**"Early" does not see the G3.1 drafts (L4).** The threat model once defined an early unseal as one
+before the freeze tag and both G3.1 README drafts are in the chain; there is no freeze now (D21), the
+code checks only that each hypothesis's grid is complete or its budget exhausted, and the unseal
+entry records no commit of the drafts. Until that is built, it is a manual check, which
 G3.1's owner (the CTPO role) makes before the owner runs `seal unseal`, and records in G3.1's row of
 docs/ITERATION_GOALS.md: both drafts, the README text for a pass and for a fail, are merged on main;
 the commit that merged them is an ancestor of the HEAD at which the unseal will run (`git
@@ -246,9 +271,9 @@ written in the row, so a later edit to either is visible.
 **Replaying the unseal depends on the gate code at verify time (L5).** Verification recomputes the
 holdout candidate with the `gate`, `sharpe`, `cscv` and `benchmark` modules as they are when it runs,
 not as they were at the unseal. A later change to any of them could make the ledger fail
-verification for good, or change the candidate replay expects. The control is process: after the
-freeze, those four modules are not changed without a recorded defect and a security review, and G2.7
-and G3.4 check that they are unchanged since the freeze anchor.
+verification for good, or change the candidate replay expects. The control is process: from the
+unseal on, those four modules are not changed without a recorded defect and a security review, and
+G3.4 checks that they are unchanged since the unseal entry's commit.
 
 ## What this does not cover
 

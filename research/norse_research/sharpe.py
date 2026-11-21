@@ -24,7 +24,7 @@ not excess: a normal distribution has 3. The papers' formulas use that conventio
 Where N comes from. ``n_trials`` and the trial Sharpe ratios are parameters here,
 and nothing here reads the ledger. The gate's public functions, in
 ``norse_research.gate``, take the ledger and have no N parameter (threat T19): they
-read N from it under the counting rule registered in ``prereg-v1`` and call
+read N from it under the counting rule the pre-registration registers and call
 ``deflated_sharpe_ratio`` with V from the selectable runs, as section 10 of
 docs/PREREGISTRATION.md registers. ``deflated_sharpe`` below floors V and is not
 used by the gate (section 15, item 1).

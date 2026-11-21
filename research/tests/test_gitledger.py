@@ -14,11 +14,11 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from conftest import clear_overrides
 from ledger_fixtures import KEY_RECORD, KEY_RECORD_DOC, TREE_PATHS, World, git
-from norse_research import gate, harness
+from norse_research import gate, gitledger, harness
 from norse_research.canonical import sha256_hex
 from norse_research.gitledger import (
-    FREEZE_ANCHOR,
     GENESIS_ANCHOR,
+    PREREGISTRATION_TAG,
     GitLedger,
     LedgerBusy,
     LedgerOutOfStep,
@@ -77,7 +77,8 @@ def test_genesis_pins_the_registration_and_the_ledger_lives_on_its_own_branch(wo
     verified = world.ledger.verify()
     genesis = verified.snapshot.genesis
     prereg = genesis.body["preregistration"]
-    assert prereg["tag"] == "prereg-v1" and prereg["commit"] == world.prereg_commit
+    assert prereg["tag"] == PREREGISTRATION_TAG == "prereg-v2"  # D21's prereg-v2
+    assert prereg["commit"] == world.prereg_commit
     for path in ("docs/PREREGISTRATION.md", "docs/preregistration.json"):
         assert prereg["files"][path] == sha256_hex((world.repo / path).read_bytes())
     assert genesis.body["manifests"]["development"] == world.manifest_sha256
@@ -279,38 +280,30 @@ def test_an_upper_case_ledger_tag_is_not_ignored(world):
         world.ledger.verify()
 
 
-def test_the_freeze_tag_needs_the_freeze_command_and_a_complete_grid(world):
+def test_the_genesis_anchor_is_reserved_and_there_is_no_freeze(world):
+    # Decision D21: the ledger freeze is gone, with its command, its anchor and every
+    # rule keyed on it; the genesis anchor stays reserved to the genesis step (M6, N3).
     trial(world, "B-H1")
-    head = world.ledger.local_head()
-    for name in ("ledger-freeze", f"{FREEZE_ANCHOR}{head}", "ledger-genesis"):
+    head_entry = world.ledger.snapshot(world.ledger.local_head()).entries[0].hash
+    for name in ("ledger-genesis", f"{GENESIS_ANCHOR}{head_entry}"):
         with pytest.raises(LedgerError, match="reserved name"):
             world.ledger.tag_milestone(name, "too easy")
-    # G1.6 quant review M3: no benchmark may run after the freeze, so it needs both,
-    # whatever allow_incomplete says.
-    with pytest.raises(gate.GateRefused, match=r"\['B-H2'\] have none"):
-        gate.freeze(world.ledger, "M2", allow_incomplete=True)
-    trial(world, "B-H2")
-    head = world.ledger.local_head()
-    with pytest.raises(gate.GateRefused, match="14 registered configurations have no selectable"):
-        gate.freeze(world.ledger, "M2")
-    assert world.ledger.verify().freeze is None
-    gate.freeze(world.ledger, "M2, two hypotheses unrun", allow_incomplete=True)
+    assert gitledger.RESERVED == ("ledger-genesis",)
+    assert not hasattr(gitledger, "FREEZE_ANCHOR") and not hasattr(gate, "freeze")
     verified = world.ledger.verify()
-    assert verified.freeze == head and f"{FREEZE_ANCHOR}{head}" in verified.tags
-    with pytest.raises(gate.GateRefused, match="already frozen"):
-        gate.freeze(world.ledger, "again", allow_incomplete=True)
+    assert not hasattr(verified, "freeze") and not gate.gate_ledger(world.ledger).closed
 
 
 def test_stray_reserved_names_never_block_the_ledger(tmp_path, monkeypatch):
-    # Review N3: a stray ledger-freeze or ledger-genesis, which the tag ruleset makes
-    # permanent, once blocked the freeze or the genesis step for ever. The anchors are
-    # named for their content, so a stray can never take their place.
+    # Review N3: a stray ledger-genesis, which the tag ruleset makes permanent, once
+    # blocked the genesis step for ever. The anchor is named for its content, so a stray
+    # can never take its place. (The freeze and its anchor are gone, decision D21.)
     clear_overrides(monkeypatch)
     world = World(tmp_path, genesis=False)
     try:
         code = git(world.repo, "rev-parse", "HEAD")
         strays = {"ledger-freeze": code, "ledger-genesis": code,
-                  f"{FREEZE_ANCHOR}{'0' * 40}": code, f"{GENESIS_ANCHOR}{'1' * 64}": code}
+                  f"{GENESIS_ANCHOR}{'1' * 64}": code}
         for name, commit in strays.items():
             git(world.repo, "tag", name, commit)
             git(world.repo, "push", "--quiet", "origin", f"refs/tags/{name}")
@@ -318,14 +311,11 @@ def test_stray_reserved_names_never_block_the_ledger(tmp_path, monkeypatch):
         trial(world, "B-H1")
         # A reserved name on a ledger commit that does not match its content is stray too.
         head = world.ledger.local_head()
-        git(world.repo, "tag", f"{FREEZE_ANCHOR}{'2' * 40}", head)
-        git(world.repo, "push", "--quiet", "origin", f"refs/tags/{FREEZE_ANCHOR}{'2' * 40}")
+        git(world.repo, "tag", f"{GENESIS_ANCHOR}{'2' * 64}", head)
+        git(world.repo, "push", "--quiet", "origin", f"refs/tags/{GENESIS_ANCHOR}{'2' * 64}")
         verified = world.ledger.verify()
-        assert set(verified.ignored_tags) == {*strays, f"{FREEZE_ANCHOR}{'2' * 40}"}
-        assert verified.freeze is None
-        assert trial(world, "B-H2").status == "completed"  # not frozen by a stray
-        gate.freeze(world.ledger, "M2", allow_incomplete=True)  # the freeze is not blocked
-        assert world.ledger.verify().freeze == world.ledger.local_head()
+        assert set(verified.ignored_tags) == {*strays, f"{GENESIS_ANCHOR}{'2' * 64}"}
+        assert trial(world, "B-H2").status == "completed"  # nothing blocked by a stray
     finally:
         world.close()
 
@@ -338,11 +328,11 @@ def test_a_superseding_genesis_cannot_move_the_pinned_remote(world):
     git(world.tmp, "clone", "--quiet", str(fake), str(clone))
     fake_ledger = GitLedger(clone)
     fake_ledger.sync()
-    git(clone, "tag", "-a", "prereg-v2", "-m", "a second version", world.prereg_commit)
-    git(clone, "push", "--quiet", "origin", "refs/tags/prereg-v2")
+    git(clone, "tag", "-a", "prereg-v3", "-m", "a second version", world.prereg_commit)
+    git(clone, "push", "--quiet", "origin", "refs/tags/prereg-v3")
     with pytest.raises(VerificationError, match="may not move the pinned remote"):
         write_genesis(fake_ledger, tree_paths=TREE_PATHS, strategies=world.pins,
-                      key_record=(world.prereg_commit, KEY_RECORD), tag="prereg-v2",
+                      key_record=(world.prereg_commit, KEY_RECORD), tag="prereg-v3",
                       remote_url=str(fake))
     with pytest.raises(LedgerError, match="pinned remote"):
         harness.run(clone, {"configuration": "H1-01"})
@@ -417,9 +407,10 @@ def test_verifier_flags_a_tag_that_no_longer_matches_the_genesis_entry(world):
     world.write("docs/preregistration.json", b'{"schema": "a different grid"}\n')
     moved_to = world.commit("a different registration")
     world.push()
-    git(world.repo, "tag", "-f", "-a", "prereg-v1", "-m", "moved", moved_to)
-    git(world.repo, "push", "--quiet", "--force", "origin", "refs/tags/prereg-v1")
-    with pytest.raises(VerificationError, match=rf"tag prereg-v1 points at {moved_to}"):
+    tag = PREREGISTRATION_TAG
+    git(world.repo, "tag", "-f", "-a", tag, "-m", "moved", moved_to)
+    git(world.repo, "push", "--quiet", "--force", "origin", f"refs/tags/{tag}")
+    with pytest.raises(VerificationError, match=rf"tag {tag} points at {moved_to}"):
         world.ledger.verify()
     from norse_research.gitledger import load_registration
 
@@ -522,21 +513,21 @@ def test_write_genesis_validates_its_inputs(tmp_path, monkeypatch):
 
 def test_write_genesis_is_refused_once_the_registration_is_closed(world):
     world.write("docs/PREREGISTRATION.md", b"# a second version\n")
-    world.commit("prereg-v2")
+    world.commit("prereg-v3")
     world.push()
-    git(world.repo, "tag", "-a", "prereg-v2", "-m", "second version")
-    git(world.repo, "push", "--quiet", "origin", "refs/tags/prereg-v2")
+    git(world.repo, "tag", "-a", "prereg-v3", "-m", "second version")
+    git(world.repo, "push", "--quiet", "origin", "refs/tags/prereg-v3")
     args = {"tree_paths": TREE_PATHS, "strategies": world.pins,
             "key_record": (world.prereg_commit, KEY_RECORD)}
-    write_genesis(world.ledger, **args, tag="prereg-v2")
-    assert world.ledger.verify().snapshot.genesis.body["preregistration"]["tag"] == "prereg-v2"
+    write_genesis(world.ledger, **args, tag="prereg-v3")
+    assert world.ledger.verify().snapshot.genesis.body["preregistration"]["tag"] == "prereg-v3"
     trial(world, "B-H1")  # the first entry of any other kind closes the registration
-    git(world.repo, "tag", "-a", "prereg-v3", "-m", "third version")
-    git(world.repo, "push", "--quiet", "origin", "refs/tags/prereg-v3")
+    git(world.repo, "tag", "-a", "prereg-v4", "-m", "third version")
+    git(world.repo, "push", "--quiet", "origin", "refs/tags/prereg-v4")
     with pytest.raises(LedgerError, match="registration is closed"):
-        write_genesis(world.ledger, **args, tag="prereg-v3")
+        write_genesis(world.ledger, **args, tag="prereg-v4")
     genesis = dict(world.ledger.snapshot(world.ledger.local_head()).entries[0].body)
-    genesis["preregistration"] = {**genesis["preregistration"], "tag": "prereg-v3"}
+    genesis["preregistration"] = {**genesis["preregistration"], "tag": "prereg-v4"}
     with pytest.raises(VerificationError, match="closed the registration"):
         world.ledger.append({k: v for k, v in genesis.items() if k not in ("seq", "prev", "time")})
 

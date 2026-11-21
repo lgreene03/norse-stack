@@ -22,10 +22,9 @@ from pathlib import Path
 import pytest
 from conftest import clear_overrides
 from ledger_fixtures import RESEARCH, Book, World, git, issued, lcg_returns, open_body
-from norse_research import gate, gitledger, harness, ledger
+from norse_research import gitledger, harness, ledger, seal
 from norse_research.environment import EnvironmentRefused
 from norse_research.gitledger import (
-    FREEZE_ANCHOR,
     GitLedger,
     LedgerOutOfStep,
     LedgerWriteError,
@@ -337,29 +336,6 @@ def test_a_run_admitted_on_a_ledger_that_moved_is_refused(world, monkeypatch):
     assert state["inner"].status == "completed"
     assert [e.body["configuration_id"] for e in trials(remote_entries(world))] == ["H1-01"]
     world.ledger.verify()
-
-
-def test_a_trial_admitted_before_the_freeze_cannot_land_after_it(world, monkeypatch, calls):
-    # Another session freezes the ledger between this run's admission and its open
-    # entry. The freeze does not move the ledger head, so only a check under the append
-    # lock catches it (review N2).
-    world.runs_by_hand(["B-H1", "B-H2"])  # the freeze needs both benchmarks (G1.6 quant M3)
-    original = GitLedger.append
-    state = {"done": False}
-
-    def append(self, body, files=None, **kwargs):
-        if body.get("type") == "open" and not state["done"]:
-            state["done"] = True
-            gate.freeze(GitLedger(world.repo), "M2 by another session", allow_incomplete=True)
-        return original(self, body, files, **kwargs)
-
-    monkeypatch.setattr(GitLedger, "append", append)
-    with pytest.raises(LedgerOutOfStep, match="frozen"):
-        run(world, "H1-01")
-    assert calls == []
-    frozen = gate.gate_ledger(world.ledger)
-    assert frozen.frozen and gate.trial_count(frozen) == 0
-    assert ledger.trial_count(remote_entries(world)) == 0
 
 
 # --- T7: determinism, and nothing carried between runs ---------------------------------
@@ -719,13 +695,13 @@ def test_environment_overrides_are_refused(tmp_path, monkeypatch, no_source_chec
             m.setenv("PATH", f"{fake.parent}{os.pathsep}{os.environ['PATH']}")
             with pytest.raises(RunRefused, match="inside the repository"):
                 run(world)
-        # The genesis step, the tags and the freeze refuse them too.
+        # The genesis step, the tags and the seal refuse them too.
         with monkeypatch.context() as m:
             m.setenv("RISK_MAX_DRAWDOWN_PCT", "1")
             with pytest.raises(EnvironmentRefused):
                 world.ledger.tag_milestone("ledger-m1", "M1")
             with pytest.raises(EnvironmentRefused):
-                gate.freeze(world.ledger, "M2", allow_incomplete=True)
+                seal.unseal(world.repo, {})
             with pytest.raises(EnvironmentRefused):
                 world.write_genesis()
         # NORSE_DATASETS_DIR is allowed, and no variable of the caller's reaches the
@@ -829,14 +805,14 @@ def full_book_for(h: str, own: int, reserve: int = 0) -> Book:
     return book
 
 
-def _admit(book: Book, cid: str, frozen=None, **extra):
+def _admit(book: Book, cid: str, issued_ledger=None, **extra):
     from ledger_fixtures import ALL_PARAMETERS
     from norse_research.harness import Strategy
 
     snapshot = book.snapshot()
     strategy = Strategy("synthetic", None, ALL_PARAMETERS, {})
     admit(snapshot, book.registration, book.registration.resolve(request(cid, **extra), strategy),
-          frozen)
+          issued_ledger)
 
 
 def test_trial_beyond_the_registered_budget_is_refused():
@@ -919,7 +895,8 @@ def _hand_append(world, body):
 
 def test_verification_refuses_entries_the_harness_would_never_write(tmp_path, monkeypatch):
     # Review N7: each open entry must be exactly what the registration resolves it to,
-    # in its place relative to the freeze, with a rerun's fix new since the run it repeats.
+    # in its place relative to the unseal and the candidates (D21), with a rerun's fix new
+    # since the run it repeats.
     from norse_research.canonical import value_hash
 
     cases = []
@@ -929,7 +906,8 @@ def test_verification_refuses_entries_the_harness_would_never_write(tmp_path, mo
         "configuration_sha256": value_hash(
             {**w.open_body("H1-01")["configuration"], "kind": "benchmark"}),
     }))
-    cases.append(("sensitivity run before the freeze", lambda w: w.open_body("H1-01", cost=7.5)))
+    cases.append(("once every registered configuration of H1",
+                  lambda w: w.open_body("H1-01", cost=7.5)))
     cases.append(("not the one genesis pins", lambda w: {
         **w.open_body("B-H1"), "strategy": "strategies/h1/other.py:run",
         "configuration": {**w.open_body("B-H1")["configuration"],
@@ -947,18 +925,8 @@ def test_verification_refuses_entries_the_harness_would_never_write(tmp_path, mo
                 world.ledger.verify()
         finally:
             world.close()
-    # A trial written past the freeze, by hand.
-    folder = tmp_path / "frozen"
-    folder.mkdir()
-    world = a_world(folder, monkeypatch)
-    try:
-        world.runs_by_hand(["B-H1", "B-H2"])
-        gate.freeze(world.ledger, "M2", allow_incomplete=True)
-        _hand_append(world, world.open_body("H1-01"))
-        with pytest.raises(ledger.VerificationError, match="trial run after the freeze"):
-            world.ledger.verify()
-    finally:
-        world.close()
+    # A trial written past the unseal by hand: test_seal's
+    # test_the_unseal_closes_development, which has a candidate to unseal.
     # A rerun naming the fix commit the run it repeats already had.
     folder = tmp_path / "old-fix"
     folder.mkdir()
@@ -1012,26 +980,34 @@ def _complete_grid(book: Book, h: str, best: str) -> None:
         book.run(cid, lcg_returns(100 + i, n, drift=0.002 if cid == best else 0.0))
 
 
-def test_sensitivity_run_before_the_freeze_is_refused(world, calls):
-    with pytest.raises(RunRefused, match="only after the ledger freeze"):
+def test_sensitivity_run_before_its_hypothesis_is_complete_is_refused(world, calls):
+    # Section 8 with decision D21: a sensitivity run re-costs a candidate, which exists
+    # once every registered configuration of its hypothesis has a selectable run; there
+    # is no freeze to wait for.
+    with pytest.raises(RunRefused, match="once every registered configuration of H1"):
         run(world, "H1-01", sensitivity_total_cost_bps_per_side=7.5)
     book = Book()
-    _complete_grid(book, "H1", "H1-03")
-    with pytest.raises(RunRefused, match="only after the ledger freeze"):
-        _admit(book, "H1-03", sensitivity_total_cost_bps_per_side=15)
+    for i, cid in enumerate(book.registration.order["H1"][:-1]):
+        book.run(cid, lcg_returns(100 + i, book.registration.windows["H1"].days))
+    with pytest.raises(RunRefused, match="once every registered configuration of H1"):
+        _admit(book, "H1-03", issued(book), sensitivity_total_cost_bps_per_side=15)
+    complete = Book()
+    _complete_grid(complete, "H1", "H1-03")
+    _admit(complete, "H1-03", issued(complete), sensitivity_total_cost_bps_per_side=15)
+    with pytest.raises(RunRefused, match="only on the gate's ledger"):
+        _admit(complete, "H1-03", sensitivity_total_cost_bps_per_side=15)
     assert calls == []
 
 
 def test_sensitivity_run_of_a_non_candidate_is_refused():
     book = Book()
     _complete_grid(book, "H1", "H1-03")
-    frozen = issued(book, frozen=True)
-    _admit(book, "H1-03", frozen, sensitivity_total_cost_bps_per_side=10)
+    gate_ledger = issued(book)
+    _admit(book, "H1-03", gate_ledger, sensitivity_total_cost_bps_per_side=10)
     for cid in ("H1-01", "H1-05", "H2-01"):
         with pytest.raises(RunRefused, match="candidate"):
-            _admit(book, cid, frozen, sensitivity_total_cost_bps_per_side=10)
-    with pytest.raises(RunRefused, match="frozen"):
-        _admit(book, "B-H1", frozen)
+            _admit(book, cid, gate_ledger, sensitivity_total_cost_bps_per_side=10)
+    _admit(book, "B-H1", gate_ledger)  # before the unseal a benchmark still runs
 
 
 def test_sensitivity_runs_are_bounded():
@@ -1046,18 +1022,6 @@ def test_sensitivity_runs_are_bounded():
     assert run_rule_error(prior, book.registration, other_cost) is None
     with_fix = {**again, "rerun": {**FIX, "fix_commit": "9" * 40}}
     assert run_rule_error(prior, book.registration, with_fix) is None
-
-
-def test_a_frozen_ledger_refuses_trials_through_the_harness(world):
-    run(world, "B-H1")
-    run(world, "B-H2")
-    gate.freeze(world.ledger, "M2: the ledger freeze", allow_incomplete=True)
-    assert world.ledger.verify().freeze is not None
-    assert any(n.startswith(FREEZE_ANCHOR) for n in world.ledger.milestone_tags())
-    with pytest.raises(RunRefused, match="frozen"):
-        run(world, "H1-01")
-    with pytest.raises(RunRefused, match="not H1's candidate"):
-        run(world, "H1-01", sensitivity_total_cost_bps_per_side=7.5)
 
 
 # --- the package's own boundaries ------------------------------------------------------

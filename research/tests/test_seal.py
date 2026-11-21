@@ -2,7 +2,8 @@
 
 Each test that needs a ledger builds a temporary bare remote and clone
 (ledger_fixtures.World), writes every H1 configuration's run and B-H1's by plumbing,
-with H1-03 the one configuration that passes development, and tags the freeze. The
+with H1-03 the one configuration that passes development; there is no freeze (decision
+D21), since the unseal closes development. The
 holdout's files are synthetic and sit in a separate folder standing in for the public
 archive; the fetcher serves them from there, and nothing here touches the network, the
 real repository, its ledger or its tags. The passphrase is ``TEST_PASSPHRASE``, which
@@ -65,8 +66,8 @@ OTHER_KEY = "another passphrase, one an agent might know"
 
 
 @pytest.fixture
-def frozen(tmp_path, monkeypatch):
-    """A frozen ledger whose holdout candidate is H1-03."""
+def ready(tmp_path, monkeypatch):
+    """A ledger ready for the unseal, whose holdout candidate is H1-03."""
     clear_overrides(monkeypatch)
     world = grid_world(tmp_path)
     yield world
@@ -96,10 +97,17 @@ def trial(world, cid):
     return opened, snapshot.result_of(opened)
 
 
+def accepted_diff(world, cid=CANDIDATE):
+    """The hash of the data loading and seal diff from ``cid``'s run to HEAD (T1)."""
+    head = git(world.repo, "rev-parse", "HEAD")
+    return gitledger.seal_changes(world.ledger.git, trial(world, cid)[0].body["commit"], head)[2]
+
+
 def request_for(world, cid=CANDIDATE):
     return {
         "preregistration": copy.deepcopy(genesis_of(world).body["preregistration"]),
         "configuration_sha256": trial(world, cid)[0].body["configuration_sha256"],
+        "accepted_diff": accepted_diff(world, cid),
     }
 
 
@@ -146,7 +154,7 @@ def unseal_body(world, cid=CANDIDATE, **changes):
         "hypothesis": opened.body["hypothesis"],
         "configuration_sha256": opened.body["configuration_sha256"],
         "candidate": {"open": opened.hash, "result": closed.hash},
-        "freeze": world.ledger.verify().freeze or "0" * 40,
+        "accepted_diff": accepted_diff(world, cid),
         "holdout_manifest_sha256": genesis.body["manifests"]["holdout"],
         "key_record_sha256": genesis.body["key_record"]["sha256"],
         "proof": proof_of(),
@@ -306,7 +314,7 @@ def test_key_is_read_only_from_an_interactive_terminal(monkeypatch):
     source = (RESEARCH / "norse_research" / "seal.py").read_text()
     options = set(re.findall(r'add_argument\(\s*"(--[a-z0-9-]+)"', source))
     assert options == {"--repo", "--remote", "--out", "--commit", "--tag",
-                       "--configuration-sha256", "--boundary"}
+                       "--configuration-sha256", "--accept-diff", "--boundary"}
     # Nothing in the module reads the environment or a file for it.
     tree = ast.parse(source)
     for node in ast.walk(tree):
@@ -318,12 +326,12 @@ def test_key_is_read_only_from_an_interactive_terminal(monkeypatch):
             assert node.value.attr != "environ"
 
 
-def test_the_unseal_asks_the_terminal_and_refuses_without_one(frozen, monkeypatch):
+def test_the_unseal_asks_the_terminal_and_refuses_without_one(ready, monkeypatch):
     monkeypatch.setattr("sys.stdin", io.StringIO(TEST_PASSPHRASE + "\n"))
-    before = frozen.remote_ledger()
+    before = ready.remote_ledger()
     with pytest.raises(NoTerminal):
-        seal.unseal(frozen.repo, request_for(frozen), store=frozen.store, fetch=frozen.fetcher())
-    assert frozen.remote_ledger() == before
+        seal.unseal(ready.repo, request_for(ready), store=ready.store, fetch=ready.fetcher())
+    assert ready.remote_ledger() == before
 
 
 # --- T20: the periods, and no early unseal --------------------------------------------
@@ -341,35 +349,43 @@ def test_period_constants_match_the_genesis_entry(world, monkeypatch):
 
 
 def test_early_unseal_is_refused(tmp_path, monkeypatch):
-    # "Early" is before the freeze anchor exists (section 11: the candidate is chosen on
-    # the frozen ledger). The key is never asked for, nothing is written or fetched.
-    world = a_grid_world(tmp_path, monkeypatch, freeze=False)
+    # "Early" is before each hypothesis has a selectable run of every registered
+    # configuration or has exhausted its own entries and the reserve (section 11, items
+    # 3 and 4; decision D21). Here H1's grid is complete and H1-03 passes development, but
+    # H2 has not run: an unseal now would stop H2's grid early (G3.1 open question 10).
+    # The key is never asked for, nothing is written or fetched; the append and replay
+    # refuse the entry too.
+    world = a_grid_world(tmp_path, monkeypatch, h2=False)
     try:
+        issued_ledger = gate.gate_ledger(world.ledger)
+        assert gate.holdout_candidate(issued_ledger).configuration_id == CANDIDATE
+        assert "H2 has neither" in gate.unseal_early_error(issued_ledger)
         read, fetched = key(), []
         before = world.remote_ledger()
-        with pytest.raises(SealRefused, match="early unseal"):
+        with pytest.raises(SealRefused, match="early unseal: H2 has neither"):
             unseal(world, read=read, calls=fetched)
         assert read.calls == [] and fetched == [] and world.remote_ledger() == before
-        with pytest.raises(LedgerOutOfStep, match="only after the ledger freeze"):
+        with pytest.raises(VerificationError, match="early unseal"):
             world.ledger.append(unseal_body(world))
+        assert world.remote_ledger() == before
         hand_append(world, unseal_body(world))
-        with pytest.raises(VerificationError, match="unseal before the freeze anchor"):
+        with pytest.raises(VerificationError, match="early unseal"):
             world.ledger.verify()
     finally:
         world.close()
 
 
-def test_the_unseal_check_does_not_read_the_clock(frozen, monkeypatch):
-    # T11, G1.6's half: "early" is the freeze anchor, never a date, so a clock set
+def test_the_unseal_check_does_not_read_the_clock(ready, monkeypatch):
+    # T11, G1.6's half: "early" is what the ledger holds, never a date, so a clock set
     # before the pre-registration or after 2026-12-08 decides exactly as the true one.
     import time
     import types
 
     def refusals():
         out = []
-        for request in (request_for(frozen, "H1-01"), {**request_for(frozen), "extra": 1}):
+        for request in (request_for(ready, "H1-01"), {**request_for(ready), "extra": 1}):
             try:
-                unseal(frozen, request, read=key())
+                unseal(ready, request, read=key())
             except SealRefused as exc:
                 out.append(str(exc))
         return out
@@ -383,7 +399,7 @@ def test_the_unseal_check_does_not_read_the_clock(frozen, monkeypatch):
             m.setattr(time, "time", lambda t=epoch: t)
             m.setenv("GIT_COMMITTER_DATE", moment.isoformat())
             assert refusals() == honest
-    assert unseal(frozen).type == "unseal"
+    assert unseal(ready).type == "unseal"
 
 
 # --- T21: the package's readers and the committed files -------------------------------
@@ -512,57 +528,57 @@ def test_the_registered_holdout_manifest_is_the_frozen_one():
 # --- T22: one candidate, chosen by the rule, run once --------------------------------
 
 
-def test_unseal_must_name_the_candidate_selected_by_the_registered_rule(frozen):
-    chosen = gate.holdout_candidate(gate.gate_ledger(frozen.ledger))
+def test_unseal_must_name_the_candidate_selected_by_the_registered_rule(ready):
+    chosen = gate.holdout_candidate(gate.gate_ledger(ready.ledger))
     assert chosen.configuration_id == CANDIDATE
     read = key()
     for other in ("H1-01", "H1-08"):
         with pytest.raises(SealRefused, match=f"registered rule selects {CANDIDATE}"):
-            unseal(frozen, request_for(frozen, other), read=read)
-    assert read.calls == [] and unseal_of(remote_entries(frozen)) is None
+            unseal(ready, request_for(ready, other), read=read)
+    assert read.calls == [] and unseal_of(remote_entries(ready)) is None
     # A hand-written unseal naming another configuration fails verification.
-    hand_append(frozen, unseal_body(frozen, "H1-01"))
+    hand_append(ready, unseal_body(ready, "H1-01"))
     with pytest.raises(VerificationError, match=f"registered rule selects {CANDIDATE}"):
-        frozen.ledger.verify()
+        ready.ledger.verify()
 
 
-def test_the_unseal_names_the_candidate_and_is_on_the_remote(frozen):
+def test_the_unseal_names_the_candidate_and_is_on_the_remote(ready):
     fetched = []
-    entry = unseal(frozen, calls=fetched)
-    opened, closed = trial(frozen, CANDIDATE)
-    genesis = genesis_of(frozen)
+    entry = unseal(ready, calls=fetched)
+    opened, closed = trial(ready, CANDIDATE)
+    genesis = genesis_of(ready)
     assert entry.body["configuration_id"] == CANDIDATE
     assert entry.body["configuration_sha256"] == opened.body["configuration_sha256"]
     assert entry.body["candidate"] == {"open": opened.hash, "result": closed.hash}
     assert entry.body["preregistration"] == genesis.body["preregistration"]
-    assert entry.body["freeze"] == frozen.ledger.verify().freeze
-    assert unseal_of(remote_entries(frozen)).hash == entry.hash
-    assert frozen.ledger.verify().snapshot.trial_count() == 8  # the unseal is no trial
+    assert entry.body["accepted_diff"] == hashlib.sha256(b"").hexdigest()  # nothing changed
+    assert unseal_of(remote_entries(ready)).hash == entry.hash
+    assert ready.ledger.verify().snapshot.trial_count() == 14  # the unseal is no trial
     # D17: the holdout files were fetched again and verified, each with its CHECKSUM.
     assert sorted(fetched) == sorted(
         f"{DatasetSpec.from_name('spot/klines/XUSDT/1d').key(m)}{suffix}"
         for m in ("2026-01", "2026-02") for suffix in (".CHECKSUM", "")
     )
-    assert frozen.holdout_files_in_mirror() == [
+    assert ready.holdout_files_in_mirror() == [
         "XUSDT-1d-2026-01.zip", "XUSDT-1d-2026-01.zip.CHECKSUM",
         "XUSDT-1d-2026-02.zip", "XUSDT-1d-2026-02.zip.CHECKSUM",
     ]
 
 
-def test_holdout_run_reads_holdout_rows_once_and_spends_the_seal(frozen, monkeypatch):
-    entry = unseal(frozen)
+def test_holdout_run_reads_holdout_rows_once_and_spends_the_seal(ready, monkeypatch):
+    entry = unseal(ready)
     calls = []
     original = harness._run_strategy
 
     def watched(*args, **kwargs):
-        remote = remote_entries(frozen)
+        remote = remote_entries(ready)
         held = {e.hash: e for e in remote}
         calls.append((kwargs.get("unsealed"), entry.hash in held, args[6] in held,
                       args[5]["window"]["last_return_day"], remote[-1].type))
         return original(*args, **kwargs)
 
     monkeypatch.setattr(harness, "_run_strategy", watched)
-    record = holdout_run(frozen)
+    record = holdout_run(ready)
     assert record.status == "completed", record.error
     # First the development window, without the unseal; then the holdout run, unsealed;
     # the remote held the unseal entry and the run's open entry at each call (T23), and
@@ -571,41 +587,41 @@ def test_holdout_run_reads_holdout_rows_once_and_spends_the_seal(frozen, monkeyp
         (None, True, True, "2025-12-31", "open"),
         ((seal.HOLDOUT_MANIFEST, entry.hash), True, True, "2026-10-31", "attempt"),
     ]
-    attempts = [e for e in remote_entries(frozen) if e.type in ("attempt", "attempt_close")]
+    attempts = [e for e in remote_entries(ready) if e.type in ("attempt", "attempt_close")]
     assert [e.type for e in attempts] == ["attempt", "attempt_close"]
     assert attempts[1].body["outcome"] == "returned"
-    head = git(frozen.repo, "rev-parse", "HEAD")
+    head = git(ready.repo, "rev-parse", "HEAD")
     assert entry.body["commit"] == head == attempts[0].body["commit"]  # round 2, N1
     opened = record.open_entry.body
     assert opened["kind"] == "holdout" and opened["configuration_id"] == CANDIDATE
     assert opened["configuration"]["candidate_sha256"] == entry.body["configuration_sha256"]
     summary = record.result_entry.body["result"]
     assert (summary["development_days"], summary["holdout_days"]) == (2802, 304)
-    snapshot = frozen.ledger.verify().snapshot
+    snapshot = ready.ledger.verify().snapshot
     series = snapshot.returns_of(record.result_entry)
-    committed = snapshot.returns_of(trial(frozen, CANDIDATE)[1])
+    committed = snapshot.returns_of(trial(ready, CANDIDATE)[1])
     assert series[:2802] == committed and series[-1][0] == "2026-10-31"
-    assert snapshot.trial_count() == 8  # the holdout run is outside N
+    assert snapshot.trial_count() == 14  # the holdout run is outside N
 
 
-def test_holdout_run_of_another_configuration_is_refused(frozen, monkeypatch):
-    unseal(frozen)
+def test_holdout_run_of_another_configuration_is_refused(ready, monkeypatch):
+    unseal(ready)
     started = []
     monkeypatch.setattr(harness, "_run_strategy", lambda *a, **k: started.append(a) or [])
     for other in ("H1-01", "H1-05"):
         with pytest.raises(harness.RunRefused, match="alone"):
-            holdout_run(frozen, trial(frozen, other)[0].body["configuration_sha256"])
+            holdout_run(ready, trial(ready, other)[0].body["configuration_sha256"])
     with pytest.raises(RunNotRegistered, match="holds exactly"):
-        harness.run(frozen.repo, {"configuration": "holdout"}, store=frozen.store)
+        harness.run(ready.repo, {"configuration": "holdout"}, store=ready.store)
     assert started == []
     # A hand-written holdout run of another configuration fails verification.
-    hand_append(frozen, holdout_open_body(frozen, "H1-01"))
+    hand_append(ready, holdout_open_body(ready, "H1-01"))
     with pytest.raises(VerificationError, match="H1-03's configuration"):
-        frozen.ledger.verify()
+        ready.ledger.verify()
 
 
-def test_second_holdout_result_after_one_unseal_is_refused(frozen, monkeypatch):
-    unseal(frozen)
+def test_second_holdout_result_after_one_unseal_is_refused(ready, monkeypatch):
+    unseal(ready)
     original = harness._run_strategy
     crashes = [1]
 
@@ -616,18 +632,18 @@ def test_second_holdout_result_after_one_unseal_is_refused(frozen, monkeypatch):
         return original(*args, **kwargs)
 
     monkeypatch.setattr(harness, "_run_strategy", crash_once)
-    first = holdout_run(frozen)
+    first = holdout_run(ready)
     assert first.status == "failed"  # ledgered; the seal is not spent
-    second = holdout_run(frozen)  # a retry, same unseal and configuration (item 6)
+    second = holdout_run(ready)  # a retry, same unseal and configuration (item 6)
     assert second.status == "completed", second.error
     with pytest.raises(harness.RunRefused, match="spends the seal"):
-        holdout_run(frozen)
-    attempts = [e for e in remote_entries(frozen) if e.type == "open" and e.body["kind"] == "holdout"]
+        holdout_run(ready)
+    attempts = [e for e in remote_entries(ready) if e.type == "open" and e.body["kind"] == "holdout"]
     assert len(attempts) == 2
     # Verification refuses a third holdout run written by hand.
-    hand_append(frozen, holdout_open_body(frozen))
+    hand_append(ready, holdout_open_body(ready))
     with pytest.raises(VerificationError, match="spends the seal"):
-        frozen.ledger.verify()
+        ready.ledger.verify()
 
 
 def test_no_holdout_return_is_computed_unless_the_development_run_reproduces(
@@ -648,44 +664,44 @@ def test_no_holdout_return_is_computed_unless_the_development_run_reproduces(
             world.close()
 
 
-def test_a_holdout_run_at_code_changed_outside_data_loading_is_refused(frozen):
+def test_a_holdout_run_at_code_changed_outside_data_loading_is_refused(ready):
     # Section 11, item 6, applied once, at the unseal (security review round 2, N1): the
     # unseal is refused at a commit that changed code outside data loading or the seal,
     # and every holdout run after it is at exactly the commit it records.
-    candidate_commit = trial(frozen, CANDIDATE)[0].body["commit"]
-    unsealed_at = git(frozen.repo, "rev-parse", "HEAD")
+    candidate_commit = trial(ready, CANDIDATE)[0].body["commit"]
+    unsealed_at = git(ready.repo, "rev-parse", "HEAD")
     paths = ["research/norse_research", "strategies/h1"]
     assert gitledger.holdout_commit_error(
-        frozen.ledger.git, candidate_commit, unsealed_at, paths) is None
-    frozen.write("research/norse_research/notes.txt", "a change outside data loading\n")
-    frozen.commit("a change outside data loading and the seal")
-    frozen.push()
+        ready.ledger.git, candidate_commit, unsealed_at, paths) is None
+    ready.write("research/norse_research/notes.txt", "a change outside data loading\n")
+    ready.commit("a change outside data loading and the seal")
+    ready.push()
     read = key()
     with pytest.raises(SealRefused, match="outside data loading and the seal"):
-        unseal(frozen, read=read)
-    assert read.calls == [] and unseal_of(remote_entries(frozen)) is None
-    head = git(frozen.repo, "rev-parse", "HEAD")
-    git(frozen.repo, "checkout", "--quiet", unsealed_at)
-    entry = unseal(frozen)
+        unseal(ready, read=read)
+    assert read.calls == [] and unseal_of(remote_entries(ready)) is None
+    head = git(ready.repo, "rev-parse", "HEAD")
+    git(ready.repo, "checkout", "--quiet", unsealed_at)
+    entry = unseal(ready)
     assert entry.body["commit"] == unsealed_at
-    git(frozen.repo, "checkout", "--quiet", head)
+    git(ready.repo, "checkout", "--quiet", head)
     with pytest.raises(harness.RunRefused, match="every holdout run is at the unseal's commit"):
-        holdout_run(frozen)
-    problem = gitledger.holdout_commit_error(frozen.ledger.git, candidate_commit, head, paths)
+        holdout_run(ready)
+    problem = gitledger.holdout_commit_error(ready.ledger.git, candidate_commit, head, paths)
     assert "notes.txt" in problem
     # Replay checks the unseal's commit against the candidate's, too: an unseal entry
     # naming the changed commit fails it.
-    verified = frozen.ledger.verify()
+    verified = ready.ledger.verify()
     forged = ledger.LedgerSnapshot(
         tuple(e if e.type != "unseal" else ledger.make_entry({**e.body, "commit": head})
               for e in verified.snapshot.entries),
         verified.snapshot.series_files,
     )
     with pytest.raises(VerificationError, match="outside data loading and the seal"):
-        frozen.ledger._check_unseal(forged, verified.registration, verified.freeze)
+        ready.ledger._check_unseal(forged, verified.registration)
     # Security review L3: the runner exports the whole package, so the diff covers it even
     # when the genesis tree paths list less of it.
-    narrow = gitledger.holdout_commit_error(frozen.ledger.git, candidate_commit, head,
+    narrow = gitledger.holdout_commit_error(ready.ledger.git, candidate_commit, head,
                                            ["strategies/h1"])
     assert "notes.txt" in narrow
     # A change to data loading or the seal alone is allowed.
@@ -694,13 +710,73 @@ def test_a_holdout_run_at_code_changed_outside_data_loading_is_refused(frozen):
     assert "research/norse_research/harness.py" not in allowed
 
 
+def test_the_unseal_shows_the_data_loading_diff_and_needs_its_hash(tmp_path, monkeypatch):
+    # Security review round 3, T1 (the reviewer's probe): a data loading change made
+    # after the candidate's run, before the unseal, is allowed by item 6's file rule but
+    # must be reviewed. The unseal prints the files and the hash of their diff and
+    # refuses, before the key is asked for, unless the request accepts exactly that hash;
+    # the entry records it and replay recomputes it.
+    world = a_grid_world(tmp_path, monkeypatch, loader_changed=True)
+    try:
+        candidate_commit = trial(world, CANDIDATE)[0].body["commit"]
+        head = git(world.repo, "rev-parse", "HEAD")
+        files, stat, digest = gitledger.seal_changes(world.ledger.git, candidate_commit, head)
+        assert files == ["research/norse_research/loader.py"] and "loader.py" in stat
+        assert digest != hashlib.sha256(b"").hexdigest()
+        read, before = key(), world.remote_ledger()
+        for wrong in (None, hashlib.sha256(b"").hexdigest(), "0" * 64):
+            with pytest.raises(SealRefused, match=rf"(?s)loader\.py.*--accept-diff {digest}"):
+                unseal(world, {**request_for(world), "accepted_diff": wrong}, read=read)
+        assert read.calls == [] and world.remote_ledger() == before
+        with pytest.raises(VerificationError, match="round 3, T1"):
+            world.ledger.append(unseal_body(world, accepted_diff="0" * 64))
+        assert world.remote_ledger() == before
+        entry = unseal(world, {**request_for(world), "accepted_diff": digest}, fetch=False)
+        assert entry.body["accepted_diff"] == digest and entry.body["commit"] == head
+        verified = world.ledger.verify()
+        forged = ledger.LedgerSnapshot(
+            tuple(e if e.type != "unseal" else ledger.make_entry(
+                {**e.body, "accepted_diff": hashlib.sha256(b"").hexdigest()})
+                for e in verified.snapshot.entries),
+            verified.snapshot.series_files,
+        )
+        with pytest.raises(VerificationError, match="round 3, T1"):
+            world.ledger._check_unseal(forged, verified.registration)
+    finally:
+        world.close()
+
+
+def test_the_unseal_command_names_the_genesis_tag_and_asks_for_the_diff(ready, monkeypatch):
+    # The command line's --tag defaults to the tag the genesis entry names (D21 moved the
+    # default to prereg-v2, and a ledger begun under another tag must still unseal), and
+    # without --accept-diff it prints the hash to accept and refuses (T1).
+    class NoNetwork:
+        def __call__(self, url, max_bytes):
+            raise AssertionError("no network in tests")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(seal, "HttpFetcher", NoNetwork)
+    monkeypatch.setenv("NORSE_DATASETS_DIR", str(ready.store.root))
+    before = ready.remote_ledger()
+    sha = trial(ready, CANDIDATE)[0].body["configuration_sha256"]
+    command = ["--repo", str(ready.repo), "unseal", "--commit", ready.prereg_commit,
+               "--configuration-sha256", sha]
+    with pytest.raises(SealRefused, match=f"--accept-diff {accepted_diff(ready)}"):
+        seal.main(command)
+    with pytest.raises(SealRefused, match="pre-registration other than"):
+        seal.main([*command, "--tag", "prereg-v1"])
+    assert ready.remote_ledger() == before and ready.holdout_files_in_mirror() == []
+
+
 def test_no_candidate_means_no_unseal(tmp_path, monkeypatch):
     world = a_grid_world(tmp_path, monkeypatch, skilled=None)
     try:
-        frozen_ledger = gate.gate_ledger(world.ledger)
-        assert [gate.development(frozen_ledger, h) for h in ("H1", "H2")][1] is None
-        assert not gate.development(frozen_ledger, "H1").passes
-        assert gate.holdout_candidate(frozen_ledger) is None
+        issued_ledger = gate.gate_ledger(world.ledger)
+        assert [gate.development(issued_ledger, h) for h in ("H1", "H2")][1] is None
+        assert not gate.development(issued_ledger, "H1").passes
+        assert gate.holdout_candidate(issued_ledger) is None
         read = key()
         with pytest.raises(SealRefused, match="no holdout candidate"):
             unseal(world, read=read)
@@ -712,50 +788,112 @@ def test_no_candidate_means_no_unseal(tmp_path, monkeypatch):
         world.close()
 
 
+# --- decision D21: no freeze; the unseal closes development ----------------------------
+
+
+def test_the_unseal_closes_development(ready):
+    # After the unseal no trial, benchmark or control runs, through the harness, the
+    # public append or by hand, and the gate computes N, V and the candidate on the
+    # entries before it. The candidates' sensitivity runs still may, outside N.
+    current = gate.gate_ledger(ready.ledger)
+    assert not current.closed and current.commit == ready.ledger.local_head()
+    entry = unseal(ready, fetch=False)
+    for cid in ("H2-01", "B-H1"):
+        with pytest.raises(harness.RunRefused, match="closed development"):
+            harness.run(ready.repo, {"configuration": cid}, store=ready.store)
+    assert rules.after_unseal_error(remote_entries(ready), "control") is not None
+    before = ready.remote_ledger()
+    with pytest.raises(LedgerOutOfStep, match="closed development"):
+        ready.ledger.append(ready.open_body("H2-01"))
+    assert ready.remote_ledger() == before
+    with pytest.raises(harness.RunRefused, match="not H1's candidate"):
+        harness.run(ready.repo, {"configuration": "H1-01",
+                                 "sensitivity_total_cost_bps_per_side": 7.5}, store=ready.store)
+    record = harness.run(ready.repo, {"configuration": CANDIDATE,
+                                      "sensitivity_total_cost_bps_per_side": 7.5},
+                         store=ready.store)
+    assert record.status == "completed", record.error
+    closed = gate.gate_ledger(ready.ledger)
+    assert closed.closed and closed.commit is None and len(closed.snapshot.entries) == entry.seq
+    assert closed.snapshot.data == current.snapshot.data
+    assert gate.trial_count(closed) == 14
+    assert gate.holdout_candidate(closed).configuration_id == CANDIDATE
+    hand_append(ready, ready.open_body("H2-01"))
+    with pytest.raises(VerificationError, match="trial run after the unseal"):
+        ready.ledger.verify()
+
+
+def test_a_trial_admitted_before_the_unseal_cannot_land_after_it(ready, monkeypatch):
+    # Another session unseals between this run's admission (a control run, since both
+    # grids are complete) and its open entry. The unseal moves the ledger head, so the
+    # append's check of the admitted head refuses (M2); the rule is also checked under
+    # the append lock. The freeze's race, which needed follow-up N2b because the freeze
+    # did not move the head, cannot arise.
+    original = gitledger.GitLedger.append
+    state = {"done": False}
+
+    def append(self, body, files=None, **kwargs):
+        if body.get("type") == "open" and not state["done"]:
+            state["done"] = True
+            unseal(ready, fetch=False)
+        return original(self, body, files, **kwargs)
+
+    with monkeypatch.context() as m:
+        m.setattr(gitledger.GitLedger, "append", append)
+        with pytest.raises(LedgerOutOfStep, match="after this run was admitted"):
+            harness.run(ready.repo, {"configuration": "C-H2", "seed": 0}, store=ready.store)
+    assert state["done"] and unseal_of(remote_entries(ready)) is not None
+    with pytest.raises(LedgerOutOfStep, match="closed development"):
+        ready.ledger.append(ready.open_body("H2-01"))
+    assert ledger.trial_count(remote_entries(ready)) == 14
+    assert not [e for e in remote_entries(ready) if e.type == "open" and e.body["kind"] == "control"]
+    ready.ledger.verify()
+
+
 # --- T23: once, on the remote, before any holdout row ----------------------------------
 
 
-def test_second_unseal_is_refused(frozen):
-    first = unseal(frozen)
+def test_second_unseal_is_refused(ready):
+    first = unseal(ready)
     read = key()
     with pytest.raises(SealRefused, match="second unseal"):
-        unseal(frozen, read=read)
+        unseal(ready, read=read)
     assert read.calls == []
-    assert [e.hash for e in remote_entries(frozen) if e.type == "unseal"] == [first.hash]
+    assert [e.hash for e in remote_entries(ready) if e.type == "unseal"] == [first.hash]
     with pytest.raises(VerificationError, match="second unseal"):
-        frozen.ledger.append(unseal_body(frozen))
-    hand_append(frozen, unseal_body(frozen))
+        ready.ledger.append(unseal_body(ready))
+    hand_append(ready, unseal_body(ready))
     with pytest.raises(VerificationError, match="second unseal"):
-        frozen.ledger.verify()
+        ready.ledger.verify()
 
 
-def test_unseal_on_a_ledger_behind_the_remote_is_refused(frozen):
-    request = request_for(frozen)
-    head = frozen.ledger.local_head()
-    git(frozen.repo, "update-ref", "refs/heads/ledger", f"{head}^")
+def test_unseal_on_a_ledger_behind_the_remote_is_refused(ready):
+    request = request_for(ready)
+    head = ready.ledger.local_head()
+    git(ready.repo, "update-ref", "refs/heads/ledger", f"{head}^")
     read = key()
     with pytest.raises(LedgerOutOfStep, match="behind"):
-        unseal(frozen, request, read=read)
+        unseal(ready, request, read=read)
     assert read.calls == []
-    git(frozen.repo, "update-ref", "refs/heads/ledger", head)
+    git(ready.repo, "update-ref", "refs/heads/ledger", head)
     # Another clone unseals; this one, now behind it, cannot unseal again (T23).
-    other = frozen.clone("other")
+    other = ready.clone("other")
     seal.unseal(other.git.repo, request, read_key=key(), store=None, fetch=None)
     with pytest.raises(LedgerOutOfStep, match="behind"):
-        unseal(frozen, request, read=read)
+        unseal(ready, request, read=read)
     assert read.calls == []
 
 
-def test_holdout_rows_require_the_unseal_entry_on_the_remote(frozen):
+def test_holdout_rows_require_the_unseal_entry_on_the_remote(ready):
     with pytest.raises(SealRefused, match="does not hold the unseal entry"):
-        seal.require_unseal_on_remote(frozen.ledger, "e" * 64)
-    before = git(frozen.remote, "rev-parse", "refs/heads/ledger")
-    entry = unseal(frozen)
-    seal.require_unseal_on_remote(frozen.ledger, entry.hash)
+        seal.require_unseal_on_remote(ready.ledger, "e" * 64)
+    before = git(ready.remote, "rev-parse", "refs/heads/ledger")
+    entry = unseal(ready)
+    seal.require_unseal_on_remote(ready.ledger, entry.hash)
     # The loader returns holdout rows only inside the unsealed run.
-    manifest = Manifest.load(frozen.repo / "research/manifests/binance-vision-development.json")
-    holdout = Manifest.load(frozen.repo / seal.HOLDOUT_MANIFEST)
-    loader = DatasetLoader(manifest, frozen.store, holdout=holdout)
+    manifest = Manifest.load(ready.repo / "research/manifests/binance-vision-development.json")
+    holdout = Manifest.load(ready.repo / seal.HOLDOUT_MANIFEST)
+    loader = DatasetLoader(manifest, ready.store, holdout=holdout)
     start, end = datetime(2025, 12, 30, tzinfo=UTC), datetime(2026, 1, 3, tzinfo=UTC)
     with inside_ledger_entry("f" * 64):
         # The loader refuses before any file is read; the store would refuse too.
@@ -764,20 +902,20 @@ def test_holdout_rows_require_the_unseal_entry_on_the_remote(frozen):
         with inside_unsealed_run(entry.hash):
             assert len(loader.load("spot/klines/XUSDT/1d", start, end).rows) == 4
     with pytest.raises(HoldoutSealed, match="rows load only inside the holdout run"):
-        DatasetLoader(manifest, frozen.store).load("spot/klines/XUSDT/1d", start, end)
+        DatasetLoader(manifest, ready.store).load("spot/klines/XUSDT/1d", start, end)
     # A remote that lost the unseal entry (rewritten, T10) seals the holdout again.
-    git(frozen.remote, "update-ref", "refs/heads/ledger", before)
+    git(ready.remote, "update-ref", "refs/heads/ledger", before)
     with pytest.raises(SealRefused, match="does not hold the unseal entry"):
-        seal.require_unseal_on_remote(frozen.ledger, entry.hash)
+        seal.require_unseal_on_remote(ready.ledger, entry.hash)
     with pytest.raises(LedgerOutOfStep):
-        holdout_run(frozen)
+        holdout_run(ready)
 
 
 @pytest.mark.parametrize("failing", ["commit-tree", "push"])
 def test_unseal_is_written_to_the_ledger_before_any_holdout_row_is_returned(
-    frozen, monkeypatch, failing
+    ready, monkeypatch, failing
 ):
-    before = frozen.remote_ledger()
+    before = ready.remote_ledger()
     original = gitledger.Git.run
 
     def broken(self, *args, **kwargs):
@@ -789,27 +927,27 @@ def test_unseal_is_written_to_the_ledger_before_any_holdout_row_is_returned(
     with monkeypatch.context() as m:
         m.setattr(gitledger.Git, "run", broken)
         with pytest.raises(LedgerWriteError):
-            unseal(frozen, calls=fetched)
-    assert fetched == [] and frozen.holdout_files_in_mirror() == []
-    assert frozen.remote_ledger() == before
+            unseal(ready, calls=fetched)
+    assert fetched == [] and ready.holdout_files_in_mirror() == []
+    assert ready.remote_ledger() == before
     with pytest.raises(harness.RunRefused, match="needs the unseal entry"):
-        holdout_run(frozen)
+        holdout_run(ready)
     # When it is written, the remote holds it before the first file is fetched.
     seen = []
-    fetch = frozen.fetcher()
+    fetch = ready.fetcher()
 
     def watching(url, max_bytes):
-        seen.append(any(e.type == "unseal" for e in remote_entries(frozen)))
+        seen.append(any(e.type == "unseal" for e in remote_entries(ready)))
         return fetch(url, max_bytes)
 
-    seal.unseal(frozen.repo, request_for(frozen), read_key=key(), store=frozen.store,
+    seal.unseal(ready.repo, request_for(ready), read_key=key(), store=ready.store,
                 fetch=watching)
     assert seen and all(seen)
 
 
-def test_a_holdout_file_that_differs_from_the_manifest_stops_the_refetch(frozen):
+def test_a_holdout_file_that_differs_from_the_manifest_stops_the_refetch(ready):
     spec = DatasetSpec.from_name("spot/klines/XUSDT/1d")
-    path = frozen.archive.path(spec.key("2026-02"))
+    path = ready.archive.path(spec.key("2026-02"))
     checksum = path.with_name(path.name + ".CHECKSUM")
     offline = {"": path.read_bytes(), ".CHECKSUM": checksum.read_bytes()}  # the owner's copy
     data = bytearray(offline[""])
@@ -817,116 +955,117 @@ def test_a_holdout_file_that_differs_from_the_manifest_stops_the_refetch(frozen)
     path.write_bytes(bytes(data))
     checksum.write_text(f"{seal.sha256_hex(bytes(data))}  {path.name}\n")
     with pytest.raises(SealRefused, match="not the one the frozen holdout manifest pins"):
-        unseal(frozen)
-    entry = unseal_of(remote_entries(frozen))
+        unseal(ready)
+    entry = unseal_of(remote_entries(ready))
     assert entry is not None  # the unseal stands; the run cannot start
     with pytest.raises(harness.RunRefused, match="do not all match"):
-        holdout_run(frozen)
+        holdout_run(ready)
     # The owner's offline copy restores the file; fetch-holdout then verifies and goes on.
-    target = frozen.store.path(spec.key("2026-02"))
+    target = ready.store.path(spec.key("2026-02"))
     target.parent.mkdir(parents=True, exist_ok=True)
     for suffix, content in offline.items():
         target.with_name(target.name + suffix).write_bytes(content)
-    assert seal.fetch_holdout(frozen.repo, store=frozen.store, fetch=frozen.fetcher()) == 2
-    assert holdout_run(frozen).status == "completed"
+    assert seal.fetch_holdout(ready.repo, store=ready.store, fetch=ready.fetcher()) == 2
+    assert holdout_run(ready).status == "completed"
 
 
 # --- T24 and T25: the registration and the key --------------------------------------
 
 
-def test_unseal_naming_another_preregistration_hash_is_refused(frozen):
+def test_unseal_naming_another_preregistration_hash_is_refused(ready):
     read = key()
     for change in (
         lambda p: p["files"].update({"docs/preregistration.json": "0" * 64}),
         lambda p: p["files"].update({"docs/PREREGISTRATION.md": "1" * 64}),
         lambda p: p.update({"commit": "a" * 40}),
-        lambda p: p.update({"tag": "prereg-v2"}),
+        lambda p: p.update({"tag": "prereg-v1"}),
     ):
-        request = request_for(frozen)
+        request = request_for(ready)
         change(request["preregistration"])
         with pytest.raises(SealRefused, match="pre-registration other than"):
-            unseal(frozen, request, read=read)
+            unseal(ready, request, read=read)
     assert read.calls == []
-    named = seal.preregistration_at(frozen.ledger.git, "prereg-v1")
-    assert named == genesis_of(frozen).body["preregistration"]
-    other = unseal_body(frozen)
+    tag = gitledger.PREREGISTRATION_TAG
+    named = seal.preregistration_at(ready.ledger.git, tag, tag)
+    assert named == genesis_of(ready).body["preregistration"]
+    other = unseal_body(ready)
     other["preregistration"] = {**other["preregistration"], "commit": "a" * 40}
-    hand_append(frozen, other)
+    hand_append(ready, other)
     with pytest.raises(VerificationError, match="pre-registration other than"):
-        frozen.ledger.verify()
+        ready.ledger.verify()
 
 
-def test_unseal_without_the_key_is_refused(frozen):
-    before = frozen.remote_ledger()
+def test_unseal_without_the_key_is_refused(ready):
+    before = ready.remote_ledger()
     for read in (key(""), key(None)):
         with pytest.raises(SealRefused, match="no key"):
-            unseal(frozen, read=read)
+            unseal(ready, read=read)
         assert read.calls  # asked, after every other check passed
 
     def no_terminal(prompt):
         raise NoTerminal("no terminal")
 
     with pytest.raises(NoTerminal):
-        unseal(frozen, read=no_terminal)
-    assert frozen.remote_ledger() == before and frozen.holdout_files_in_mirror() == []
+        unseal(ready, read=no_terminal)
+    assert ready.remote_ledger() == before and ready.holdout_files_in_mirror() == []
 
 
-def test_unseal_with_a_wrong_key_is_refused(frozen):
-    before = frozen.remote_ledger()
+def test_unseal_with_a_wrong_key_is_refused(ready):
+    before = ready.remote_ledger()
     for wrong in (OTHER_KEY, TEST_PASSPHRASE + " ", TEST_PASSPHRASE.upper()):
         with pytest.raises(SealRefused, match="does not verify"):
-            unseal(frozen, read=key(wrong))
-    assert frozen.remote_ledger() == before
-    assert unseal(frozen).type == "unseal"
+            unseal(ready, read=key(wrong))
+    assert ready.remote_ledger() == before
+    assert unseal(ready).type == "unseal"
 
 
-def test_key_record_is_read_from_the_genesis_preregistration_not_the_working_tree(frozen):
+def test_key_record_is_read_from_the_genesis_preregistration_not_the_working_tree(ready):
     # A key record for a passphrase someone else knows, committed on main where the
     # pinned one was, changes nothing: the seal reads the one genesis pins (T25).
     substitute = seal.make_key_record(OTHER_KEY, salt=bytes(16))
-    frozen.write(KEY_RECORD, seal.key_record_bytes(substitute))
-    frozen.commit("a substituted key record")
-    frozen.push()
+    ready.write(KEY_RECORD, seal.key_record_bytes(substitute))
+    ready.commit("a substituted key record")
+    ready.push()
     with pytest.raises(SealRefused, match="does not verify"):
-        unseal(frozen, read=key(OTHER_KEY))
-    entry = unseal(frozen)
-    assert entry.body["key_record_sha256"] == genesis_of(frozen).body["key_record"]["sha256"]
-    record = seal.key_record_of(frozen.ledger.git, genesis_of(frozen))
+        unseal(ready, read=key(OTHER_KEY))
+    entry = unseal(ready)
+    assert entry.body["key_record_sha256"] == genesis_of(ready).body["key_record"]["sha256"]
+    record = seal.key_record_of(ready.ledger.git, genesis_of(ready))
     assert record == KEY_RECORD_DOC
 
 
-def test_an_unseal_written_without_the_key_is_refused_by_the_ledger(frozen):
+def test_an_unseal_written_without_the_key_is_refused_by_the_ledger(ready):
     # Security review H1 (probe K1): the key is on the path that opens the holdout. The
     # public append refuses an unseal with no proof or with a proof from another
     # passphrase, and replay refuses one written past append by plumbing, so neither
     # the re-fetch nor the holdout run can start.
-    before = frozen.remote_ledger()
-    body = unseal_body(frozen)
+    before = ready.remote_ledger()
+    body = unseal_body(ready)
     del body["proof"]
     with pytest.raises(VerificationError, match="unseal entry holds"):
-        frozen.ledger.append(body)
+        ready.ledger.append(body)
     for proof in (proof_of(OTHER_KEY), "ab" * 32, proof_of()[:-2] + "00"):
         with pytest.raises(VerificationError, match="does not verify"):
-            frozen.ledger.append(unseal_body(frozen, proof=proof))
+            ready.ledger.append(unseal_body(ready, proof=proof))
     with pytest.raises(VerificationError, match="scrypt output of the pinned"):
-        frozen.ledger.append(unseal_body(frozen, proof=proof_of() + "00"))
-    assert frozen.remote_ledger() == before
-    hand_append(frozen, unseal_body(frozen, proof=proof_of(OTHER_KEY)))
+        ready.ledger.append(unseal_body(ready, proof=proof_of() + "00"))
+    assert ready.remote_ledger() == before
+    hand_append(ready, unseal_body(ready, proof=proof_of(OTHER_KEY)))
     with pytest.raises(VerificationError, match="does not verify"):
-        frozen.ledger.verify()
+        ready.ledger.verify()
     with pytest.raises(VerificationError, match="does not verify"):
-        seal.fetch_holdout(frozen.repo, store=frozen.store, fetch=frozen.fetcher())
+        seal.fetch_holdout(ready.repo, store=ready.store, fetch=ready.fetcher())
     with pytest.raises(VerificationError, match="does not verify"):
-        holdout_run(frozen)
-    assert frozen.holdout_files_in_mirror() == []
+        holdout_run(ready)
+    assert ready.holdout_files_in_mirror() == []
 
 
-def test_the_unseal_entry_reveals_the_proof_the_key_record_commits_to(frozen):
-    entry = unseal(frozen, fetch=False)
+def test_the_unseal_entry_reveals_the_proof_the_key_record_commits_to(ready):
+    entry = unseal(ready, fetch=False)
     assert entry.body["proof"] == proof_of()
     assert hashlib.sha256(bytes.fromhex(entry.body["proof"])).hexdigest() == (
         KEY_RECORD_DOC["verifier_sha256"])
-    frozen.ledger.verify()
+    ready.ledger.verify()
 
 
 def test_check_key_verifies_the_genesis_record_and_writes_nothing(tmp_path, monkeypatch, capsys):
@@ -1002,13 +1141,13 @@ def commit_a_data_loading_change(world):
 
 
 def test_a_failed_attempt_then_a_data_loading_change_cannot_run_the_holdout(
-    frozen, monkeypatch, tmp_path
+    ready, monkeypatch, tmp_path
 ):
     # Probes R1 and F2 (security review round 2, N1): the holdout series was computed
     # and seen, then the attempt failed. A run at a commit with a data loading change is
     # refused, whatever the attempt reported; at the unseal's commit the retry is
     # allowed and gives the same series.
-    entry = unseal(frozen)
+    entry = unseal(ready)
     seen = []
 
     def peek_then_fail(returned, window, committed):
@@ -1017,25 +1156,25 @@ def test_a_failed_attempt_then_a_data_loading_change_cannot_run_the_holdout(
 
     with monkeypatch.context() as m:
         m.setattr(harness, "_holdout_summary", peek_then_fail)
-        first = holdout_run(frozen)
+        first = holdout_run(ready)
     assert first.status == "failed" and harness.WITHHELD in first.error
-    closes = [e for e in remote_entries(frozen) if e.type == "attempt_close"]
+    closes = [e for e in remote_entries(ready) if e.type == "attempt_close"]
     assert [c.body["outcome"] for c in closes] == ["returned"]
-    commit_a_data_loading_change(frozen)
-    out = run_at_head_in_a_fresh_process(frozen, tmp_path)
+    commit_a_data_loading_change(ready)
+    out = run_at_head_in_a_fresh_process(ready, tmp_path)
     assert "every holdout run is at the unseal's commit" in out["refused"]
     assert entry.body["commit"] in out["refused"]
-    git(frozen.repo, "checkout", "--quiet", entry.body["commit"])
-    second = holdout_run(frozen)
+    git(ready.repo, "checkout", "--quiet", entry.body["commit"])
+    second = holdout_run(ready)
     assert second.status == "completed", second.error
-    assert frozen.ledger.verify().snapshot.returns_of(second.result_entry) == seen[0]
+    assert ready.ledger.verify().snapshot.returns_of(second.result_entry) == seen[0]
 
 
-def test_a_close_the_caller_writes_unlocks_nothing(frozen, monkeypatch, tmp_path):
+def test_a_close_the_caller_writes_unlocks_nothing(ready, monkeypatch, tmp_path):
     # Probe F1: the process stops after the unsealed run returned, and the caller writes
     # the attempt's close itself. It is a valid close, and changes nothing: a run at a
     # data loading change is still refused.
-    unseal(frozen)
+    unseal(ready)
     original = gitledger.GitLedger.append
 
     def die_at_the_close(self, body, files=None, **kwargs):
@@ -1046,42 +1185,42 @@ def test_a_close_the_caller_writes_unlocks_nothing(frozen, monkeypatch, tmp_path
     with monkeypatch.context() as m:
         m.setattr(gitledger.GitLedger, "append", die_at_the_close)
         with pytest.raises(SystemExit):
-            holdout_run(frozen)
-    (attempt,) = [e for e in remote_entries(frozen) if e.type == "attempt"]
-    frozen.ledger.append({"type": "attempt_close", "attempt": attempt.hash,
+            holdout_run(ready)
+    (attempt,) = [e for e in remote_entries(ready) if e.type == "attempt"]
+    ready.ledger.append({"type": "attempt_close", "attempt": attempt.hash,
                           "attempt_seq": attempt.seq, "outcome": "failed"})
-    commit_a_data_loading_change(frozen)
-    out = run_at_head_in_a_fresh_process(frozen, tmp_path)
+    commit_a_data_loading_change(ready)
+    out = run_at_head_in_a_fresh_process(ready, tmp_path)
     assert "every holdout run is at the unseal's commit" in out["refused"]
-    frozen.ledger.verify()
+    ready.ledger.verify()
 
 
-def test_an_off_ledger_peek_then_a_rewriting_first_attempt_is_refused(frozen, tmp_path):
+def test_an_off_ledger_peek_then_a_rewriting_first_attempt_is_refused(ready, tmp_path):
     # Probe D2: after the unseal the holdout files are on disk and the runner can be
     # called directly, leaving no entry (T21's residual). The rewrite that would follow
     # needs a code change, and the first ledgered run at it is refused.
-    entry = unseal(frozen)
-    genesis = genesis_of(frozen)
-    opened = trial(frozen, CANDIDATE)[0]
-    config = frozen.registration.resolve_holdout(
+    entry = unseal(ready)
+    genesis = genesis_of(ready)
+    opened = trial(ready, CANDIDATE)[0]
+    config = ready.registration.resolve_holdout(
         opened.body, genesis.body["manifests"]["holdout"]).configuration
-    before = frozen.remote_ledger()
+    before = ready.remote_ledger()
     peeked = harness._run_strategy(
-        frozen.ledger.git, entry.body["commit"], genesis.body["strategies"][CANDIDATE],
+        ready.ledger.git, entry.body["commit"], genesis.body["strategies"][CANDIDATE],
         genesis.body["tree_paths"]["H1"], "research/manifests/binance-vision-development.json",
-        config, "e" * 64, frozen.store, unsealed=(seal.HOLDOUT_MANIFEST, entry.hash),
+        config, "e" * 64, ready.store, unsealed=(seal.HOLDOUT_MANIFEST, entry.hash),
     )
-    assert len(peeked) == 2802 + 304 and frozen.remote_ledger() == before
-    commit_a_data_loading_change(frozen)
-    out = run_at_head_in_a_fresh_process(frozen, tmp_path)
+    assert len(peeked) == 2802 + 304 and ready.remote_ledger() == before
+    commit_a_data_loading_change(ready)
+    out = run_at_head_in_a_fresh_process(ready, tmp_path)
     assert "every holdout run is at the unseal's commit" in out["refused"]
-    assert not [e for e in remote_entries(frozen) if e.type == "open" and e.body["kind"] == "holdout"]
+    assert not [e for e in remote_entries(ready) if e.type == "open" and e.body["kind"] == "holdout"]
 
 
-def test_a_killed_attempt_is_closed_as_abandoned_by_the_next_run(frozen, monkeypatch):
+def test_a_killed_attempt_is_closed_as_abandoned_by_the_next_run(ready, monkeypatch):
     # Probe R1b: the process dies after the unsealed run returned, before the attempt's
     # close; the next run, at the unseal's commit, closes it as abandoned and goes on.
-    entry = unseal(frozen)
+    entry = unseal(ready)
     original = gitledger.GitLedger.append
 
     def die_before_the_close(self, body, files=None, **kwargs):
@@ -1092,97 +1231,121 @@ def test_a_killed_attempt_is_closed_as_abandoned_by_the_next_run(frozen, monkeyp
     with monkeypatch.context() as m:
         m.setattr(gitledger.GitLedger, "append", die_before_the_close)
         with pytest.raises(SystemExit):
-            holdout_run(frozen)
-    entries = remote_entries(frozen)
+            holdout_run(ready)
+    entries = remote_entries(ready)
     (attempt,) = [e for e in entries if e.type == "attempt"]
     assert not any(e.type in ("attempt_close", "result") for e in entries[attempt.seq:])
-    frozen.ledger.verify()
+    ready.ledger.verify()
     assert "unseal's commit" in rules.holdout_commit_rule(entries, "0" * 40)
     assert rules.holdout_commit_rule(entries, entry.body["commit"]) is None
-    again = holdout_run(frozen)
+    again = holdout_run(ready)
     assert again.status == "completed", again.error
-    closes = [e for e in remote_entries(frozen) if e.type == "attempt_close"]
+    closes = [e for e in remote_entries(ready) if e.type == "attempt_close"]
     assert (closes[0].body["attempt"], closes[0].body["outcome"]) == (attempt.hash, "abandoned")
-    frozen.ledger.verify()
+    ready.ledger.verify()
 
 
-def test_the_holdout_runs_at_most_three_times(frozen, monkeypatch):
-    # Section 11, item 6, implemented conservatively (rules.HOLDOUT_RUNS): three holdout
-    # runs that fail before producing a result, then no more.
-    unseal(frozen)
+def test_the_holdout_reaches_its_unsealed_stage_at_most_three_times(ready, monkeypatch):
+    # Section 11, item 6, implemented conservatively (rules.HOLDOUT_ATTEMPTS): three
+    # holdout runs that reach the unsealed stage (an attempt entry each) and fail, then no
+    # more, at the harness and on replay (security review round 3, C1).
+    unseal(ready)
+    original = harness._run_strategy
+
+    def crash_once_unsealed(*args, **kwargs):
+        if kwargs.get("unsealed"):
+            raise RuntimeError("a crash inside the unsealed run")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(harness, "_run_strategy", crash_once_unsealed)
+    for _ in range(rules.HOLDOUT_ATTEMPTS):
+        assert holdout_run(ready).status == "failed"
+    assert [e.type for e in remote_entries(ready)].count("attempt") == 3
+    with pytest.raises(harness.RunRefused, match="unsealed stage 3 times"):
+        holdout_run(ready)
+    hand_append(ready, holdout_open_body(ready))
+    with pytest.raises(VerificationError, match="unsealed stage 3 times"):
+        ready.ledger.verify()
+
+
+def test_holdout_runs_that_fail_before_the_unsealed_stage_do_not_count(ready, monkeypatch):
+    # Security review round 3, C1 (the reviewer's probe): runs that fail before their
+    # attempt entry, here in the development reproduction, read nothing of the holdout,
+    # so more of them than the cap allows leave the holdout run still possible.
+    unseal(ready)
 
     def crash(*args, **kwargs):
-        raise RuntimeError("a crash before any holdout return")
+        raise RuntimeError("a crash before the unsealed stage")
 
-    monkeypatch.setattr(harness, "_run_strategy", crash)
-    for _ in range(rules.HOLDOUT_RUNS):
-        assert holdout_run(frozen).status == "failed"
-    with pytest.raises(harness.RunRefused, match="run 3 times"):
-        holdout_run(frozen)
-    hand_append(frozen, holdout_open_body(frozen))
-    with pytest.raises(VerificationError, match="run 3 times"):
-        frozen.ledger.verify()
+    with monkeypatch.context() as m:
+        m.setattr(harness, "_run_strategy", crash)
+        for _ in range(rules.HOLDOUT_ATTEMPTS + 1):
+            assert holdout_run(ready).status == "failed"
+    assert "attempt" not in [e.type for e in remote_entries(ready)]
+    record = holdout_run(ready)
+    assert record.status == "completed", record.error
+    ready.ledger.verify()
 
 
-def test_a_second_holdout_run_while_one_is_in_flight_is_refused(frozen, monkeypatch):
+def test_a_second_holdout_run_while_one_is_in_flight_is_refused(ready, monkeypatch):
     # Probe R2 and security review M1: on one clone the holdout lock refuses a second run
     # while the first is in flight, so only one attempt and one result exist.
-    unseal(frozen)
+    unseal(ready)
     original = harness._run_strategy
     inner = []
 
     def start_another(*args, **kwargs):
         if not inner:
             try:
-                inner.append(holdout_run(frozen).status)
+                inner.append(holdout_run(ready).status)
             except harness.RunRefused as exc:
                 inner.append(str(exc))
         return original(*args, **kwargs)
 
     monkeypatch.setattr(harness, "_run_strategy", start_another)
-    outer = holdout_run(frozen)
+    outer = holdout_run(ready)
     assert outer.status == "completed", outer.error
     assert "another holdout run is in progress" in inner[0]
-    entries = remote_entries(frozen)
+    entries = remote_entries(ready)
     assert [e.type for e in entries].count("attempt") == 1
     assert sum(1 for e in entries if e.type == "result" and e.body["status"] == "completed"
                and e.body["configuration_sha256"] == outer.open_entry.body[
                    "configuration_sha256"]) == 1
-    frozen.ledger.verify()
+    ready.ledger.verify()
 
 
 def test_an_attempt_from_another_clone_ends_one_in_flight_which_cannot_complete(
-    frozen, monkeypatch
+    ready, monkeypatch
 ):
     # Security review M1 across clones: the lock is per clone, so the ledger keeps
     # attempts one at a time. A run on another clone first closes the open attempt as
     # abandoned (which binds it to the same commit); the first run cannot then close its
     # attempt or complete. One completed result, and the ledger verifies.
-    unseal(frozen)
+    unseal(ready)
     original = harness._run_strategy
     other = []
 
     def another_clone_runs_meanwhile(*args, **kwargs):
         if kwargs.get("unsealed") and not other:
             other.append(None)
-            clone = frozen.clone("other")
+            clone = ready.clone("other")
             other[0] = harness.run(clone.git.repo, {"configuration": "holdout",
-                                   "candidate_sha256": request_for(frozen)["configuration_sha256"]},
-                                   store=frozen.store)
+                                   "candidate_sha256": request_for(ready)["configuration_sha256"]},
+                                   store=ready.store)
         return original(*args, **kwargs)
 
     monkeypatch.setattr(harness, "_run_strategy", another_clone_runs_meanwhile)
-    first = holdout_run(frozen)
+    first = holdout_run(ready)
     assert other[0].status == "completed", other[0].error
     assert first.status == "failed" and "closed twice" in first.error
-    entries = remote_entries(frozen)
+    entries = remote_entries(ready)
     completed = [e for e in entries if e.type == "result" and e.body["status"] == "completed"
                  and e.body["opens"] in {o.hash for o in entries
                                          if o.type == "open" and o.body["kind"] == "holdout"}]
     assert len(completed) == 1
     assert [e.body["outcome"] for e in entries if e.type == "attempt_close"] == [
         "abandoned", "returned"]
-    frozen.ledger.verify()
+    ready.ledger.verify()
 
 
 def test_a_failed_unsealed_run_publishes_no_text_of_its_own(tmp_path, monkeypatch):
@@ -1203,8 +1366,9 @@ def test_a_failed_unsealed_run_publishes_no_text_of_its_own(tmp_path, monkeypatc
 
 def test_the_attempt_rules_replay_without_git():
     # The rules the ledger and replay hold holdout runs and attempts to, on a ledger
-    # built in memory: the unseal's commit only, at most three runs, one attempt at a
-    # time, never closed twice, and a completed result needs its own returned attempt.
+    # built in memory: the unseal's commit only, at most three runs reaching the unsealed
+    # stage (any number failing before it; round 3, C1), one attempt at a time, never
+    # closed twice, and a completed result needs its own returned attempt.
     book = Book()
     days = book.registration.windows["H1"].days
     for i, cid in enumerate(book.registration.order["H1"]):
@@ -1213,12 +1377,12 @@ def test_the_attempt_rules_replay_without_git():
     opened = next(e for e in book.entries if e.type == "open"
                   and e.body["configuration_id"] == CANDIDATE)
     closed = next(e for e in book.entries if e.type == "result" and e.body["opens"] == opened.hash)
-    frozen_length = len(book.entries)
     sealed_at = "1" * 40
     book.add({"type": "unseal", "preregistration": genesis.body["preregistration"],
               "configuration_id": CANDIDATE, "hypothesis": "H1",
               "configuration_sha256": opened.body["configuration_sha256"],
-              "candidate": {"open": opened.hash, "result": closed.hash}, "freeze": "f" * 40,
+              "candidate": {"open": opened.hash, "result": closed.hash},
+              "accepted_diff": hashlib.sha256(b"").hexdigest(),
               "holdout_manifest_sha256": genesis.body["manifests"]["holdout"],
               "key_record_sha256": genesis.body["key_record"]["sha256"], "proof": "ab" * 32,
               "commit": sealed_at})
@@ -1238,7 +1402,7 @@ def test_the_attempt_rules_replay_without_git():
                        "outcome": outcome})
 
     def replay(on):
-        check_run_rules(on.snapshot().entries, on.registration, frozen_length=frozen_length)
+        check_run_rules(on.snapshot().entries, on.registration)
 
     first = holdout_open(book)
     tried = attempt(book, first)
@@ -1249,12 +1413,22 @@ def test_the_attempt_rules_replay_without_git():
     holdout_open(elsewhere, "2" * 40)
     with pytest.raises(VerificationError, match="unseal's commit"):
         replay(elsewhere)
-    capped = copy.deepcopy(book)
-    for _ in range(rules.HOLDOUT_RUNS - 1):
-        holdout_open(capped)
+    unattempted_runs = copy.deepcopy(book)
+    for _ in range(rules.HOLDOUT_ATTEMPTS + 2):
+        holdout_open(unattempted_runs)  # failed before the unsealed stage: not counted
+    replay(unattempted_runs)
+    assert rules.HOLDOUT_ATTEMPTS == 3
+    capped = copy.deepcopy(book)  # the first run's attempt is the first
+    close(capped, attempt(capped, holdout_open(capped)))  # the second
+    run_a, run_b = holdout_open(capped), holdout_open(capped)
+    close(capped, attempt(capped, run_a))  # the third
     replay(capped)
-    holdout_open(capped)
-    with pytest.raises(VerificationError, match="run 3 times"):
+    after_cap = copy.deepcopy(capped)
+    holdout_open(after_cap)
+    with pytest.raises(VerificationError, match="unsealed stage 3 times"):
+        replay(after_cap)
+    attempt(capped, run_b)  # a fourth, on a run opened before the cap was reached
+    with pytest.raises(VerificationError, match="unsealed stage 3 times"):
         replay(capped)
     cases = []
     overlapping = copy.deepcopy(book)
@@ -1275,22 +1449,34 @@ def test_the_attempt_rules_replay_without_git():
             ledger_.snapshot()
 
 
-def test_append_refuses_the_holdout_entries_replay_would_reject(frozen):
+def test_append_refuses_the_holdout_entries_replay_would_reject(ready):
     # Security review round 2, N4: an entry the public append accepts never fails
     # verification afterwards, so a hand-written one cannot break the ledger for good.
-    unseal(frozen, fetch=False)
-    before = frozen.remote_ledger()
-    elsewhere = {**holdout_open_body(frozen), "commit": "0" * 40}
+    unseal(ready, fetch=False)
+    before = ready.remote_ledger()
+    elsewhere = {**holdout_open_body(ready), "commit": "0" * 40}
     with pytest.raises(VerificationError, match="unseal's commit"):
-        frozen.ledger.append(elsewhere)
-    assert frozen.remote_ledger() == before
-    runs = [frozen.ledger.append(holdout_open_body(frozen)) for _ in range(rules.HOLDOUT_RUNS)]
-    with pytest.raises(VerificationError, match="run 3 times"):
-        frozen.ledger.append(holdout_open_body(frozen))
+        ready.ledger.append(elsewhere)
+    assert ready.remote_ledger() == before
+    # Runs that never reach the unsealed stage are not counted (round 3, C1).
+    runs = [ready.ledger.append(holdout_open_body(ready))
+            for _ in range(rules.HOLDOUT_ATTEMPTS + 1)]
     with pytest.raises(VerificationError, match="commit is not its holdout run's"):
-        frozen.ledger.append({"type": "attempt", "opens": runs[-1].hash,
+        ready.ledger.append({"type": "attempt", "opens": runs[-1].hash,
                               "open_seq": runs[-1].seq, "commit": "0" * 40})
-    frozen.ledger.verify()
+    for run in runs[:-1]:  # three reach the unsealed stage and fail
+        tried = ready.ledger.append({"type": "attempt", "opens": run.hash, "open_seq": run.seq,
+                                     "commit": run.body["commit"]})
+        ready.ledger.append({"type": "attempt_close", "attempt": tried.hash,
+                             "attempt_seq": tried.seq, "outcome": "failed"})
+    before = ready.remote_ledger()
+    with pytest.raises(VerificationError, match="unsealed stage 3 times"):
+        ready.ledger.append(holdout_open_body(ready))
+    with pytest.raises(VerificationError, match="unsealed stage 3 times"):
+        ready.ledger.append({"type": "attempt", "opens": runs[-1].hash,
+                             "open_seq": runs[-1].seq, "commit": runs[-1].body["commit"]})
+    assert ready.remote_ledger() == before
+    ready.ledger.verify()
 
 
 # --- the rehearsal (security review round 2, the coordinator's item 4) ------------------
@@ -1342,20 +1528,20 @@ def test_the_rehearsal_fails_loudly_on_a_seal_error_and_needs_a_candidate(tmp_pa
             harness.rehearse_holdout(world.repo, store=world.store, boundary="2025-12")
     finally:
         world.close()
-    world = a_grid_world(tmp_path / "unfrozen", monkeypatch, freeze=False)
+    world = a_grid_world(tmp_path / "incomplete", monkeypatch, incomplete=True)
     try:
-        with pytest.raises(harness.RunRefused, match="frozen ledger"):
+        with pytest.raises(harness.RunRefused, match="no holdout candidate"):
             harness.rehearse_holdout(world.repo, store=world.store)
     finally:
         world.close()
 
 
-def test_a_failed_unseal_push_leaves_no_proof_in_the_clone(frozen, monkeypatch):
+def test_a_failed_unseal_push_leaves_no_proof_in_the_clone(ready, monkeypatch):
     # Probe P2 (security review round 2, N2): a push that fails must not strand the
     # owner's proof in a commit, a ref or a reflog of the clone, where anyone could use it
     # later without the owner.
     reflog = ["reflog", "show", "--format=%H %gs", "refs/heads/ledger"]
-    before = git(frozen.repo, *reflog)
+    before = git(ready.repo, *reflog)
     original = gitledger.Git.run
 
     def no_push(self, *args, **kwargs):
@@ -1366,22 +1552,22 @@ def test_a_failed_unseal_push_leaves_no_proof_in_the_clone(frozen, monkeypatch):
     with monkeypatch.context() as m:
         m.setattr(gitledger.Git, "run", no_push)
         with pytest.raises(LedgerWriteError, match="nothing of it is left in this clone"):
-            unseal(frozen, fetch=False)
-    assert unseal_of(remote_entries(frozen)) is None
+            unseal(ready, fetch=False)
+    assert unseal_of(remote_entries(ready)) is None
 
     def every_object():
         return subprocess.run(["git", "cat-file", "--batch-all-objects", "--batch"],
-                              cwd=frozen.repo, capture_output=True, check=True).stdout
+                              cwd=ready.repo, capture_output=True, check=True).stdout
 
     assert proof_of().encode() not in every_object()
-    assert git(frozen.repo, *reflog) == before
-    assert "unseal" not in git(frozen.repo, "log", "-g", "--all", "--format=%gs %s")
+    assert git(ready.repo, *reflog) == before
+    assert "unseal" not in git(ready.repo, "log", "-g", "--all", "--format=%gs %s")
     # When the push succeeds, the proof is public, and the search above finds it.
-    entry = unseal(frozen, fetch=False)
+    entry = unseal(ready, fetch=False)
     assert proof_of().encode() in every_object()
-    assert git(frozen.repo, "rev-parse", "refs/heads/ledger") == git(
-        frozen.remote, "rev-parse", "refs/heads/ledger")
-    frozen.ledger.verify()
+    assert git(ready.repo, "rev-parse", "refs/heads/ledger") == git(
+        ready.remote, "rev-parse", "refs/heads/ledger")
+    ready.ledger.verify()
     assert entry.type == "unseal"
 
 

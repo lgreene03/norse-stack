@@ -13,7 +13,8 @@ docs/PREREGISTRATION.md, threat T18). A run resolves to one registered configura
 * a benchmark (B-H1, B-H2) or a control (C-H1, C-H2 with a seed in the registered
   range), ledgered but outside N;
 * a sensitivity run: a hypothesis's candidate re-costed at a registered total cost,
-  after the freeze only;
+  once every registered configuration of the hypothesis has a selectable run, before
+  or after the unseal (decision D21);
 * the holdout run (G1.6), never resolved from a request: it is the unseal's candidate
   configuration with its window carried from the start of the development window
   through 2026-10-31, the candidate's configuration hash and the holdout manifest's

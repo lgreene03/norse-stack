@@ -175,7 +175,7 @@ described under [Settings only the owner can change](#settings-only-the-owner-ca
 | T19 | Cherry-picked reporting from a valid ledger | No ledger | Prevented in generated output; detected by reproduction | Prose around the numbers |
 | T20 | Holdout read through the harness before the unseal | Prevented by the loader | Prevented | None |
 | T21 | Holdout read outside the harness | Open: files on disk, package readers, public download | Process only; accidents prevented (option B); agent reads detectable | High and irreducible |
-| T22 | Several holdout runs after one unseal; candidate chosen late | Not in G1.6's spec | Prevented | Needs G0.7's selection rule |
+| T22 | Several holdout runs after one unseal; candidate chosen late | Not in G1.6's spec | Prevented after the unseal; a data loading or seal change made before it is reviewed (process) | Needs G0.7's selection rule |
 | T23 | A second unseal | Not built | Prevented, except by rewriting the remote, which is detected | T10 |
 | T24 | `prereg-v1` moved or replaced | Tags unprotected | Prevented for the harness; detected | T10 |
 | T25 | Owner's key guessed, exposed or substituted | Built (G1.6) | Guessing prevented; substitution prevented after genesis and detected at it by `check-key`; exposure process only | The passphrase reaching an agent; a record pinned at genesis that the owner did not check |
@@ -292,7 +292,7 @@ rewrite of GitHub's history (T10).
 
 #### T6. Entries reordered
 
-**How.** A trial is moved before the pre-registration anchor, before or after the freeze,
+**How.** A trial is moved before the pre-registration anchor, before or after the unseal,
 or before another trial so that a different one appears to be "first".
 
 **Control.** The chain, a contiguous sequence number in every entry, and the genesis rule:
@@ -316,7 +316,8 @@ agent can use too.
 **Control.** Reproduction is the only authentication of an entry's content. Each result
 entry stores the SHA-256 of the trial's out-of-sample daily return series, the series is
 committed beside the ledger, and every entry is re-run from its commit, configuration and
-manifest at the G2.7 freeze and again at G3.4, with the result hash compared. That needs
+manifest at the G2.7 ledger audit before the unseal and again at G3.4, with the result
+hash compared. That needs
 determinism, which is tested. A pull request that alters existing lines fails the T4
 history check. **Detected**, by reproduction.
 
@@ -324,7 +325,8 @@ history check. **Detected**, by reproduction.
 `test_identical_inputs_give_identical_result_hash` (G1.5). The full reproduction is an
 attestation step (see [Attestation checks](#attestation-checks-not-unit-tests)).
 
-**Residual.** Found only when reproduction runs. Run it at the freeze, not only at G3.4.
+**Residual.** Found only when reproduction runs. Run it before the unseal (G2.7), not only
+at G3.4.
 
 #### T8. A result seen before its entry, or an entry lost after it
 
@@ -399,12 +401,14 @@ the owner's has a tag to check against.
 
 **How.** The Mac's clock is set back, a run uses a faked time, `GIT_COMMITTER_DATE` is set,
 or a timestamp is edited before hashing, to show a trial before the pre-registration, an
-unseal on its date, or a trial before the freeze.
+unseal on its date, or a trial before the unseal.
 
 **Control.** Nothing the harness trusts reads the clock. "After the pre-registration" means
-after the genesis entry in the chain; "before the freeze" means inside the tagged prefix;
-"early unseal" means before the freeze tag and both G3.1 drafts are in the chain, not
-before a date. The only trustworthy times are GitHub's (push activity, pull request merges,
+after the genesis entry in the chain; "before the unseal" means before the unseal entry in
+the chain, which closes development (there is no ledger freeze, decision D21); "early
+unseal" means before each hypothesis has, in the chain, a selectable run of every
+registered configuration or its own entries and the reserve used up, not before a date
+(G3.1's two drafts before it are process). The only trustworthy times are GitHub's (push activity, pull request merges,
 Actions runs), at push granularity, which T8's push per entry makes per entry. G3.4 reports
 them beside the entries' own times. **Detected**; local timestamps are informative only.
 
@@ -567,13 +571,16 @@ registered N spans both; computes statistics over a prefix of the ledger that en
 a bad trial; quotes the best trial's in-sample figure; or quotes a Sharpe ratio undeflated.
 
 **Control.** The gate's statistics take the ledger, not N. GATE_STATUS, the tear sheets and
-the verdict page are generated from the frozen ledger and cite entry hashes (G1.8, G2.4,
-G3.6). Once the freeze tag exists (G2.7), the gate refuses any other ledger. **Prevented**
+the verdict page are generated from the ledger the gate takes and cite entry hashes
+(G1.8, G2.4, G3.6). The gate takes only the verified ledger, and once the unseal entry
+exists only the entries before it, since the unseal closes development (decision D21); it
+refuses any other ledger. **Prevented**
 in generated output; **detected** by reproduction (P1) for anything typed.
 
 **Tests.** `test_statistics_take_n_only_from_the_ledger` (G1.5 with G1.3), asserting the
 gate's public functions have no N parameter and use the registered count of a given
-ledger; `test_gate_refuses_a_ledger_that_is_not_the_frozen_head` (G1.5);
+ledger; `test_gate_refuses_a_ledger_that_is_not_the_verified_one` (G1.5),
+`test_the_gate_computes_on_the_entries_before_the_unseal` (G1.6);
 `test_every_published_figure_cites_an_entry_in_the_ledger` (G1.8 and G3.6).
 
 **Residual.** Prose around the numbers can still mislead; G3.1's two outcomes drafted
@@ -596,7 +603,8 @@ match the genesis entry, so the harness refuses. **Prevented.**
 `test_requests_reaching_into_the_holdout_are_refused`,
 `test_a_development_manifest_holding_holdout_months_is_refused`. New:
 `test_period_constants_match_the_genesis_entry` (G1.6), `test_early_unseal_is_refused`
-(G1.6), "early" meaning before the freeze tag and both G3.1 drafts are in the chain.
+(G1.6), "early" meaning before each hypothesis has a selectable run of every registered
+configuration or has exhausted its own entries and the reserve (decision D21; T11).
 
 **Residual.** None for the harness.
 
@@ -642,19 +650,33 @@ reported; or a person picks the candidate after seeing development results and a
 look at 2026 (T21). G1.6's done-when limits unseals, not runs, and does not say which
 configuration may run.
 
-**Control.** The unseal entry names one configuration hash. The harness computes the
-candidate by the selection rule registered in `prereg-v1`, over the frozen ledger, and
-refuses an unseal naming anything else; if no trial passed development there is no
-candidate and no unseal, matching G3.2's "or none". One result entry spends the seal. A
-run that crashes before producing a result may be retried under the same unseal for the
-same configuration only, every attempt ledgered. **Prevented.**
+**Control.** The unseal entry names one configuration hash. There is no ledger freeze
+(decision D21): the unseal closes development, so no trial, benchmark or control entry may
+follow it, and the harness computes the candidate by the registered selection rule over
+the entries before it, and refuses an unseal naming anything else; replay recomputes it.
+If no trial passed development there is no candidate and no unseal, matching G3.2's "or
+none". The code may change between the candidate's run and the unseal only in data loading
+or the seal (section 11, item 6); the unseal prints the files changed and the hash of their
+diff, refuses unless the owner passes that exact hash, and records it, and replay
+recomputes it (security review round 3, T1). One result entry spends the seal. A run that
+fails may be retried under the same unseal, at the same commit, for the same configuration
+only, every attempt ledgered, until three runs have reached the unsealed stage (an attempt
+entry each); a run that fails before its attempt entry read nothing of the holdout and does
+not count (round 3, C1). **Prevented** after the unseal; a data loading or seal change made
+before it is reviewed (process): the owner reads the diff whose hash the unseal records.
 
 **Tests.** `test_unseal_must_name_the_candidate_selected_by_the_registered_rule` (G1.6),
 `test_holdout_run_of_another_configuration_is_refused` (G1.6),
 `test_second_holdout_result_after_one_unseal_is_refused` (G1.6),
-`test_no_candidate_means_no_unseal` (G1.6).
+`test_no_candidate_means_no_unseal` (G1.6),
+`test_the_unseal_closes_development` (G1.6),
+`test_the_unseal_shows_the_data_loading_diff_and_needs_its_hash` (G1.6),
+`test_the_holdout_reaches_its_unsealed_stage_at_most_three_times` (G1.6),
+`test_holdout_runs_that_fail_before_the_unsealed_stage_do_not_count` (G1.6).
 
 **Residual.** Depends on G0.7 writing the selection rule as a mechanical rule (finding 3).
+Whether a data loading or seal change is only that is the owner's review of the accepted
+diff, not a check the code can make.
 
 #### T23. A second unseal
 
@@ -924,7 +946,7 @@ marks a test the goal's own done-when already names.
 | `test_reserve_trial_requires_a_recorded_reason` | A reserve trial without a reason entry refuses the run | T17 |
 | `test_a_run_covering_an_out_of_sample_window_is_a_trial_whatever_its_label` | A run labelled in-sample, smoke or debug whose returns cover a registered out-of-sample window is ledgered as a trial | T18 |
 | `test_statistics_take_n_only_from_the_ledger` | Spec (N from the ledger). The gate's public functions take no N and use the registered count of the ledger given (with G1.3) | T19 |
-| `test_gate_refuses_a_ledger_that_is_not_the_frozen_head` | Once the freeze tag exists, a prefix or other ledger is refused | T19 |
+| `test_gate_refuses_a_ledger_that_is_not_the_verified_one` | A prefix of the verified ledger, or another ledger, is refused | T19 |
 | `test_trials_require_a_genesis_entry_naming_the_preregistration` | A trial entry without a genesis entry naming `prereg-v1`'s commit and file hashes refuses the run | T24 |
 | `test_preregistration_change_after_the_first_trial_is_refused` | A new genesis after the first trial fails verification | T24 |
 | `test_verifier_flags_a_tag_that_no_longer_matches_the_genesis_entry` | A `prereg-v1` tag pointing elsewhere than the genesis says is reported | T24 |
@@ -936,16 +958,24 @@ marks a test the goal's own done-when already names.
 | Test | Asserts | Threats |
 |---|---|---|
 | `test_period_constants_match_the_genesis_entry` | A changed `HOLDOUT_START` or `LAST_DEVELOPMENT_MONTH` refuses the run | T20 |
-| `test_early_unseal_is_refused` | Spec. An unseal before the freeze tag and both G3.1 drafts are in the chain is refused | T20 |
+| `test_early_unseal_is_refused` | Spec. An unseal before each hypothesis has a selectable run of every registered configuration or an exhausted budget is refused, by the seal, the append and replay, even with one hypothesis's candidate passing (D21; G3.1 open question 10) | T20 |
 | `test_rest_fetch_refuses_a_holdout_range` | A REST request overlapping [2026-01-01, 2026-11-01) is refused before the unseal | T21, T27 |
 | `test_package_readers_refuse_holdout_months_without_the_audit_flag` | `ArchiveStore.read`, `read_series_file` and `coverage.read_rows` refuse a holdout month without the flag | T21 |
 | `test_only_manifest_tools_pass_the_audit_flag` | Parsing the package finds the flag passed only by the manifest build and verify code | T21 |
 | `test_sync_does_not_mirror_holdout_months_before_the_unseal` | If option B is taken: `sync` lists no month after 2025-12 before the unseal | T21 |
 | `test_no_committed_fixture_holds_holdout_rows` | No committed fixture or data file holds a row time in [2026-01-01, 2026-11-01) | T21, T27 |
-| `test_unseal_must_name_the_candidate_selected_by_the_registered_rule` | An unseal naming any configuration other than the rule's choice over the frozen ledger is refused | T22 |
+| `test_unseal_must_name_the_candidate_selected_by_the_registered_rule` | An unseal naming any configuration other than the rule's choice over the entries before it is refused | T22 |
 | `test_holdout_run_of_another_configuration_is_refused` | After an unseal, a holdout run of a different configuration hash is refused | T22 |
 | `test_second_holdout_result_after_one_unseal_is_refused` | After one holdout result entry, another holdout run is refused | T22 |
 | `test_no_candidate_means_no_unseal` | With no trial passing development, the unseal is refused | T22 |
+| `test_the_unseal_closes_development` | After the unseal no trial, benchmark or control runs, through the harness, the append or by hand; the gate computes on the entries before it; the candidate's sensitivity run still runs (D21) | T19, T22 |
+| `test_a_trial_admitted_before_the_unseal_cannot_land_after_it` | An unseal written between a trial's admission and its open entry refuses the open entry (D21; M2) | T9, T22 |
+| `test_the_unseal_waits_for_both_grids_or_their_budgets` | With one hypothesis complete and passing, the unseal is early until the other's grid is complete or its own entries and the reserve are spent (D21; G3.1 open question 10) | T20, T22 |
+| `test_the_gate_computes_on_the_entries_before_the_unseal` | N, V and the holdout candidate are the entries' before the unseal, whatever follows it, and replay checks the unseal's candidate there (D21) | T19, T22 |
+| `test_the_unseal_shows_the_data_loading_diff_and_needs_its_hash` | A data loading change since the candidate's run is printed with its diff hash, the unseal refuses without that hash, records it, and replay recomputes it (round 3, T1) | T22 |
+| `test_the_unseal_command_names_the_genesis_tag_and_asks_for_the_diff` | The command's tag defaults to the genesis entry's, and without `--accept-diff` it prints the hash and refuses | T22, T24 |
+| `test_the_holdout_reaches_its_unsealed_stage_at_most_three_times` | Three runs that reach the unsealed stage and fail, then no more, at the harness and on replay (round 3, C1) | T22 |
+| `test_holdout_runs_that_fail_before_the_unsealed_stage_do_not_count` | More failures before the attempt entry than the cap still leave the holdout run possible (round 3, C1) | T22 |
 | `test_second_unseal_is_refused` | Spec. A second unseal on the same ledger is refused | T23 |
 | `test_unseal_on_a_ledger_behind_the_remote_is_refused` | An unseal on a ledger whose head is not the remote's is refused | T23 |
 | `test_holdout_rows_require_the_unseal_entry_on_the_remote` | A holdout load fails unless the remote's ledger holds the unseal entry | T23 |
@@ -976,7 +1006,7 @@ marks a test the goal's own done-when already names.
 ### Attestation checks (not unit tests)
 
 These need the network, GitHub or the full history, so they run as steps of the G2.7
-freeze and the G3.4 attestation script rather than in the offline test suite. Their
+ledger audit before the unseal and the G3.4 attestation script rather than in the offline test suite. Their
 parsing and decision logic is unit-tested above.
 
 | Check | Asserts | Threats |

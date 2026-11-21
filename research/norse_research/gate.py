@@ -30,8 +30,9 @@ G1.3's, applied as section 10 registers them:
 A selectable run is a configuration's last completed trial entry whose returns cover
 its hypothesis's whole window; a hypothesis whose selectable runs come from different
 files under the harness paths or under its own strategy paths (their recorded digests
-differ) has none (run rule 4). Once the freeze anchor exists, the gate takes only the
-ledger at that anchor (T19); any figure computed before it is provisional (run rule 3).
+differ) has none (run rule 4). There is no ledger freeze (decision D21): the unseal
+entry closes development, and once it exists the gate computes only on the entries
+before it (T19); any figure computed before the unseal is provisional (run rule 3).
 
 The development criteria and the holdout candidate (G1.6, which the unseal needs;
 section 10 and section 11, items 1 to 3):
@@ -52,26 +53,40 @@ section 10 and section 11, items 1 to 3):
 
 A hypothesis passes development if and only if its candidate meets all five; the
 holdout candidate is, among passing hypotheses, the candidate with the higher DEV-1
-DSR, ties to H1, chosen on the frozen ledger only. None passing means no holdout
+DSR, ties to H1; the unseal must name the one the rule selects on the entries before
+it, which replay recomputes (T22), and comes only once each hypothesis has a selectable
+run of every registered configuration or has exhausted its own entries and the reserve
+(``unseal_early_error``), so neither grid is stopped early. None passing means no holdout
 candidate, no unseal and no holdout run.
+
+A sensitivity run (section 8) re-costs its hypothesis's candidate, so it is admitted
+only once every registered configuration of that hypothesis has a selectable run,
+before or after the unseal, and outside N; replay checks each against the candidate
+on the entries before it, or before the unseal once that exists
+(``check_sensitivity_entries``).
 """
 
 from __future__ import annotations
 
-import argparse
 import math
 import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
 
 from .benchmark import beta_matched, excess_returns, volatility_matched
 from .block_bootstrap import BootstrapResult, block_bootstrap
 from .cscv import GATE_BLOCKS, CSCVResult, cscv
-from .environment import check_environment
-from .gitledger import FREEZE_ANCHOR, GitLedger, load_registration
-from .ledger import COMPLETED, Entry, LedgerError, LedgerSnapshot, VerificationError
-from .registration import BENCHMARK, HYPOTHESES, TRIAL, Registration
+from .gitledger import GitLedger, load_registration
+from .ledger import (
+    COMPLETED,
+    Entry,
+    LedgerError,
+    LedgerSnapshot,
+    VerificationError,
+    unseal_of,
+)
+from .registration import BENCHMARK, HYPOTHESES, SENSITIVITY, TRIAL, Registration
+from .rules import budget_exhausted
 from .sharpe import (
     DeflatedSharpe,
     cross_trial_sharpe_variance,
@@ -82,7 +97,6 @@ from .sharpe import (
     null_sharpe_variance,
     sharpe_standard_error,
 )
-from .store import REPO_ROOT
 
 # Section 10: the minimum track record length's confidence (z = 1.6448536...), and the
 # reported block-bootstrap intervals, every argument explicit.
@@ -107,7 +121,9 @@ class GateRefused(LedgerError, PermissionError):
 @dataclass(frozen=True, eq=False)
 class RegisteredLedger:
     """A verified ledger with the registration its genesis entry pins, the ledger
-    commit it was read at and whether that commit is the freeze tag's.
+    commit it was read at (None for the entries before the unseal) and whether
+    development is closed: once the unseal entry exists, the gate's ledger is the
+    entries before it (decision D21).
 
     Only ``gate_ledger`` issues one the gate computes on; every public function
     refuses any other, including a copy with a shorter ledger (security review M8)."""
@@ -115,19 +131,19 @@ class RegisteredLedger:
     snapshot: LedgerSnapshot
     registration: Registration
     commit: str | None
-    frozen: bool
+    closed: bool
 
 
 _ISSUED: weakref.WeakSet = weakref.WeakSet()
 
 
 def _issue(
-    snapshot: LedgerSnapshot, registration: Registration, commit: str | None, frozen: bool
+    snapshot: LedgerSnapshot, registration: Registration, commit: str | None, closed: bool
 ) -> RegisteredLedger:
     """The gate's only constructor. ``gate_ledger`` calls it after verification;
     tests call it for ledgers built in memory (and an AST test checks no other
     module of the package does)."""
-    ledger = RegisteredLedger(snapshot, registration, commit, frozen)
+    ledger = RegisteredLedger(snapshot, registration, commit, closed)
     _ISSUED.add(ledger)
     return ledger
 
@@ -135,8 +151,8 @@ def _issue(
 def _require(ledger: RegisteredLedger) -> RegisteredLedger:
     if ledger not in _ISSUED:
         raise GateRefused(
-            "the gate computes only on a ledger gate_ledger issued (verified, and the frozen "
-            "one once the freeze tag exists)"
+            "the gate computes only on a ledger gate_ledger issued (verified, and the entries "
+            "before the unseal once it exists)"
         )
     return ledger
 
@@ -364,8 +380,8 @@ def benchmark_returns(ledger: RegisteredLedger, hypothesis: str) -> tuple[float,
 def missing_benchmarks(ledger: RegisteredLedger) -> list[str]:
     """Benchmarks DEV-2 could not use: with no completed run covering their window, or,
     for a hypothesis with selectable runs, none on those runs' harness code (quant
-    review M3). The freeze refuses while any is missing, since no benchmark may run
-    after it and DEV-2, and with it every candidate, would be refused for ever."""
+    review M3). DEV-2, and with it the unseal, is refused while any is missing; no
+    benchmark may run after the unseal (decision D21)."""
     family = selectable_runs(_require(ledger))
     missing = []
     for h in HYPOTHESES:
@@ -478,29 +494,64 @@ def _holdout_candidate(ledger: RegisteredLedger) -> SelectableRun | None:
 def holdout_candidate(ledger: RegisteredLedger) -> SelectableRun | None:
     """Section 11, item 3: among hypotheses that pass development, the candidate with
     the higher DEV-1 DSR, ties to H1; None if neither passes (no unseal, no holdout
-    run). Only on the frozen ledger: the rule is mechanical over the ledger at the
-    freeze anchor, so nothing seen later can change which configuration is judged."""
-    if not _require(ledger).frozen:
-        raise GateRefused("the holdout candidate is chosen on the frozen ledger only (section 11)")
-    return _holdout_candidate(ledger)
+    run). Before the unseal it is provisional; the unseal must name the one the rule
+    selects on the entries before it, which replay recomputes (T22), so nothing seen
+    later can change which configuration is judged."""
+    return _holdout_candidate(_require(ledger))
+
+
+def unseal_early_error(ledger: RegisteredLedger) -> str | None:
+    """Why an unseal on ``ledger`` would be early, or None. It waits until each
+    hypothesis has a selectable run of every registered configuration or has exhausted
+    its own entries and the reserve: section 11, item 3 compares the two candidates, so an
+    unseal while the other grid can still run would stop it early (item 4; D21)."""
+    runs = selectable_runs(_require(ledger))
+    registration = ledger.registration
+    unfinished = [
+        h for h in HYPOTHESES
+        if len(runs.get(h, ())) != len(registration.order[h])
+        and not budget_exhausted(ledger.snapshot.entries, registration, h)
+    ]
+    if unfinished:
+        has = "has" if len(unfinished) == 1 else "have"
+        return (
+            f"an early unseal: {' and '.join(unfinished)} {has} neither a selectable run of "
+            "every registered configuration nor its own entries and the reserve used up, and "
+            "the unseal would stop the grid early (section 11, items 3 and 4; T20)"
+        )
+    return None
+
+
+def development_ledger(snapshot: LedgerSnapshot) -> LedgerSnapshot:
+    """The entries before the unseal, which closes development (decision D21), or the
+    whole ledger while there is no unseal."""
+    unseal = unseal_of(snapshot.entries)
+    if unseal is None:
+        return snapshot
+    return LedgerSnapshot(snapshot.entries[: unseal.seq], snapshot.series_files)
 
 
 def check_unseal_candidate(
-    snapshot: LedgerSnapshot, registration: Registration, freeze: str, unseal: Entry
+    snapshot: LedgerSnapshot, registration: Registration, unseal: Entry
 ) -> None:
     """On replay, the unseal entry names exactly the holdout candidate the registered
-    rule selects on ``snapshot``, the ledger at the freeze anchor (T22)."""
+    rule selects on ``snapshot``, the entries before it (T22), and comes no earlier than
+    ``unseal_early_error`` allows (T20)."""
+    before = _issue(snapshot, registration, None, True)
+    early = unseal_early_error(before)
+    if early:
+        raise VerificationError(f"entry {unseal.seq}: {early}")
     try:
-        candidate = _holdout_candidate(_issue(snapshot, registration, freeze, True))
+        candidate = _holdout_candidate(before)
     except (GateRefused, ValueError) as exc:
         raise VerificationError(
-            f"entry {unseal.seq}: the holdout candidate cannot be computed on the frozen "
-            f"ledger ({exc}), so no unseal can stand"
+            f"entry {unseal.seq}: the holdout candidate cannot be computed on the entries "
+            f"before the unseal ({exc}), so no unseal can stand"
         ) from None
     if candidate is None:
         raise VerificationError(
             f"entry {unseal.seq}: an unseal, but no hypothesis passes development on the "
-            "frozen ledger, so there is no holdout candidate (section 11, item 3; T22)"
+            "entries before it, so there is no holdout candidate (section 11, item 3; T22)"
         )
     named = (unseal.body["configuration_id"], unseal.body["configuration_sha256"],
              unseal.body["candidate"]["open"], unseal.body["candidate"]["result"])
@@ -509,36 +560,70 @@ def check_unseal_candidate(
     if named != chosen:
         raise VerificationError(
             f"entry {unseal.seq}: the unseal names {named[0]} ({named[1]}), but the registered "
-            f"rule selects {chosen[0]} ({chosen[1]}) on the frozen ledger (section 11; T22)"
+            f"rule selects {chosen[0]} ({chosen[1]}) on the entries before it (section 11; T22)"
         )
 
 
-def require_frozen(given: LedgerSnapshot, frozen: LedgerSnapshot) -> LedgerSnapshot:
+def sensitivity_error(ledger: RegisteredLedger, hypothesis: str, cid: str) -> str | None:
+    """Why a sensitivity run of ``cid`` is not allowed on ``ledger``, or None: it
+    re-costs its hypothesis's candidate, which exists once every registered
+    configuration of the hypothesis has a selectable run (section 8; decision D21)."""
+    candidate = candidates(ledger).get(hypothesis)
+    if candidate is None:
+        return (
+            f"a sensitivity run of {hypothesis} comes only once every registered configuration "
+            f"of {hypothesis} has a selectable run, which chooses its candidate (section 8; "
+            "decision D21)"
+        )
+    if candidate.configuration_id != cid:
+        return (
+            f"{cid} is not {hypothesis}'s candidate ({candidate.configuration_id}); only a "
+            "candidate is re-costed (section 8)"
+        )
+    return None
+
+
+def check_sensitivity_entries(snapshot: LedgerSnapshot, registration: Registration) -> None:
+    """On replay, every sensitivity run re-costs its hypothesis's candidate as the gate
+    selects it on the entries before the run, or before the unseal when the run comes
+    after it (section 8; decision D21)."""
+    unseal = unseal_of(snapshot.entries)
+    for entry in snapshot.opens(SENSITIVITY):
+        end = entry.seq if unseal is None else min(entry.seq, unseal.seq)
+        before = LedgerSnapshot(snapshot.entries[:end], snapshot.series_files)
+        ledger = _issue(before, registration, None, unseal is not None and end == unseal.seq)
+        problem = sensitivity_error(
+            ledger, entry.body["hypothesis"], entry.body["configuration_id"]
+        )
+        if problem:
+            raise VerificationError(f"entry {entry.seq}: {problem}")
+
+
+def require_verified(given: LedgerSnapshot, verified: LedgerSnapshot) -> None:
     """The gate takes the ledger it verified and nothing else: not a prefix of it, not
     a longer one, not another (T19)."""
-    if given.data != frozen.data:
+    if given.data != verified.data:
         raise GateRefused(
-            f"the gate takes only the frozen ledger (head {frozen.head_hash}); this ledger "
+            f"the gate takes only the verified ledger (head {verified.head_hash}); this ledger "
             f"has head {given.head_hash} and {len(given.entries)} entries, not "
-            f"{len(frozen.entries)}"
+            f"{len(verified.entries)}"
         )
-    return frozen
 
 
 def gate_ledger(git_ledger: GitLedger, given: LedgerSnapshot | None = None) -> RegisteredLedger:
-    """The ledger the gate computes on: the one at the freeze tag once it exists
-    (anchored and verified), the current verified ledger before it (provisional,
-    binding nothing). A ``given`` ledger that is not exactly that one is refused."""
+    """The ledger the gate computes on, after anchored verification: the entries
+    before the unseal once it exists, since the unseal closes development (decision
+    D21), and the current ledger before it (provisional, binding nothing). A ``given``
+    ledger that is not exactly the verified one is refused (T19)."""
     verified = git_ledger.verify()
-    freeze = verified.freeze
-    commit = verified.head if freeze is None else freeze
-    snapshot = verified.snapshot if freeze is None else git_ledger.snapshot(freeze)
     if given is not None:
-        require_frozen(given, snapshot)
+        require_verified(given, verified.snapshot)
+    snapshot = development_ledger(verified.snapshot)
+    closed = snapshot is not verified.snapshot
     if snapshot.genesis is None:
         raise GateRefused("the ledger has no genesis entry")
     registration = load_registration(git_ledger.git, snapshot.genesis)
-    return _issue(snapshot, registration, commit, freeze is not None)
+    return _issue(snapshot, registration, None if closed else verified.head, closed)
 
 
 def missing_selectable_runs(ledger: RegisteredLedger) -> list[str]:
@@ -546,50 +631,3 @@ def missing_selectable_runs(ledger: RegisteredLedger) -> list[str]:
     runs = selectable_runs(ledger)
     have = {r.configuration_id for found in runs.values() for r in found}
     return [c for h in HYPOTHESES for c in ledger.registration.order[h] if c not in have]
-
-
-def freeze(git_ledger: GitLedger, message: str, *, allow_incomplete: bool = False) -> str:
-    """Tag the ledger head with its freeze anchor, ``ledger-freeze-<head commit>``, which
-    is irreversible (G2.7). Refused while a registered configuration lacks a selectable
-    run, unless the caller states that the freeze leaves it unrun (review M6, N3); while
-    either benchmark lacks a completed run DEV-2 can use, with no override (G1.6 quant
-    review M3); and under any environment override (N10). A ledger the gate issued
-    before the freeze stays provisional: check ``frozen`` before relying on one (N14)."""
-    check_environment(None, git_ledger.git.repo)
-    ledger = gate_ledger(git_ledger)
-    if ledger.frozen:
-        raise GateRefused("the ledger is already frozen")
-    lacking = missing_benchmarks(ledger)
-    if lacking:
-        raise GateRefused(
-            f"the freeze needs a completed run of each benchmark that DEV-2 can use, and "
-            f"{lacking} have none; no benchmark may run after the freeze (section 8)"
-        )
-    missing = missing_selectable_runs(ledger)
-    if missing and not allow_incomplete:
-        raise GateRefused(
-            f"{len(missing)} registered configurations have no selectable run ({missing}); "
-            "freezing now leaves them unrun, so it needs allow_incomplete"
-        )
-    name = f"{FREEZE_ANCHOR}{ledger.commit}"
-    return git_ledger.tag_milestone(name, message, _anchor=True)
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    """``python -m norse_research.gate freeze --message M [--allow-incomplete]``."""
-    parser = argparse.ArgumentParser(description=main.__doc__)
-    parser.add_argument("--repo", type=Path, default=REPO_ROOT)
-    parser.add_argument("--remote", default="origin")
-    commands = parser.add_subparsers(dest="command", required=True)
-    frozen = commands.add_parser("freeze")
-    frozen.add_argument("--message", required=True)
-    frozen.add_argument("--allow-incomplete", action="store_true")
-    args = parser.parse_args(argv)
-    tag = freeze(GitLedger(args.repo, args.remote), args.message,
-                 allow_incomplete=args.allow_incomplete)
-    print(f"freeze anchor: tag object {tag}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -5,6 +5,7 @@ T19. Synthetic returns only.
 """
 
 import dataclasses
+import hashlib
 import inspect
 import math
 import statistics
@@ -14,8 +15,7 @@ from ledger_fixtures import Book, issued, lcg_returns
 from norse_research import gate, harness
 from norse_research.cscv import cscv
 from norse_research.gate import GateRefused, RegisteredLedger
-from norse_research.gitledger import FREEZE_ANCHOR
-from norse_research.ledger import LedgerSnapshot
+from norse_research.ledger import LedgerSnapshot, VerificationError, make_entry
 from norse_research.sharpe import (
     deflated_sharpe_ratio,
     expected_max_sharpe,
@@ -196,30 +196,25 @@ def test_the_bootstrap_interval_passes_every_registered_argument(monkeypatch):
     assert "seed=20261111, block_length=20, reps=10000, confidence=0.90" in registered_text
 
 
-def test_gate_refuses_a_ledger_that_is_not_the_frozen_head(world):
+def test_gate_refuses_a_ledger_that_is_not_the_verified_one(world):
     for cid in ("H1-01", "B-H1", "B-H2", "H1-02"):
         harness.run(world.repo, {"configuration": cid}, store=world.store)
-    before_freeze = gate.gate_ledger(world.ledger)  # provisional, the current ledger
-    assert not before_freeze.frozen
-    gate.freeze(world.ledger, "M2: the ledger freeze", allow_incomplete=True)
-    frozen = gate.gate_ledger(world.ledger)
-    tags = world.ledger.milestone_tags()
-    assert frozen.frozen and tags[f"{FREEZE_ANCHOR}{frozen.commit}"] == frozen.commit
-    assert frozen.snapshot.data == before_freeze.snapshot.data
-    assert gate.trial_count(frozen) == 2
-    entries = frozen.snapshot.entries
-    prefix = LedgerSnapshot(entries[:-2], frozen.snapshot.series_files)
-    with pytest.raises(GateRefused, match="only the frozen ledger"):
+    current = gate.gate_ledger(world.ledger)  # before the unseal: the current ledger
+    assert not current.closed and current.commit == world.ledger.local_head()
+    assert gate.trial_count(current) == 2
+    entries = current.snapshot.entries
+    prefix = LedgerSnapshot(entries[:-2], current.snapshot.series_files)
+    with pytest.raises(GateRefused, match="only the verified ledger"):
         gate.gate_ledger(world.ledger, prefix)
     other = Book()
     other.run("H1-01", lcg_returns(1, days(other, "H1")))
-    with pytest.raises(GateRefused, match="only the frozen ledger"):
+    with pytest.raises(GateRefused, match="only the verified ledger"):
         gate.gate_ledger(world.ledger, other.snapshot())
-    assert gate.gate_ledger(world.ledger, frozen.snapshot).snapshot.data == frozen.snapshot.data
+    assert gate.gate_ledger(world.ledger, current.snapshot).snapshot.data == current.snapshot.data
 
 
 def test_gate_statistics_refuse_a_ledger_the_gate_did_not_issue():
-    # After the freeze, a prefix built by hand would compute with a smaller N (M8).
+    # A prefix built by hand would compute with a smaller N (M8).
     book = Book()
     full_family(book)
     book.open("H1-01", rerun=FIX)
@@ -277,14 +272,19 @@ def my_z(x, n_trials, variance):
     return (sr - sr0) * math.sqrt(n - 1) / math.sqrt(1 - g3 * sr + (g4 - 1) / 4 * sr * sr)
 
 
-def development_book(skilled="H1-03", benchmark=True) -> Book:
-    """Every H1 configuration with a selectable run, ``skilled`` the one with an edge."""
+def development_book(skilled="H1-03", benchmark=True, h2=False) -> Book:
+    """Every H1 configuration with a selectable run, ``skilled`` the one with an edge;
+    with ``h2``, every H2 configuration too, none with an edge, and B-H2."""
     book = Book()
     for i, cid in enumerate(book.registration.order["H1"]):
         drift = 0.002 if cid == skilled else 0.0
         book.run(cid, lcg_returns(200 + i, days(book, "H1"), drift, scale=0.04))
     if benchmark:
         book.run("B-H1", lcg_returns(999, days(book, "H1"), 0.0, scale=0.04))
+    if h2:
+        for i, cid in enumerate(book.registration.order["H2"]):
+            book.run(cid, lcg_returns(500 + i, days(book, "H2"), 0.0, scale=0.04))
+        book.run("B-H2", lcg_returns(998, days(book, "H2"), 0.0, scale=0.04))
     return book
 
 
@@ -306,7 +306,7 @@ def family_book():
 
 def test_development_applies_dev_1_to_dev_5_to_the_candidate_alone():
     book = development_book()
-    ledger = issued(book, frozen=True)
+    ledger = issued(book)
     judged = gate.development(ledger, "H1")
     assert judged.candidate.configuration_id == "H1-03"
     assert judged.criteria == dict.fromkeys(("DEV-1", "DEV-2", "DEV-3", "DEV-4", "DEV-5"), True)
@@ -319,7 +319,7 @@ def test_dev_2_matches_an_independent_computation_for_both_hypotheses():
     # selectable run's excess Sharpe ratio across both hypotheses, each against its own
     # hypothesis's benchmark. Swapping the two adjustments would change both answers.
     book, series = family_book()
-    ledger = issued(book, frozen=True)
+    ledger = issued(book)
 
     def excess(cid, beta_for_h2=True):
         h = cid[:2]
@@ -346,7 +346,7 @@ def test_dev_2_matches_an_independent_computation_for_both_hypotheses():
 
 def test_dev_4_removes_each_year_including_the_partial_first_years():
     book, series = family_book()
-    ledger = issued(book, frozen=True)
+    ledger = issued(book)
     for h, first_year in (("H1", 2018), ("H2", 2020)):
         cand = gate.candidates(ledger)[h]
         window = book.registration.windows[h].day_list()
@@ -386,7 +386,7 @@ def test_the_candidate_rule_ranks_by_z_where_the_dsr_saturates():
             sat[cid] = lcg_returns(41 if h == "H1" else 43, days(book, h),
                                    0.0020 + 0.00002 * i, scale=0.02)
             book.run(cid, sat[cid])
-    ledger = issued(book, frozen=True)
+    ledger = issued(book)
     variance = statistics.variance([my_sharpe(v) for v in sat.values()])
     found = gate.candidates(ledger)
     for h in ("H1", "H2"):
@@ -414,15 +414,101 @@ def test_a_zero_mean_run_with_variance_has_its_registered_dsr():
     assert gate.deflated_sharpe_z(issued(flat), flat_run) == -math.inf
 
 
-def test_the_holdout_candidate_is_chosen_on_the_frozen_ledger_only():
+def unseal_body_for(book: Book, cid: str = "H1-03") -> dict:
+    """An unseal entry naming ``cid``'s selectable run, as the seal would write it."""
+    genesis = book.entries[0]
+    snapshot = book.snapshot()
+    opened = [e for e in snapshot.opens("trial") if e.body["configuration_id"] == cid][-1]
+    return {"type": "unseal", "preregistration": genesis.body["preregistration"],
+            "configuration_id": cid, "hypothesis": opened.body["hypothesis"],
+            "configuration_sha256": opened.body["configuration_sha256"],
+            "candidate": {"open": opened.hash, "result": snapshot.result_of(opened).hash},
+            "accepted_diff": hashlib.sha256(b"").hexdigest(),
+            "holdout_manifest_sha256": genesis.body["manifests"]["holdout"],
+            "key_record_sha256": genesis.body["key_record"]["sha256"], "proof": "ab" * 32,
+            "commit": "1" * 40}
+
+
+def test_the_gate_computes_on_the_entries_before_the_unseal():
+    # Decision D21: there is no ledger freeze; the unseal closes development. Before it
+    # the holdout candidate is provisional; once it exists N, V and the candidate are the
+    # entries' before it, whatever was written after it by hand.
+    book = development_book(h2=True)
+    before = issued(book)
+    assert gate.holdout_candidate(before).configuration_id == "H1-03"
+    unseal = book.add(unseal_body_for(book))
+    book.run("H1-05", lcg_returns(7, days(book, "H1"), 0.01, scale=0.04), rerun=FIX)
+    snapshot = book.snapshot()
+    closed = gate.development_ledger(snapshot)
+    assert closed.data == before.snapshot.data and len(closed.entries) == unseal.seq
+    assert gate.development_ledger(before.snapshot) is before.snapshot
+    assert gate.trial_count(issued(book)) == gate.trial_count(before) + 1
+    gate.check_unseal_candidate(closed, book.registration, unseal)
+    other = make_entry({**unseal.body, "configuration_id": "H1-01"})
+    with pytest.raises(VerificationError, match="registered rule selects H1-03"):
+        gate.check_unseal_candidate(closed, book.registration, other)
+    failing = development_book(skilled=None, h2=True)
+    assert gate.holdout_candidate(issued(failing)) is None
+    with pytest.raises(VerificationError, match="no hypothesis passes development"):
+        gate.check_unseal_candidate(failing.snapshot(), failing.registration, unseal)
+
+
+def test_the_unseal_waits_for_both_grids_or_their_budgets():
+    # Decision D21 with G3.1's open question 10: section 11, item 3 compares the two
+    # candidates, so the unseal waits until each hypothesis has a selectable run of every
+    # registered configuration or has exhausted its own entries and the reserve.
+    book = development_book()  # H1 complete and passing, H2 not run
+    assert gate.holdout_candidate(issued(book)).configuration_id == "H1-03"
+    assert "H2 has neither" in gate.unseal_early_error(issued(book))
+    with pytest.raises(VerificationError, match="early unseal: H2 has neither"):
+        gate.check_unseal_candidate(book.snapshot(), book.registration, make_entry({
+            **unseal_body_for(book), "seq": len(book.entries), "prev": book.entries[-1].hash,
+            "time": "2026-11-20T00:00:00Z"}))
+    assert gate.unseal_early_error(issued(development_book(h2=True))) is None
+    # H2 spends its own 12 entries and the reserve its 6 without a selectable run of
+    # every configuration (none of these finished): H2 can run no more, so it is no
+    # longer stopped early.
+    order = book.registration.order["H2"]
+    for i in range(book.registration.own_budget["H2"]):
+        book.open(order[i % len(order)], rerun=FIX if i >= len(order) else None)
+    assert "H2 has neither" in gate.unseal_early_error(issued(book))
+    for _ in range(book.registration.reserve_budget):
+        book.open(order[0], rerun=FIX, reserve_reason="a synthetic defect found late")
+    assert gate.unseal_early_error(issued(book)) is None
+    neither = Book()
+    assert "H1 and H2 have neither" in gate.unseal_early_error(issued(neither))
+
+
+def test_replay_checks_each_sensitivity_run_against_its_candidate():
+    # Section 8 with decision D21: a sensitivity run re-costs its hypothesis's candidate,
+    # once every registered configuration of the hypothesis has a selectable run, before
+    # or after the unseal; after it, the candidate is the one on the entries before it.
     book = development_book()
-    with pytest.raises(GateRefused, match="frozen ledger only"):
-        gate.holdout_candidate(issued(book))
-    assert gate.holdout_candidate(issued(development_book(skilled=None), frozen=True)) is None
+    book.open("H1-03", cost=7.5)
+    gate.check_sensitivity_entries(book.snapshot(), book.registration)
+    early = Book()
+    for i, cid in enumerate(early.registration.order["H1"][:-1]):
+        early.run(cid, lcg_returns(200 + i, days(early, "H1")))
+    early.open("H1-01", cost=7.5)
+    with pytest.raises(VerificationError, match="once every registered configuration of H1"):
+        gate.check_sensitivity_entries(early.snapshot(), early.registration)
+    other = development_book()
+    other.open("H1-01", cost=7.5)
+    with pytest.raises(VerificationError, match=r"H1-01 is not H1's candidate \(H1-03\)"):
+        gate.check_sensitivity_entries(other.snapshot(), other.registration)
+    after = development_book()
+    after.add(unseal_body_for(after))
+    after.run("H1-05", lcg_returns(7, days(after, "H1"), 0.01, scale=0.04), rerun=FIX)
+    assert gate.candidates(issued(after))["H1"].configuration_id == "H1-05"  # on all of it
+    after.open("H1-03", cost=10)
+    gate.check_sensitivity_entries(after.snapshot(), after.registration)
+    after.open("H1-05", cost=10)
+    with pytest.raises(VerificationError, match=r"H1-05 is not H1's candidate \(H1-03\)"):
+        gate.check_sensitivity_entries(after.snapshot(), after.registration)
 
 
 def test_dev_2_without_the_benchmark_run_refuses_rather_than_fails():
-    ledger = issued(development_book(benchmark=False), frozen=True)
+    ledger = issued(development_book(benchmark=False))
     with pytest.raises(GateRefused, match="needs a completed B-H1 run"):
         gate.development(ledger, "H1")
     assert gate.missing_benchmarks(ledger) == ["B-H1", "B-H2"]
@@ -435,14 +521,14 @@ def test_dev_2_uses_only_a_benchmark_run_on_the_trials_harness_code():
     book = development_book(benchmark=False)
     other_code = {"harness": "2" * 64, "H1": "1" * 64, "H2": "1" * 64}
     book.run("B-H1", lcg_returns(999, days(book, "H1"), 0.0, scale=0.04), trees=other_code)
-    ledger = issued(book, frozen=True)
+    ledger = issued(book)
     with pytest.raises(GateRefused, match="on the harness code its selectable runs used"):
         gate.benchmark_returns(ledger, "H1")
     assert gate.missing_benchmarks(ledger) == ["B-H1", "B-H2"]
     same = lcg_returns(998, days(book, "H1"), 0.0, scale=0.04)
     book.run("B-H1", same, rerun={**FIX})
     book.run("B-H2", lcg_returns(997, days(book, "H2")))  # H2 has no runs: any code
-    ledger = issued(book, frozen=True)
+    ledger = issued(book)
     assert gate.benchmark_returns(ledger, "H1") == tuple(same)
     assert gate.missing_benchmarks(ledger) == []
 
@@ -464,7 +550,7 @@ def test_the_development_bars_are_strict():
 
 
 def test_the_holdout_candidate_is_the_higher_z_with_ties_to_h1(monkeypatch):
-    ledger = issued(Book(), frozen=True)
+    ledger = issued(Book())
     judged = {h: judged_at(h) for h in ("H1", "H2")}
     monkeypatch.setattr(gate, "development", lambda ledger, h: judged[h])
     assert gate.holdout_candidate(ledger) == "candidate H1"  # a tie goes to H1

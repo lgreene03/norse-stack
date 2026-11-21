@@ -18,7 +18,7 @@ SHA-256 of its line without the newline. Every entry holds:
   informative only: nothing that decides trust reads it.
 
 **Genesis** pins the registration (principle 4, section 16 of PREREGISTRATION.md):
-the ``prereg-v1`` tag and commit and the SHA-256 of PREREGISTRATION.md and
+the ``prereg-*`` tag it names, its commit and the SHA-256 of PREREGISTRATION.md and
 preregistration.json at that commit, the manifest hashes, the period constants, the
 out-of-sample windows, the budgets, the harness and strategy paths whose files
 every run records, the holdout key record G1.6 commits, the canonical remote URL with
@@ -38,18 +38,21 @@ committed return series (T7). It repeats the open entry's configuration hash,
 commit, manifest hash and cost basis, so each result entry holds every field G1.5
 names on its own.
 
-**Unseal** (G1.6) is written at most once, after the freeze anchor exists, before any
-holdout file is fetched again and before any holdout run. It names the commit and file
-hashes of the pre-registration tag the genesis entry names, the holdout candidate's
-configuration id, hypothesis and configuration hash, the open and result entries of
-its selectable run, the frozen ledger commit the candidate was chosen on, and the
-hashes of the holdout manifest and the key record genesis pins (section 11, item 4),
+**Unseal** (G1.6) is written at most once, before any holdout file is fetched again and
+before any holdout run, and it closes development (decision D21): N, V and the holdout
+candidate are computed on the entries before it, and no trial, benchmark or control
+entry may follow it. It names the commit and file hashes of the pre-registration tag
+the genesis entry names, the holdout candidate's configuration id, hypothesis and
+configuration hash, the open and result entries of its selectable run, the commit the
+code is frozen at, the SHA-256 of the data loading and seal diff the owner accepted
+since the candidate's run, and the hashes of the holdout manifest and the key record
+genesis pins (section 11, item 4),
 and its ``proof``: the scrypt output of the owner's passphrase, whose SHA-256 the key
 record holds (a commit-reveal; security review H1). Only someone who knows the
 passphrase can produce it, and ``gitledger`` checks it against the pinned record when
 the entry is written and on every replay. A second unseal entry fails verification
-here; its place after the freeze, its proof and its candidate are checked by
-``gitledger`` and ``gate``.
+here; its proof, its accepted diff and its candidate are checked by ``gitledger`` and
+``gate``.
 
 **Attempt** and **attempt close** (G1.6; security review H2, M1) bracket every unsealed
 run of the holdout: the attempt is written before the strategy is first given the
@@ -131,7 +134,7 @@ _KEYS = {
        "cost_basis", "result", "result_sha256", "returns_path"},
     UNSEAL: _COMMON
     | {"preregistration", "configuration_id", "hypothesis", "configuration_sha256",
-       "candidate", "freeze", "holdout_manifest_sha256", "key_record_sha256", "proof",
+       "candidate", "accepted_diff", "holdout_manifest_sha256", "key_record_sha256", "proof",
        "commit"},
     ATTEMPT: _COMMON | {"opens", "open_seq", "commit"},
     ATTEMPT_CLOSE: _COMMON | {"attempt", "attempt_seq", "outcome"},
@@ -305,7 +308,7 @@ def _check_unseal(seq: int, body: dict) -> None:
     candidate = _mapping(seq, "candidate", body["candidate"], {"open", "result"})
     _sha(seq, "candidate.open", candidate["open"])
     _sha(seq, "candidate.result", candidate["result"])
-    _git_id(seq, "freeze", body["freeze"])
+    _sha(seq, "accepted_diff", body["accepted_diff"])
     _sha(seq, "holdout_manifest_sha256", body["holdout_manifest_sha256"])
     _sha(seq, "key_record_sha256", body["key_record_sha256"])
     proof = body["proof"]
@@ -395,7 +398,7 @@ def _attempt_error(body: dict, entries: list[Entry], hashes: dict[str, int]) -> 
 
 def _unseal_error(body: dict, entries: list[Entry], hashes: dict[str, int]) -> str | None:
     """Why an unseal entry is not one the seal would write over the entries before it,
-    or None. Its place after the freeze and its candidate need git and the gate."""
+    or None. Its proof, its accepted diff and its candidate need git and the gate."""
     if any(e.type == UNSEAL for e in entries):
         raise VerificationError(
             "a second unseal entry: the holdout is unsealed once (section 11, item 4; T23)"
