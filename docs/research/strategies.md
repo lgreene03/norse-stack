@@ -112,25 +112,40 @@ and empty 15-minute bars, a missing four-hour bar, a funding gap and a missing d
 klines. A run whose data stops at a date returns exactly the first days of a longer run, the
 rule section 11, item 5 applies at 2026-01-01. Each module also runs in the runner's fresh
 interpreter under its audit hook, on the frozen configuration the runner passes, and returns
-exactly what it returns in process.
+exactly what it returns in process. H2's pinned `run` itself runs there on the registered
+loader over a synthetic store and manifest, taking every series' runs from
+`DataView.coverage`, and the recorded gap its fill search crosses comes back as the result's
+`crossed_gaps`.
 
 ## The data seam
 
 The quant's review of G1.9 (finding 3) requires each series' spans, its archived runs split
 where whole months are missing, to come from the data-loading layer and not from constants in
-strategy code. The runner's `DataView` does not expose them on the engine branch this was built
-on. Each module therefore keeps the read in one function, `series_spans(data_view)`, which
-for now refuses with a message naming this section, so no H1 or H2 run can load data, or be
-ledgered, before the seam is closed. Everything after it, `load_market(configuration,
-data_view, spans)`, which picks the series a configuration reads and loads them through
-`Market.from_view`, and `simulate`, is tested on synthetic rows through a stand-in `DataView`.
+strategy code. The engine now provides them: the loader derives each series' runs from the
+committed manifests' metadata (both manifests for the holdout run, joined at the boundary
+without reading a holdout file), the runner's `DataView.coverage(series)` exposes them, and
+`Market.from_view` takes series names and asks for each one's coverage. So both modules commit
+no span, and a span error is a data-loading fix (section 11, item 6). The recorded gaps a
+run's loads cross reach the ledger without any strategy code: the loader records them, the
+runner returns them beside the returns and the harness writes them to the result entry as
+`crossed_gaps` (section 5, Gaps).
 
-Closing the seam needs, from the data-loading layer: every series the run's manifests pin with
-its runs (both manifests for the holdout run, so that holdout month ends rank over the
-holdout's daily series and positions carry across the boundary); and a channel in the runner's
-result for the recorded gaps the run crossed, which `Market.crossed_gaps` already collects
-(section 5, Gaps). The coordinator has said the engine branch is being rebased onto main with
-both; `series_spans` is the one function to change.
+**H2 is wired end to end.** Every series it reads is named by the registration (BTC's and
+ETH's spot and perpetual bars and their funding), so `run` builds its market straight from
+those names through the data view.
+
+**H1 still has one open seam.** Section 6, step 1 ranks "USDT spot symbols ... delisted symbols
+included", every pinned spot daily series, so H1 needs the names of the series the run's
+manifests pin, both manifests for the holdout run so that holdout month ends rank over the
+holdout's daily series. The `DataView` gives a named series' coverage and rows but no listing
+of names, and committing the list would be the same kind of constant the spans were.
+`pinned_series(data_view)` in `trend.py` is the one function that needs it; until the data
+view lists the pinned series it refuses with a message naming this section, so no H1, B-H1 or
+C-H1 run can load data, or be ledgered, by accident. Everything after it, `load_market(
+configuration, data_view, names)` and `simulate`, is tested on synthetic rows through a
+stand-in `DataView`. The alternative reading, ranking only the 115 candidates (which agree
+by construction, since they are the union of every top ten), would not need the listing; it
+is a change to choice 1 below and is left to the lead.
 
 What each configuration reads: H1 reads every spot daily series (619 in the development
 manifest, for the ranking), every spot 15-minute series lazily for fills, every spot
@@ -193,5 +208,7 @@ reading of the registration, not a new parameter.
 12. **A configuration runs only as its registered kind,** and only the holdout run's window may
     end after 2026-01-01; anything else is refused before data is read (section 9; section
     11, item 6).
-13. **Nothing patches the engine.** The modules read engine objects and never assign to or
-    delete attributes of anything they import, which the source check is due to refuse.
+13. **Nothing patches the engine.** The modules import the engine only as `from
+    norse_research.sim import ...` and `Funding` as `from norse_research.formats import
+    Funding`, read no private attribute, subclass nothing from the package, and never
+    assign to or delete anything they import; both pass the source check's round 3 rules.

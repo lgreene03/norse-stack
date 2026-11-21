@@ -10,6 +10,7 @@ given a synthetic window, so a test runs each configuration's registered paramet
 from __future__ import annotations
 
 import random
+from collections import namedtuple
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -236,6 +237,39 @@ def h2_market(seed: int = 5, fill_from: int = ms(2021, 1, 25)) -> dict:
             funding.append(Funding(H2_FIRST + i * 8 * HOUR + rng.randint(0, 9), 8, rate))
         rows[f"um/fundingRate/{coin}"] = funding
     return rows
+
+
+class FakeView:
+    """Stands in for the runner's ``DataView`` over synthetic rows. ``coverage`` gives
+    one run per series at the manifests' precision (a bar's open exactly, a settlement's
+    minute), and ``load`` serves rows in range; both record what was asked."""
+
+    def __init__(self, rows: dict) -> None:
+        self.rows = rows
+        self.covered: set[str] = set()
+        self.loaded: set[str] = set()
+
+    @staticmethod
+    def _key(series: str):
+        return (lambda r: r.calc_time) if "fundingRate" in series else (lambda r: r.open_time)
+
+    def coverage(self, series: str) -> list[tuple[int, int]]:
+        rows = self.rows.get(series)
+        if not rows:
+            raise LookupError(f"{series} is in no manifest this run reads")
+        self.covered.add(series)
+        first, last = self._key(series)(rows[0]), self._key(series)(rows[-1])
+        if "fundingRate" in series:
+            first, last = first - first % 60_000, last - last % 60_000
+        return [(first, last)]
+
+    def load(self, series, start, end, accept_recorded_gaps=False):
+        assert accept_recorded_gaps is True  # section 5, Gaps
+        self.loaded.add(series)
+        lo, hi = int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+        key = self._key(series)
+        rows = [r for r in self.rows[series] if lo <= key(r) < hi]
+        return namedtuple("Loaded", "rows gaps")(rows, [])
 
 
 def truncated(rows: dict, end: int) -> dict:

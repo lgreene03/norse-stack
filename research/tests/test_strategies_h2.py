@@ -10,7 +10,6 @@ dataset store is never opened.
 from __future__ import annotations
 
 import json
-from collections import namedtuple
 from pathlib import Path
 
 import pytest
@@ -20,7 +19,6 @@ from norse_research.sim import (
     Costs,
     Market,
     SimulationError,
-    Span,
     Window,
     backtest,
     paper_run,
@@ -305,48 +303,36 @@ def test_a_longer_run_starts_with_the_shorter_runs_returns(market_rows, cid):
 # --- the seam, the guards and what each run loads ---------------------------------------
 
 
-class FakeView:
-    def __init__(self, rows):
-        self.rows = rows
-        self.loaded = set()
-
-    def load(self, series, start, end, accept_recorded_gaps=False):
-        assert accept_recorded_gaps is True  # section 5, Gaps
-        self.loaded.add(series)
-        lo, hi = int(start.timestamp() * 1000), int(end.timestamp() * 1000)
-        key = (lambda r: r.calc_time) if "fundingRate" in series else (lambda r: r.open_time)
-        return namedtuple("Loaded", "rows gaps")([r for r in self.rows[series]
-                                                  if lo <= key(r) < hi], [])
-
-
-def spans_of(rows):
-    key = {n: (lambda r: r.calc_time) if "fundingRate" in n else (lambda r: r.open_time)
-           for n in rows}
-    return {n: Span(key[n](r[0]), key[n](r[-1])) for n, r in rows.items() if r}
-
-
-def test_the_data_seam_is_closed_until_the_data_layer_supplies_spans(market_rows):
-    config = syn.configuration("H2-01", "2021-02-01", "2021-02-05")
-    with pytest.raises(SimulationError, match="data seam"):
-        carry.run(config, FakeView(market_rows))
+@pytest.mark.parametrize("cid", ["H2-01", "H2-06", "B-H2"])
+def test_the_pinned_function_reads_its_series_through_the_data_views_coverage(
+        market_rows, cid):
+    """``run`` takes every series' archived runs from ``data_view.coverage`` (the
+    manifests' metadata) and returns what the batch driver returns on the same rows."""
+    config = syn.configuration(cid, "2021-02-01", "2021-02-28")
+    view = syn.FakeView(market_rows)
+    returns = carry.run(config, view)
+    end = Window.from_configuration(config).end
+    assert returns == carry.simulate(config, Market.from_rows(market_rows, end))
+    assert len(returns) == 28 and view.covered == set(carry.series_needed(config))
 
 
 def test_each_configuration_loads_only_the_series_it_reads(market_rows):
     loads = {}
     for cid in ("H2-01", "B-H2"):
         config = syn.configuration(cid, "2021-02-01", "2021-02-05")
-        view = FakeView(market_rows)
-        market = carry.load_market(config, view, spans_of(market_rows))
+        view = syn.FakeView(market_rows)
+        market = carry.load_market(config, view)
         loads[cid] = sorted(market.series)
         assert len(carry.simulate(config, market)) == 5
     assert loads["H2-01"] == sorted(
         f"{kind}/{coin}{suffix}" for coin in ("BTCUSDT", "ETHUSDT")
         for kind, suffix in (("spot/klines", "/1d"), ("um/klines", "/1d"), ("um/fundingRate", "")))
     assert loads["B-H2"] == ["spot/klines/BTCUSDT/1d", "spot/klines/ETHUSDT/1d"]
-    with pytest.raises(SimulationError, match="offers no"):
-        carry.series_needed(syn.configuration("H2-01", "2021-02-01", "2021-02-05"),
-                            ["spot/klines/BTCUSDT/1d", "um/fundingRate/BTCUSDT",
-                             "um/fundingRate/ETHUSDT"])
+    # A series the manifests do not pin fails the run when its coverage is asked for.
+    unpinned = {n: r for n, r in market_rows.items() if n != "um/klines/ETHUSDT/15m"}
+    view = syn.FakeView(unpinned)
+    with pytest.raises(LookupError, match="in no manifest"):
+        carry.load_market(syn.configuration("H2-01", "2021-02-01", "2021-02-05"), view)
 
 
 def test_only_the_holdout_run_reads_past_the_development_period():

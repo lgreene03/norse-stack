@@ -24,7 +24,6 @@ from norse_research.sim import (
     Market,
     SeriesView,
     SimulationError,
-    Span,
     Window,
     backtest,
     paper_run,
@@ -516,48 +515,34 @@ def test_a_longer_run_starts_with_the_shorter_runs_returns(market_rows, cid):
 # --- the seam, the guards and what each run loads ---------------------------------------
 
 
-class FakeView:
-    """Stands in for the runner's DataView over synthetic rows: records each load."""
-
-    def __init__(self, rows):
-        self.rows = rows
-        self.loaded = set()
-
-    def load(self, series, start, end, accept_recorded_gaps=False):
-        assert accept_recorded_gaps is True  # section 5, Gaps
-        self.loaded.add(series)
-        lo, hi = int(start.timestamp() * 1000), int(end.timestamp() * 1000)
-        key = (lambda r: r.calc_time) if "fundingRate" in series else (lambda r: r.open_time)
-        return namedtuple("Loaded", "rows gaps")([r for r in self.rows[series]
-                                                  if lo <= key(r) < hi], [])
-
-
-def spans_of(rows):
-    key = {n: (lambda r: r.calc_time) if "fundingRate" in n else (lambda r: r.open_time)
-           for n in rows}
-    return {n: Span(key[n](r[0]), key[n](r[-1])) for n, r in rows.items() if r}
-
-
-def test_the_data_seam_is_closed_until_the_data_layer_supplies_spans(market_rows):
+def test_the_data_seam_is_closed_until_the_data_view_lists_the_pinned_series(market_rows):
+    # The DataView gives a named series' coverage and rows but no listing of names, and
+    # section 6, step 1 ranks every pinned spot daily series, so H1 refuses to load.
+    view = syn.FakeView(market_rows)
     with pytest.raises(SimulationError, match="data seam"):
-        trend.run(h1(), FakeView(market_rows))
+        trend.run(h1(), view)
+    assert view.covered == set() and view.loaded == set()
 
 
 @pytest.mark.parametrize(("cid", "extra"), [
     ("H1-01", set()), ("H1-06", {"4h"}), ("H1-07", {"funding"}), ("B-H1", set()),
     ("C-H1", set())])
 def test_each_configuration_loads_only_the_series_it_reads(market_rows, cid, extra):
+    """Given the names, each run takes every series' runs from the data view's coverage
+    and loads only what its rules read, 15-minute bars lazily for fills."""
     config = syn.configuration(cid, "2021-06-01", "2021-06-05",
                                seed=0 if cid == "C-H1" else None)
-    view = FakeView(market_rows)
-    market = trend.load_market(config, view, spans_of(market_rows))
+    view = syn.FakeView(market_rows)
+    market = trend.load_market(config, view, list(market_rows))
     kinds = {"4h" if n.endswith("/4h") else "funding" if "fundingRate" in n else n[-2:]
              for n in market.series}
     assert kinds == {"1d"} | extra
+    assert view.covered >= set(market.series)
     assert all(n.endswith("/1d") or n.endswith("/4h") or "fundingRate" in n
                for n in view.loaded), "15-minute bars are read lazily, for fills"
     if cid != "C-H1":  # the synthetic pairs are not pinned candidates, so they draw no signs
-        assert len(trend.simulate(config, market)) == 5
+        expected = trend.simulate(config, Market.from_rows(market_rows, market.horizon))
+        assert trend.simulate(config, market) == expected and len(expected) == 5
         assert any(n.endswith("/15m") for n in view.loaded)
 
 

@@ -70,53 +70,35 @@ CONTROL_MARGIN = 540
 
 def run(configuration, data_view):
     """The daily net returns of one registered H2 configuration, B-H2 or C-H2, over the
-    resolved configuration's window, in the shape the runner hands to the harness."""
-    market = load_market(configuration, data_view, series_spans(data_view))
-    return simulate(configuration, market)
+    resolved configuration's window, in the shape the runner hands to the harness. The
+    recorded gaps its loads cross reach the ledger through the runner, which takes them
+    from the loader (section 5, Gaps)."""
+    return simulate(configuration, load_market(configuration, data_view))
 
 
-def series_spans(data_view):
-    """THE DATA SEAM. Each series' archived runs, as ``Span`` tuples by series name,
-    for every series the run's manifests pin, holdout spans included for the holdout
-    run (section 11, item 5).
-
-    They must come from the data-loading layer, never from constants committed here
-    (quant review of G1.9, finding 3): the runner's ``DataView`` does not expose them
-    yet, and the engine's rebase onto main after #59 adds them. Until then no H2 run can
-    load data, so none can be ledgered by accident. ``load_market`` below takes the
-    spans as an argument and is tested on synthetic data."""
-    raise SimulationError(
-        "the data seam is open: the DataView exposes no series spans yet, so H2 cannot "
-        "load data (docs/research/strategies.md, The data seam)"
-    )
-
-
-def series_needed(configuration: Mapping, names) -> list[str]:
-    """The series a run of ``configuration`` reads: each coin's spot daily and 15-minute
-    bars (marks and fills, section 5) and, for a carry run, its perpetual's daily and
-    15-minute bars and funding (section 5, Marks and Funding; section 7). B-H2 holds spot
-    only (section 8)."""
-    offered = set(names)
+def series_needed(configuration: Mapping) -> list[str]:
+    """The series a run of ``configuration`` reads, all named by the registration: each
+    coin's spot daily and 15-minute bars (marks and fills, section 5) and, for a carry
+    run, its perpetual's daily and 15-minute bars and funding (section 5, Marks and
+    Funding; section 7). Section 4: the perpetual is "the USDT-margined perpetual on the
+    same coin", which for BTC and ETH is quoted per coin. B-H2 holds spot only (section 8).
+    A series the manifests do not pin fails the run when the engine asks its coverage."""
     coins = tuple(configuration["parameters"].get("coins") or BENCHMARK_COINS)
     wanted = []
     for coin in coins:
         wanted += [spot_series(coin, "1d"), spot_series(coin, "15m")]
         if configuration["id"] != BENCHMARK:
-            perp = _perpetual(coin, [n.split("/")[2] for n in offered
-                                     if n.startswith("um/fundingRate/")])
-            wanted += [perp_series(perp, "1d"), perp_series(perp, "15m"), funding_series(perp)]
-    missing = sorted(set(wanted) - offered)
-    if missing:
-        raise SimulationError(f"the data offers no {missing}")
+            wanted += [perp_series(coin, "1d"), perp_series(coin, "15m"), funding_series(coin)]
     return sorted(wanted)
 
 
-def load_market(configuration: Mapping, data_view, spans: Mapping) -> Market:
+def load_market(configuration: Mapping, data_view) -> Market:
     """The run's market, read through the runner's ``DataView`` to the window's end
-    (section 3), each series from its first archived row."""
+    (section 3), each series from its first archived row. The engine takes each series'
+    archived runs from ``data_view.coverage``, the committed manifests' metadata (both
+    manifests for the holdout run), so no span is committed here."""
     window = Window.from_configuration(configuration)
-    wanted = {name: spans[name] for name in series_needed(configuration, spans)}
-    return Market.from_view(data_view, wanted, window.end)
+    return Market.from_view(data_view, series_needed(configuration), window.end)
 
 
 def simulate(configuration: Mapping, market: Market) -> list[tuple[str, float]]:

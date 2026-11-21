@@ -105,23 +105,23 @@ CANDIDATES = (
 def run(configuration, data_view):
     """The daily net returns of one registered H1 configuration, B-H1 or C-H1, over the
     resolved configuration's window, in the shape the runner hands to the harness."""
-    market = load_market(configuration, data_view, series_spans(data_view))
+    market = load_market(configuration, data_view, pinned_series(data_view))
     return simulate(configuration, market)
 
 
-def series_spans(data_view):
-    """THE DATA SEAM. Each series' archived runs, as ``Span`` tuples by series name,
-    for every series the run's manifests pin, holdout spans included for the holdout
-    run (section 11, item 5).
+def pinned_series(data_view):
+    """THE DATA SEAM. The name of every series the run's manifests pin (both manifests
+    for the holdout run, section 11, item 5), which section 6, step 1 needs: it ranks
+    "USDT spot symbols ... delisted symbols included", every pinned spot daily series.
 
-    They must come from the data-loading layer, never from constants committed here
-    (quant review of G1.9, finding 3): the runner's ``DataView`` does not expose them
-    yet, and the engine's rebase onto main after #59 adds them. Until then no H1 run can
-    load data, so none can be ledgered by accident. ``load_market`` below takes the
-    spans as an argument and is tested on synthetic data."""
+    It must come from the data-loading layer, never from a list committed here, as the
+    spans do (quant review of G1.9, finding 3). The runner's ``DataView`` gives each
+    named series' coverage and rows but no listing of the names, so until it does no H1
+    run can load data, and none can be ledgered by accident. ``load_market`` below takes
+    the names as an argument and is tested on synthetic data."""
     raise SimulationError(
-        "the data seam is open: the DataView exposes no series spans yet, so H1 cannot "
-        "load data (docs/research/strategies.md, The data seam)"
+        "the data seam is open: the DataView lists no series, and H1 ranks every pinned "
+        "spot daily series (docs/research/strategies.md, The data seam)"
     )
 
 
@@ -148,13 +148,14 @@ def series_needed(configuration: Mapping, names) -> list[str]:
     return out
 
 
-def load_market(configuration: Mapping, data_view, spans: Mapping) -> Market:
+def load_market(configuration: Mapping, data_view, names) -> Market:
     """The run's market, read through the runner's ``DataView`` to the window's end
     (section 3), each series from its first archived row (section 6: the volatility is
-    "over every return of the instrument", and D13 needs the instrument's start)."""
+    "over every return of the instrument", and D13 needs the instrument's start). The
+    engine takes each series' archived runs from ``data_view.coverage``, the committed
+    manifests' metadata, so no span is committed here."""
     window = Window.from_configuration(configuration)
-    wanted = {name: spans[name] for name in series_needed(configuration, spans)}
-    return Market.from_view(data_view, wanted, window.end)
+    return Market.from_view(data_view, series_needed(configuration, names), window.end)
 
 
 def simulate(configuration: Mapping, market: Market) -> list[tuple[str, float]]:

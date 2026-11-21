@@ -23,11 +23,16 @@ from conftest import clear_overrides
 from ledger_fixtures import KEY_RECORD, World, git
 from norse_research.gitledger import registered_ids, write_genesis
 from norse_research.harness import _RUNNER, load_strategy
-from norse_research.runner import RESULT_PREFIX
+from norse_research.loader import DatasetLoader, inside_ledger_entry
+from norse_research.manifest import Manifest, build, dumps
+from norse_research.periods import DEVELOPMENT
+from norse_research.runner import RESULT_PREFIX, DataView
 from norse_research.sources import disallowed_imports, inside, module_name_for
 from norse_research.sources import strategy_declarations as declarations
+from norse_research.store import ArchiveStore
 from norse_research.strategies.h1 import trend
 from norse_research.strategies.h2 import carry
+from synthetic_store import make_series
 
 FIXTURES = Path(__file__).parent / "fixtures"
 PINS = json.loads((FIXTURES / "pins.example.json").read_text())
@@ -62,6 +67,10 @@ def test_every_module_in_a_hypothesis_paths_passes_the_source_check():
             rel = path.relative_to(syn.REPO).as_posix()
             assert disallowed_imports(path.read_text(), module_name_for(rel),
                                       rel.endswith("__init__.py"), paths) == [], rel
+    # Round 3's rules (E1, E2) pass too: carry.py's one import beside the engine is an
+    # allowlisted from-import, and neither module changes anything it imports.
+    assert "from norse_research.formats import Funding\n" in (
+        syn.REPO / syn.MODULES["H2"]).read_text()
     # The two hypotheses' paths do not overlap, and neither may reach the other's.
     assert not inside(TREE_PATHS["H1"][0], TREE_PATHS["H2"])
     assert not inside(TREE_PATHS["H2"][0], TREE_PATHS["H1"])
@@ -196,25 +205,26 @@ def run(configuration, data_view):
 '''
 
 
-@pytest.mark.parametrize("cid", ["H1-01", "H2-01"])
-def test_the_strategies_run_inside_the_runner_on_a_frozen_configuration(tmp_path, cid):
-    """The runner hands the strategy its configuration frozen (mapping proxies and
-    tuples) in a fresh interpreter under the audit hook (T13). Each module runs there
-    and returns exactly what it returns in this process on a plain dictionary."""
+def in_runner(tmp_path, module_path: str, configuration: dict, store_root=None,
+              manifest="research/manifests/none.json", extra_module: str | None = None):
+    """Run ``module_path``'s ``run`` as the harness does: a fresh ``python -I -B``
+    process with an empty environment, the audit hook installed, the configuration
+    frozen, and the dataset store (synthetic here) behind the registered loader."""
     code_root = tmp_path / "code"
     shutil.copytree(syn.RESEARCH / "norse_research", code_root / "research" / "norse_research",
                     ignore=shutil.ignore_patterns("__pycache__"))
-    module = code_root / "research" / "norse_research" / "strategies" / "runner_check.py"
-    module.write_text(RUNNER_CHECK)
+    if extra_module is not None:
+        (code_root / module_path).write_text(extra_module)
+    if store_root is not None:
+        (code_root / manifest).parent.mkdir(parents=True, exist_ok=True)
+        (code_root / manifest).write_bytes((tmp_path / "manifest.json").read_bytes())
     pycache = tmp_path / "pycache"
     pycache.mkdir()
-    config = syn.configuration(cid, "2021-06-01", "2021-06-03")
     payload = {
-        "code_root": str(code_root), "pycache": str(pycache),
-        "module_path": "research/norse_research/strategies/runner_check.py",
-        "module_name": "norse_research.strategies.runner_check", "function": "run",
-        "configuration": config, "entry": "e" * 64,
-        "manifest": "research/manifests/none.json", "store_root": None,
+        "code_root": str(code_root), "pycache": str(pycache), "module_path": module_path,
+        "module_name": module_name_for(module_path), "function": "run",
+        "configuration": configuration, "entry": "e" * 64, "manifest": manifest,
+        "store_root": None if store_root is None else str(store_root),
     }
     proc = subprocess.run(
         [sys.executable, "-I", "-B", "-X", f"pycache_prefix={pycache}", "-c", _RUNNER,
@@ -224,10 +234,67 @@ def test_the_strategies_run_inside_the_runner_on_a_frozen_configuration(tmp_path
     )
     lines = [ln for ln in proc.stdout.decode().splitlines() if ln.startswith(RESULT_PREFIX)]
     assert lines, proc.stderr.decode()[-2000:]
-    result = json.loads(lines[-1][len(RESULT_PREFIX):])
+    return json.loads(lines[-1][len(RESULT_PREFIX):])
+
+
+@pytest.mark.parametrize("cid", ["H1-01", "H2-01"])
+def test_the_strategies_run_inside_the_runner_on_a_frozen_configuration(tmp_path, cid):
+    """The runner hands the strategy its configuration frozen (mapping proxies and
+    tuples) in a fresh interpreter under the audit hook (T13). Each module runs there
+    and returns exactly what it returns in this process on a plain dictionary."""
+    config = syn.configuration(cid, "2021-06-01", "2021-06-03")
+    result = in_runner(tmp_path, "research/norse_research/strategies/runner_check.py", config,
+                       extra_module=RUNNER_CHECK)
     assert result["ok"], result
+    assert result["crossed_gaps"] == []  # no store: no load crossed a gap
     here: dict = {}
     exec(compile(RUNNER_CHECK, "runner_check", "exec"), here)
     expected = here["run"](config, None)
     assert [list(pair) for pair in expected] == result["returns"]
     assert any(value != 0.0 for _, value in expected), "the strategy traded"
+
+
+DROPPED = syn.ms(2025, 12, 1)  # BTC spot's 15-minute bar opening at the first decision
+
+
+def synthetic_store(tmp_path) -> ArchiveStore:
+    """A synthetic mirror and development manifest for BTC and ETH, November and December
+    2025, every price 1 and every funding rate 0.0001 (synthetic_store.put), with one
+    15-minute bar of BTC spot missing, which the manifest records as a gap."""
+    store = ArchiveStore(tmp_path / "mirror")
+    series = []
+    for coin in carry.CONTROL_DRAW_ORDER:
+        for name in (f"spot/klines/{coin}/1d", f"spot/klines/{coin}/15m",
+                     f"um/klines/{coin}/1d", f"um/klines/{coin}/15m", f"um/fundingRate/{coin}"):
+            drop = (DROPPED,) if name == "spot/klines/BTCUSDT/15m" else ()
+            series.append(make_series(store, name, "2025-11", "2025-12", drop=drop))
+    (tmp_path / "manifest.json").write_bytes(dumps(build(store, DEVELOPMENT, series)))
+    return store
+
+
+def test_h2_runs_through_the_registered_loader_and_reports_the_gaps_it_crossed(tmp_path):
+    """The pinned ``run`` itself, in the runner, on the registered loader over a
+    synthetic store: every series' runs come from ``DataView.coverage`` (the manifest's
+    metadata), and the recorded gap the fill search crossed comes back as
+    ``crossed_gaps`` for the result entry (section 5, Gaps). The same call in this
+    process gives the same returns and gaps."""
+    store = synthetic_store(tmp_path)
+    config = syn.configuration("H2-06", "2025-12-01", "2025-12-10")
+    result = in_runner(tmp_path, syn.MODULES["H2"], config, store_root=store.root,
+                       manifest="research/manifests/synthetic.json")
+    assert result["ok"], result
+    loader = DatasetLoader(Manifest.load(tmp_path / "manifest.json"), store)
+    with inside_ledger_entry("e" * 64):
+        expected = carry.run(config, DataView(loader))
+    assert [list(pair) for pair in expected] == result["returns"]
+    assert len(expected) == 10 and any(value != 0.0 for _, value in expected)
+    assert result["crossed_gaps"] == loader.crossed_gaps()
+    assert [gap[0] for gap in result["crossed_gaps"]] == ["spot/klines/BTCUSDT/15m"]
+
+
+def test_h1_refuses_inside_the_runner_until_the_data_view_lists_its_series(tmp_path):
+    store = synthetic_store(tmp_path)
+    config = syn.configuration("H1-01", "2025-12-01", "2025-12-10")
+    result = in_runner(tmp_path, syn.MODULES["H1"], config, store_root=store.root,
+                       manifest="research/manifests/synthetic.json")
+    assert not result["ok"] and "data seam" in result["error"]
