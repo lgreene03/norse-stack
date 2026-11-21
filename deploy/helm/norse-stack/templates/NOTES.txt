@@ -5,7 +5,7 @@ Core services rendered:
   - huginn   (strategy engine)   metrics: :{{ .Values.huginn.service.httpPort }}{{ .Values.huginn.metricsPath }} (same port as its HTTP API)
 {{- end }}
 {{- if .Values.sleipnir.enabled }}
-  - sleipnir (execution gateway) metrics: :{{ .Values.sleipnir.metricsPort }}{{ .Values.sleipnir.metricsPath }}
+  - sleipnir (execution gateway) metrics: :{{ .Values.sleipnir.service.httpPort }}{{ .Values.sleipnir.metricsPath }} (same port as its HTTP API)
 {{- end }}
 {{- if .Values.muninn.enabled }}
   - muninn   (market data)       metrics: :{{ .Values.muninn.metricsPort }}{{ .Values.muninn.metricsPath }}
