@@ -12,10 +12,12 @@ socket or process and reads data only through the runner's ``DataView``.
 A strategy is an object with an ``interval`` ("1d" or "4h") and
 ``decide(history, book) -> Decision | None``. ``backtest`` runs it over data read up
 front; ``Paper`` runs the same object fed one row at a time; ``replay`` turns recorded
-rows into that feed. A strategy module's pinned function typically reads::
+rows into that feed. The runner seals the engine before a strategy's module runs:
+its modules, classes and tables cannot be changed, only used. A strategy module's
+pinned function typically reads::
 
     def run(configuration, data_view):
-        market = Market.from_view(data_view, spans, horizon, history_from)
+        market = Market.from_view(data_view, series, horizon, history_from)
         return run_backtest(MyStrategy(configuration["parameters"]), configuration, market)
 """
 
@@ -78,7 +80,7 @@ from .targeting import (
     vote,
 )
 
-__all__ = [
+__all__ = (
     "BUY",
     "DAY_MS",
     "FOUR_HOURS_MS",
@@ -137,4 +139,4 @@ __all__ = [
     "target_weight",
     "trailing_funding",
     "vote",
-]
+)

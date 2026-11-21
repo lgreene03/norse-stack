@@ -12,19 +12,20 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from ..formats import EngineClass
 from .market import Segments, SeriesView
 from .model import DAY_MS, Instrument, SimulationError, spot_series
 
 
 @dataclass
-class _Ewm:
+class _Ewm(metaclass=EngineClass):
     next_index: int
     numerator: float
     denominator: float
     previous_close: float | None
 
 
-class History:
+class History(metaclass=EngineClass):
     def __init__(
         self,
         now: int,

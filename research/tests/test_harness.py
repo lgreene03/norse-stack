@@ -663,6 +663,27 @@ def test_a_strategy_cannot_change_or_reach_behind_the_code_it_imports():
         assert problems(source) == [], source
 
 
+def test_a_forbidden_builtin_is_refused_by_name_before_anything_runs(world, calls):
+    """Security review of PR 61, round 2, B1 and B6: a forbidden builtin bound to
+    another name would undo the other rules (``s = setattr`` redoes E1; ``imp =
+    __import__`` passes the import allowlist). Every other variant of that review is in
+    test_sim_sealed.py, against the source check and the sealed engine in the runner."""
+    world.write("strategies/h1/helper.py", (
+        "from norse_research.sim import execution\n"
+        "s = setattr\n"
+        "s(execution, 'execute_bar', None)\n"
+        "imp = __import__\n"
+        "imp('o' + 's').getcwd\n"
+    ))
+    world.commit("a helper that aliases setattr and __import__")
+    world.push()
+    with pytest.raises(RunRefused, match=r"helper\.py reaches outside") as refused:
+        run(world)
+    assert "line 2: builtin setattr" in str(refused.value)
+    assert "line 4: builtin __import__" in str(refused.value)
+    assert calls == []
+
+
 def test_committed_strategy_code_never_runs_before_its_checks(world, calls):
     # Review N4: the pinned module's top-level code ran, and only then was refused.
     marker = world.tmp / "top-level-marker"

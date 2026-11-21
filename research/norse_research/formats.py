@@ -12,20 +12,64 @@ Format traps handled here, each with a test:
 * A few files repeat a row exactly; ``collapse_repeats`` keeps one and reports it.
 * A few bars sit off the interval grid; ``split_off_grid`` sets them aside and
   reports them, so the slots they occupy count as a gap rather than a shifted bar.
+
+This module and the simulation engine (``norse_research.sim``) are what a strategy may
+import, so their classes are ``EngineClass`` instances and their tables read-only: the
+runner seals both before a strategy's module runs (security review of PR 61, round 2).
 """
 
 from __future__ import annotations
 
 import io
 import zipfile
-from collections.abc import Sequence
+from abc import ABCMeta
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
+from types import MappingProxyType
 from typing import NamedTuple
 
 LICENCE = "CC BY-NC-SA 4.0 (Binance public data, data.binance.vision)"
 
-INTERVAL_MS = {
+# Set once, by ``seal_engine_classes``, in the strategy process; nothing sets it back.
+_engine_sealed = False
+
+
+class EngineClass(type):
+    """The metaclass of every class in this module and in the simulation engine. Once
+    the runner seals the engine, before a strategy's module runs, no class attribute
+    can be set or deleted, whatever name the class is reached by, so a strategy cannot
+    change a rule for its run while the ledger certifies the registered one."""
+
+    def __setattr__(cls, name: str, value) -> None:
+        if _engine_sealed:
+            raise AttributeError(f"{cls.__name__} is sealed for this run: {name} cannot be set")
+        super().__setattr__(name, value)
+
+    def __delattr__(cls, name: str) -> None:
+        if _engine_sealed:
+            raise AttributeError(f"{cls.__name__} is sealed for this run: {name} cannot be deleted")
+        super().__delattr__(name)
+
+
+class EngineABCMeta(EngineClass, ABCMeta):
+    """``EngineClass`` for an engine class built on a ``collections.abc`` base."""
+
+
+def seal_engine_classes() -> None:
+    """From now on, in this process, no engine class can change. Only the runner calls
+    this, before a strategy's module runs; there is no way back."""
+    global _engine_sealed
+    _engine_sealed = True
+
+
+def read_only(mapping: Mapping) -> Mapping:
+    """A read-only view of a copy of ``mapping``: the module-level tables a strategy can
+    reach, so none can be changed in place (``update``, an item store)."""
+    return MappingProxyType(dict(mapping))
+
+
+INTERVAL_MS = read_only({
     "1m": 60_000,
     "5m": 300_000,
     "15m": 900_000,
@@ -33,7 +77,7 @@ INTERVAL_MS = {
     "4h": 14_400_000,
     "8h": 28_800_000,
     "1d": 86_400_000,
-}
+})
 
 KLINE_COLUMNS = (
     "open_time",
@@ -57,12 +101,12 @@ FUNDING_TOLERANCE_MS = 60_000
 ROW_BYTES_CAP = 512
 
 
-class DataIntegrityError(ValueError):
+class DataIntegrityError(ValueError, metaclass=EngineClass):
     """A file's contents break the format or the time grid it must follow."""
 
 
 @dataclass(frozen=True)
-class DatasetSpec:
+class DatasetSpec(metaclass=EngineClass):
     """One archive series: a market, a kind, a symbol and (for bars) an interval."""
 
     market: str  # "spot" or "um" (USDT-margined futures)
@@ -144,28 +188,37 @@ class DatasetSpec:
         return self.max_rows() * ROW_BYTES_CAP + 4_096
 
 
-class Kline(NamedTuple):
-    open_time: int
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float
-    close_time: int
-    quote_volume: float
-    trades: int
-    taker_buy_volume: float
-    taker_buy_quote_volume: float
+# A ``NamedTuple`` class cannot take a metaclass, so each row type is an engine class
+# over a named tuple that is bound to no name: its base is reachable only through
+# ``__bases__``, ``__mro__`` or ``mro()``, which the source check refuses.
+class Kline(
+    NamedTuple("Kline", [
+        ("open_time", int),
+        ("open", float),
+        ("high", float),
+        ("low", float),
+        ("close", float),
+        ("volume", float),
+        ("close_time", int),
+        ("quote_volume", float),
+        ("trades", int),
+        ("taker_buy_volume", float),
+        ("taker_buy_quote_volume", float),
+    ]),
+    metaclass=EngineClass,
+):
+    __slots__ = ()
 
 
-class Funding(NamedTuple):
-    calc_time: int
-    interval_hours: int
-    rate: float
+class Funding(
+    NamedTuple("Funding", [("calc_time", int), ("interval_hours", int), ("rate", float)]),
+    metaclass=EngineClass,
+):
+    __slots__ = ()
 
 
 @dataclass(frozen=True)
-class Gap:
+class Gap(metaclass=EngineClass):
     """Missing rows between two present ones (times in ms since the epoch, UTC)."""
 
     after: int

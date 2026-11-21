@@ -15,7 +15,7 @@ import itertools
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
-from ..formats import FUNDING_TOLERANCE_MS, Funding
+from ..formats import FUNDING_TOLERANCE_MS, EngineClass, Funding
 from ..universe import base_asset, is_ranked, month_close_ms, rank_month_ends
 from .history import History
 from .model import DAY_MS, FUNDING_KNOWN_SLACK_MS, Instrument, SimulationError, iso_day
@@ -88,7 +88,7 @@ def perpetual_of(spot_symbol: str, perpetuals: Iterable[str]) -> str | None:
 
 
 @dataclass(frozen=True)
-class FundingWindow:
+class FundingWindow(metaclass=EngineClass):
     """The published settlements with ``calc_time`` in (t - L + 60 s, t + 60 s].
 
     ``covered`` says the window holds every settlement it should: its first is within

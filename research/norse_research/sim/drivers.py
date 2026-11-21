@@ -31,7 +31,7 @@ import itertools
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
-from ..formats import Funding, Kline
+from ..formats import EngineClass, Funding, Kline
 from .book import Book
 from .execution import (
     accrue,
@@ -100,7 +100,7 @@ def check_outage(witnesses: list[Series | None], before: int) -> None:
         raise SimulationError(outage_message(early[0]))
 
 
-class BookView:
+class BookView(metaclass=EngineClass):
     """The book as a strategy may see it at a decision: read-only, marked then."""
 
     def __init__(self, book: Book, marks: Mapping, equity: float) -> None:
@@ -128,7 +128,7 @@ class BookView:
 
 
 @dataclass
-class RunResult:
+class RunResult(metaclass=EngineClass):
     """Everything a run produced. ``returns`` is what the runner hands back to the
     harness: one (day, return) per day of the window (section 3)."""
 
@@ -141,7 +141,7 @@ class RunResult:
     skips: list[Skip] = field(default_factory=list)
 
 
-class _Run:
+class _Run(metaclass=EngineClass):
     """The state and rules both drivers share."""
 
     def __init__(self, strategy, window: Window, costs: Costs, cash: float = 1.0) -> None:
@@ -343,7 +343,7 @@ def run_backtest(strategy, configuration: Mapping, market: Market) -> list[tuple
 
 
 @dataclass(frozen=True)
-class BarEvent:
+class BarEvent(metaclass=EngineClass):
     """A bar, delivered at its close."""
 
     series: str
@@ -355,7 +355,7 @@ class BarEvent:
 
 
 @dataclass(frozen=True)
-class SettlementEvent:
+class SettlementEvent(metaclass=EngineClass):
     """A funding settlement, delivered when section 5 counts it known: 60 seconds
     before its ``calc_time``."""
 
@@ -368,7 +368,7 @@ class SettlementEvent:
 
 
 @dataclass(frozen=True)
-class InstrumentEnded:
+class InstrumentEnded(metaclass=EngineClass):
     """Notice that an instrument stopped trading at the close of its last daily bar.
     Section 4's backtest learns it by looking one bar ahead; a live feed learns it from
     the exchange's delisting notice. It arrives before that instant's mark and the close
@@ -383,7 +383,7 @@ class InstrumentEnded:
 
 
 @dataclass(frozen=True)
-class Tick:
+class Tick(metaclass=EngineClass):
     """The clock reaching a mark or decision time, after every row known by then."""
 
     at: int
@@ -393,7 +393,7 @@ class Tick:
         return (self.at, MARK, "")
 
 
-class Paper:
+class Paper(metaclass=EngineClass):
     """Paper trading: the same strategy object, fed one row at a time.
 
     ``push`` takes events in the order of their ``key`` (``replay`` builds such a feed

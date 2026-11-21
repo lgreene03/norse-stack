@@ -659,7 +659,7 @@ def test_nothing_stamped_on_1_january_moves_the_31_december_return():
 
 
 def test_a_pair_whose_last_bar_is_the_month_end_bar_is_selected_and_its_slot_held_in_cash():
-    """Choice 12 (quant review 1, finding 2; kept by the lead's decision). Section 6,
+    """Choice 12 (quant review 1, finding 2; confirmed by the owner on 2026-11-21). Section 6,
     step 2 asks only whether the current instrument "has the month-end daily bar", so a
     pair whose last bar is the month-end bar is still selected, and section 4 then holds
     its slot in cash for the month: the next pair does not take its place, which would

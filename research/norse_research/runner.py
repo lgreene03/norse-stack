@@ -16,8 +16,10 @@ and start no process. The strategy's module-level code runs under the hook too. 
 hook deters accidents, not intent: committed strategy code that reaches the hook's
 state through frames or the garbage collector can disable it (security review round 3,
 R1), so it is not a sandbox, and the control against a deliberate escape is that the
-code is committed, recorded in the ledger and reviewed (threat T13). The result goes
-back over standard output as one JSON line, the last.
+code is committed, recorded in the ledger and reviewed (threat T13). Also before the
+strategy module runs, the engine it may import is sealed (``seal_engine``): its
+modules, classes and tables cannot be changed for the run. The result goes back over
+standard output as one JSON line, the last.
 
 For the holdout run alone (G1.6), the payload also names the committed holdout
 manifest and the unseal entry: the loader is then given the holdout manifest, its
@@ -93,6 +95,55 @@ def _freeze(value):
     return value
 
 
+class FrozenModule(types.ModuleType):
+    """A module whose attributes cannot be set or deleted, whatever name reaches it, and
+    whose namespace cannot be reached through its ``__dict__`` attribute: helpers in the
+    allowlisted standard library that take an attribute name as a string
+    (``functools.update_wrapper``, ``enum.global_enum``) would otherwise write into it
+    with no dunder in the strategy's source. Python itself reads a module's namespace
+    directly, never through this attribute."""
+
+    def __getattribute__(self, name: str):
+        if name == "__dict__":
+            module = super().__getattribute__("__name__")
+            raise AttributeError(f"module {module} is sealed for this run: its namespace "
+                                 "cannot be reached")
+        return super().__getattribute__(name)
+
+    def __setattr__(self, name: str, value) -> None:
+        raise AttributeError(f"module {self.__name__} is sealed for this run: {name} cannot be set")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError(
+            f"module {self.__name__} is sealed for this run: {name} cannot be deleted"
+        )
+
+
+ENGINE = "norse_research.sim"
+ENGINE_FORMATS = "norse_research.formats"
+
+
+def seal_engine() -> list[str]:
+    """Make the code a strategy imports immutable before the strategy runs (security
+    review of PR 61, round 2). The source check reads names, not values, so it cannot
+    see an engine module, class or table changed through an alias, a container, a
+    parameter or a mutating method, and no audit event fires on such a change; this
+    stops it at run time instead. Every module of the engine and ``formats`` becomes a
+    ``FrozenModule``, every class in them refuses class-attribute changes
+    (``formats.EngineClass``), and their module-level tables are read-only in the
+    source. Undoing any of it needs a dunder attribute or a forbidden builtin, which the
+    source check refuses. Returns the names of the sealed modules."""
+    from . import formats
+    from . import sim as _engine  # noqa: F401  imports every engine module before sealing
+
+    formats.seal_engine_classes()
+    sealed = sorted(n for n in sys.modules
+                    if n in (ENGINE, ENGINE_FORMATS) or n.startswith(ENGINE + "."))
+    for name in sealed:
+        sys.modules[name].__class__ = FrozenModule
+    return sealed
+
+
 class DataView:
     """What a strategy receives: rows through the registered loader, and each series'
     archived coverage from the manifests the loader holds (G1.9), nothing else. Both are
@@ -150,6 +201,7 @@ def run(payload: dict) -> tuple[list, list]:
              sys.base_exec_prefix]
     roots += [os.path.realpath(r) for r in roots]
     install_tripwire(roots, files)
+    seal_engine()  # the engine is used, never changed, by the strategy
     module = types.ModuleType(payload["module_name"])
     module.__file__ = module_file
     module.__package__ = payload["module_name"].rpartition(".")[0]

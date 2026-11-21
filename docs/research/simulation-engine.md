@@ -243,10 +243,10 @@ is a reading of the registration, not a new parameter, and none changes a pass m
     the month-end daily bar"); section 4 then closes it and its slot holds cash for the
     month. The quant's review (finding 2) set out the other reading, that a stopped
     instrument is not "current" and the next eligible pair takes the slot, and asked for a
-    ruling. The lead role decided to keep the literal reading: the frozen registration's
-    text controls, and the other reading needs a look-ahead beyond D12's, which section 4
-    allows "only to learn that a bar is the last one". The owner has not ruled separately.
-    A test pins the behaviour. Section 4 says three candidates end on 2026-04-01, so this
+    ruling. The literal reading is kept, confirmed by the owner on 2026-11-21 ("Literal:
+    select, hold cash"): the frozen registration's text controls, and the other reading
+    needs a look-ahead beyond D12's, which section 4 allows "only to learn that a bar is
+    the last one". A test pins the behaviour. Section 4 says three candidates end on 2026-04-01, so this
     may bind in the holdout.
 13. **The short half of D12 has nothing to close,** since no spot position is ever short.
     A carry pair whose spot instrument stopped is not defined by the registration (H2
@@ -320,12 +320,39 @@ a hypothesis file can rebind the engine's fill, cost or funding path for its run
 also refuses `import norse_research.<x>` and the bare name `norse_research`, since the
 package root reaches every module the runner has already imported, the loader, the store
 and the runner itself; strategies write `from norse_research.sim import ...` instead
-(E2). The check reads names, not values, so a module bound to a second name and changed
-through it is not caught here. That is deliberate evasion visible in the committed diff,
-and the runner's audit hook stands behind it, as for every other source rule. Genesis,
-and replay of a genesis entry, refuse harness paths that do not cover all of
-`research/norse_research`, so the engine is always inside the harness tree digest each
+(E2). Genesis, and replay of a genesis entry, refuse harness paths that do not cover all
+of `research/norse_research`, so the engine is always inside the harness tree digest each
 open entry records.
+
+The source check reads names, not values, so on its own it cannot see an engine module or
+class changed through a second name, a container, a parameter, a `for` target or a
+walrus, nor a mutating method such as `update` on an engine table, and no audit event
+fires on any of these (security review of PR 61, round 2). Two further rules close that.
+First, the check refuses every reference to a forbidden builtin, not only a call by its
+name, and `type` with them, so `s = setattr`, `map(setattr, ...)` and `imp = __import__`
+are refused, as are the class's bases through `mro`. Second, the runner seals the engine
+before the strategy's module runs: every module of `norse_research.sim` and
+`norse_research.formats` refuses an attribute being set or deleted and will not hand out
+its namespace through `__dict__`, every class in them is an `EngineClass` whose class
+attributes cannot change once sealed, and their module-level tables are read-only
+(`MappingProxyType`) in the source. An engine changed by any of those routes therefore
+fails its run, and the run is ledgered as failed. Applying the review showed that a
+dunder in the strategy's source is not the only way past a seal: `functools.update_wrapper`,
+`functools.wraps` and `enum.global_enum` take attribute or module names as strings and
+write into what they find, and each replaced the fill price in a sealed run. The sealed
+modules' `__dict__` refusal stops the first two against a module and the third
+entirely, and the source check refuses all three names, since `update_wrapper` can also
+write through a function's own globals, which are its module's namespace and beyond
+any run-time seal. A strategy may construct engine objects, call engine functions and
+read engine tables; it must never try to change one.
+
+What remains is stated for review rather than closed. The standard library modules the
+engine calls through their attributes (`bisect`, `heapq`, `itertools`, `math`) are
+allowlisted and not sealed, so a strategy that binds one to a second name and replaces a
+function in it changes the engine's lookups for its run. And the live objects the engine
+lends a strategy keep their state behind private attributes, such as the book behind
+`BookView` and the rows behind a `SeriesView`, which the source check refuses only on an
+imported name. Both need deliberate code that is visible in the committed diff.
 
 huginn's executor and research gateway cost defaults, which G1.9's "Done when" also
 names, live in the huginn repository; a separate huginn pull request aligns them.

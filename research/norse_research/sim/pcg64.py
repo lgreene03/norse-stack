@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import itertools
 
+from ..formats import EngineClass
 from .model import SimulationError
 
 MASK32 = 0xFFFFFFFF
@@ -61,7 +62,7 @@ def _uint32_words(n: int) -> list[int]:
     return words
 
 
-class SeedSequence:
+class SeedSequence(metaclass=EngineClass):
     """numpy's SeedSequence for integer entropy, with no spawn key."""
 
     def __init__(self, entropy: int, pool_size: int = DEFAULT_POOL_SIZE) -> None:
@@ -112,7 +113,7 @@ def _mix_entropy(entropy: list[int], pool_size: int) -> list[int]:
     return pool
 
 
-class PCG64:
+class PCG64(metaclass=EngineClass):
     """numpy's PCG64 bit generator."""
 
     def __init__(self, seed: int | SeedSequence) -> None:
@@ -154,7 +155,7 @@ class PCG64:
         return (self.next64() >> 11) * (1.0 / 9007199254740992.0)
 
 
-class Generator:
+class Generator(metaclass=EngineClass):
     """The two ``numpy.random.Generator`` methods the registered controls call."""
 
     def __init__(self, bit_generator: PCG64) -> None:

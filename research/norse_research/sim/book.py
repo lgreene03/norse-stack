@@ -17,16 +17,17 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from ..formats import EngineClass
 from .model import BUY, PERP, SPOT, SimulationError
 
 
 @dataclass
-class PerpPosition:
+class PerpPosition(metaclass=EngineClass):
     quantity: float  # signed: negative is short
     entry: float  # average entry price of the open quantity
 
 
-class Book:
+class Book(metaclass=EngineClass):
     def __init__(self, cash: float = 1.0) -> None:
         self.cash = float(cash)
         self.spot: dict[str, float] = {}

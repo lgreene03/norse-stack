@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 
-from ..formats import DatasetSpec
+from ..formats import DatasetSpec, EngineClass, read_only
 
 MINUTE_MS = 60_000
 FIFTEEN_MINUTES_MS = 900_000
@@ -23,7 +23,7 @@ FUNDING_KNOWN_SLACK_MS = 60_000
 
 # Section 3: decisions are daily at 00:00 UTC; section 6, Four-hour bars: or at every
 # four-hour close. The interval is also the lapse horizon of section 5, Fills.
-DECISION_INTERVALS = {"1d": DAY_MS, "4h": FOUR_HOURS_MS}
+DECISION_INTERVALS = read_only({"1d": DAY_MS, "4h": FOUR_HOURS_MS})
 
 SPOT = "spot"
 PERP = "perp"
@@ -31,7 +31,7 @@ BUY = 1
 SELL = -1
 
 
-class SimulationError(ValueError):
+class SimulationError(ValueError, metaclass=EngineClass):
     """The run asked the engine for something the registration does not define."""
 
 
@@ -63,7 +63,7 @@ def day_ms(day: str) -> int:
 
 
 @dataclass(frozen=True)
-class Window:
+class Window(metaclass=EngineClass):
     """The return days of the window being run, from the resolved configuration.
 
     Section 3: "the return of UTC day D is the equity marked at 00:00 on D+1 divided by
@@ -125,7 +125,7 @@ def decision_step(interval: str) -> int:
 
 
 @dataclass(frozen=True)
-class Costs:
+class Costs(metaclass=EngineClass):
     """Section 5: "the execution price is the reference price moved against the order
     by SlippageBps ... The fee is 10 bps of the traded notional at the execution price."
 
@@ -162,7 +162,7 @@ class Costs:
 
 
 @dataclass(frozen=True, order=True)
-class Instrument:
+class Instrument(metaclass=EngineClass):
     """Section 4: "An instrument is a maximal run of consecutive daily bars of one spot
     symbol in the pinned archive." It is named by its symbol and the open of its first
     daily bar, so a symbol that returns after a missing daily bar is a new instrument."""
@@ -175,7 +175,7 @@ class Instrument:
 
 
 @dataclass(frozen=True)
-class CarryTarget:
+class CarryTarget(metaclass=EngineClass):
     """Section 7: one coin's carry position, spot long and its perpetual short in equal
     quantity. ``fraction`` above zero holds the coin in carry, opening it at that
     fraction of equity if it is flat; zero takes it flat. Quantities never resize
@@ -187,7 +187,7 @@ class CarryTarget:
 
 
 @dataclass(frozen=True)
-class Decision:
+class Decision(metaclass=EngineClass):
     """A strategy's answer at one decision time.
 
     ``weights`` is a complete book of single-leg spot targets, as fractions of equity
@@ -224,7 +224,7 @@ class Decision:
 
 
 @dataclass(frozen=True)
-class Order:
+class Order(metaclass=EngineClass):
     """One leg of an order, as decided; its quantity is fixed only at the fill.
 
     Section 6, Orders: "An order's quantity is the change in target weight times
@@ -250,7 +250,7 @@ class Order:
 
 
 @dataclass(frozen=True)
-class Fill:
+class Fill(metaclass=EngineClass):
     """A change of position. ``kind`` is "fill" for an order filled on a 15-minute bar
     (section 5) and "halt" for section 4's close of an instrument that stopped
     trading, which has no order and no bar."""
@@ -270,7 +270,7 @@ class Fill:
 
 
 @dataclass(frozen=True)
-class Lapse:
+class Lapse(metaclass=EngineClass):
     """Section 5: an order no bar with volume filled before its deadline."""
 
     order: Order
@@ -278,7 +278,7 @@ class Lapse:
 
 
 @dataclass(frozen=True)
-class Accrual:
+class Accrual(metaclass=EngineClass):
     """Section 5, Funding: one settlement on the perpetual quantity held at its time."""
 
     symbol: str
@@ -290,7 +290,7 @@ class Accrual:
 
 
 @dataclass(frozen=True)
-class Skip:
+class Skip(metaclass=EngineClass):
     """Section 5, Gaps item 2: a four-hour decision skipped for a missing bar."""
 
     at: int

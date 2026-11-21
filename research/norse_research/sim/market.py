@@ -24,7 +24,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from ..formats import INTERVAL_MS, DatasetSpec, Kline
+from ..formats import INTERVAL_MS, DatasetSpec, EngineABCMeta, EngineClass, Kline
 from .model import DAY_MS, FUNDING_KNOWN_SLACK_MS, Instrument, SimulationError
 
 FILL_INTERVAL = "15m"
@@ -53,7 +53,7 @@ def vwap(bar: Kline) -> float:
     return bar.quote_volume / bar.volume
 
 
-class SeriesView(Sequence):
+class SeriesView(Sequence, metaclass=EngineABCMeta):
     """The first ``count`` rows of a series: what is known at the moment it is taken.
 
     The batch and streaming drivers both hand strategies this class over the rows known
@@ -98,7 +98,7 @@ class SeriesView(Sequence):
         return bisect.bisect_right(self._times, time, 0, self._count)
 
 
-class Segments:
+class Segments(metaclass=EngineClass):
     """Section 4: a spot symbol's daily bars split into instruments at every missing
     daily bar. Fed bars in order, by the backtest all at once and by paper trading as
     they arrive, so both see the same instruments."""
@@ -124,7 +124,7 @@ class Segments:
         return self._starts[k], self._start_index[k]
 
 
-class Series:
+class Series(metaclass=EngineClass):
     """A whole series held in memory, with each row's availability instant.
 
     ``horizon`` is where the data was read up to: a daily series whose rows stop
@@ -194,7 +194,7 @@ class Series:
 # --- fill bars: 15-minute series, read lazily -------------------------------------------
 
 
-class FillSource:
+class FillSource(metaclass=EngineClass):
     """Where the backtest reads 15-minute bars: only to find fills (section 5, Fills)
     and funding marks (section 5, Funding). They are never shown to a strategy."""
 
@@ -218,7 +218,7 @@ class RowsSource(FillSource):
 
 
 @dataclass(frozen=True)
-class Span:
+class Span(metaclass=EngineClass):
     """The times of the first and last row of one archived run of a series, as the
     runner's ``DataView.coverage`` reports them from the committed manifests' metadata.
     The loader refuses a range its data does not span and a month the manifest pins no
@@ -331,7 +331,7 @@ def _next_month(month_start: int) -> int:
 # --- the backtest's market --------------------------------------------------------------
 
 
-class Market:
+class Market(metaclass=EngineClass):
     """Everything a backtest reads: the series a strategy may see (daily and four-hour
     bars, funding), held whole, and a ``FillSource`` for 15-minute bars.
 

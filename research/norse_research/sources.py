@@ -5,10 +5,11 @@ in a fresh interpreter (``norse_research.runner``). Before that, the harness and
 genesis step read it as text:
 
 * every module under a hypothesis's strategy paths may import only the allowlist and
-  modules inside that hypothesis's own paths (security review N12), may not call
-  ``open``, ``eval``, ``getattr`` and their kind, and may not touch a dunder attribute or
-  a name such as ``sys``, ``modules`` or ``attrgetter`` through which a module it may not
-  import could be reached (L4, N9);
+  modules inside that hypothesis's own paths (security review N12), may not name
+  ``open``, ``eval``, ``getattr``, ``setattr``, ``type`` and their kind at all, called or
+  not (security review of PR 61, round 2), and may not touch a dunder attribute or a
+  name such as ``sys``, ``modules``, ``mro`` or ``attrgetter`` through which a module it
+  may not import, or a class's bases, could be reached (L4, N9);
 * nothing a module imports may be changed or reached behind: no assignment to or
   deletion of an imported name's attributes or items, no private attribute of one, no
   subclass of a class from this package, and no ``import norse_research.<x>`` or bare
@@ -19,7 +20,9 @@ genesis step read it as text:
   what enters the configuration hash is read from the committed text (M4, N1, N4).
 
 Python cannot be sandboxed from inside itself: this stops accidents and makes evasion
-visible in the diff, and the runner's audit hook stands behind it.
+visible in the diff, and the runner stands behind it twice, with its audit hook for
+files, sockets and processes, and by sealing the engine, so that an engine module,
+class or table changed through a name this check cannot follow fails the run.
 """
 
 from __future__ import annotations
@@ -42,13 +45,25 @@ ALLOWED_IMPORTS = frozenset(
         "norse_research.sim",
     }
 )
-FORBIDDEN_CALLS = frozenset(
+# Refused wherever the name appears, called or not (security review of PR 61, round 2):
+# ``s = setattr``, ``map(setattr, ...)`` or ``imp = __import__`` would otherwise undo
+# every other rule. A builtin is reachable only by its bare name or through
+# ``builtins`` and ``__builtins__``, both refused, so this is sound. ``type`` builds a
+# class at run time, a subclass of an engine class among them.
+FORBIDDEN_BUILTINS = frozenset(
     {"open", "__import__", "eval", "exec", "compile", "breakpoint", "input", "getattr",
-     "setattr", "delattr", "vars", "globals", "locals"}
+     "setattr", "delattr", "vars", "globals", "locals", "type"}
 )
+# ``mro`` is the one way to a class's bases without a dunder; the bases of the archive's
+# row types (``formats.Kline``, ``formats.Funding``) are not sealed engine classes.
+# ``update_wrapper``, ``wraps`` and ``global_enum`` take attribute or module names as
+# strings and write into what they find: ``update_wrapper(f, x, (), ("__globals__",))``
+# rewrites the namespace of the module ``f`` was defined in, which no run-time seal can
+# stop, since a function's globals are that namespace itself.
 FORBIDDEN_NAMES = frozenset(
     {"sys", "modules", "os", "io", "builtins", "importlib", "subprocess", "socket",
-     "pathlib", "shutil", "inspect", "attrgetter", "methodcaller", "gc", "ctypes"}
+     "pathlib", "shutil", "inspect", "attrgetter", "methodcaller", "gc", "ctypes", "mro",
+     "update_wrapper", "wraps", "global_enum"}
 )
 DECLARED = ("CONFIGURATIONS", "PARAMETERS", "DEFAULTS")
 
@@ -103,12 +118,8 @@ def disallowed_imports(
                 f"line {node.lineno}: import of {a.name}"
                 for a in node.names if a.name in FORBIDDEN_NAMES
             ]
-        elif (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id in FORBIDDEN_CALLS
-        ):
-            problems.append(f"line {node.lineno}: call to {node.func.id}()")
+        elif isinstance(node, ast.Name) and node.id in FORBIDDEN_BUILTINS:
+            problems.append(f"line {node.lineno}: builtin {node.id}, called or not")
         elif isinstance(node, ast.Attribute) and (
             node.attr.startswith("__") or node.attr in FORBIDDEN_NAMES
         ):
