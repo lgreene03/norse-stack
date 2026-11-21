@@ -2,11 +2,14 @@
 
 The only way research code receives rows is ``DatasetLoader.load``. It:
 
-* accepts only a development manifest, and refuses any request reaching on or past
-  2026-01-01, the holdout's start, with ``HoldoutSealed``. There is no unseal here
-  at all: G1.6 adds the one permitted unseal, which needs the pre-registration hash,
-  the owner's key and a ledger entry. Until then holdout rows cannot leave this
-  package through the loader;
+* accepts a development manifest, and refuses any request reaching on or past
+  2026-01-01, the holdout's start, with ``HoldoutSealed``, with one exception: a
+  loader also given the holdout manifest (``holdout=``) returns holdout rows inside
+  the unsealed holdout run, which only the runner enters, after the harness has
+  pushed the run's open entry and found the unseal entry on the remote's ledger
+  (G1.6, ``norse_research.seal``). The unseal needs the pre-registration hash, the
+  owner's key and the frozen ledger's holdout candidate, so outside that one run
+  holdout rows cannot leave this package through the loader;
 * refuses a series the manifest does not pin, a month the manifest does not list,
   and a file whose SHA-256, size or row count differs from the manifest;
 * collapses a row the archive published twice identically only where the manifest
@@ -42,12 +45,17 @@ from .formats import DataIntegrityError, DatasetSpec, Gap
 from .manifest import Manifest, ManifestError, gap_record, on_grid_and_gaps, read_series_file
 from .periods import (
     DEVELOPMENT,
+    HOLDOUT,
+    HOLDOUT_END,
+    HOLDOUT_END_MS,
     HOLDOUT_START,
     HOLDOUT_START_MS,
+    LAST_DEVELOPMENT_MONTH,
     OUT_OF_SAMPLE_START,
     OUT_OF_SAMPLE_START_MS,
     HoldoutSealed,
     iso_time,
+    unsealed_run,
 )
 from .store import ArchiveStore
 from .universe import months_between
@@ -95,6 +103,8 @@ class Loaded:
     # Bars the archive published off the interval grid in this range: never returned
     # as rows, always inside one of ``gaps``, listed so a run can record them.
     off_grid: list[int]
+    # The frozen holdout manifest's SHA-256, for a load inside the holdout run only.
+    holdout_manifest_sha256: str | None = None
 
 
 def _ms(moment: datetime) -> int:
@@ -107,18 +117,70 @@ def _month(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000, tz=UTC).strftime("%Y-%m")
 
 
+def rehearsal_split(manifest: Manifest, month: str) -> tuple[Manifest, Manifest, int]:
+    """The development manifest split for the holdout rehearsal (``seal rehearse``):
+    the months before ``month``, and the months from it to the end of development, which
+    stand in for the holdout, with the boundary between them. The rehearsal runs the
+    holdout run's loading path, across a boundary, on development data only."""
+    if not (isinstance(month, str) and len(month) == 7 and month <= LAST_DEVELOPMENT_MONTH):
+        raise ValueError(f"a rehearsal boundary is a development month, not {month!r}")
+    before, after = {}, {}
+    for name, entry in manifest.datasets.items():
+        early = [f for f in entry["files"] if f[0] < month]
+        late = [f for f in entry["files"] if f[0] >= month]
+        if early:
+            before[name] = {**entry, "files": early}
+        if late:
+            after[name] = {**entry, "files": late}
+    boundary = int(datetime.strptime(month, "%Y-%m").replace(tzinfo=UTC).timestamp() * 1000)
+    return (
+        Manifest(manifest.path, manifest.sha256, DEVELOPMENT, before),
+        Manifest(manifest.path, manifest.sha256, HOLDOUT, after),
+        boundary,
+    )
+
+
 class DatasetLoader:
     def __init__(
-        self, manifest: Manifest, store: ArchiveStore, integrity_audit: bool = False
+        self,
+        manifest: Manifest,
+        store: ArchiveStore,
+        integrity_audit: bool = False,
+        holdout: Manifest | None = None,
+        boundary_ms: int = HOLDOUT_START_MS,
     ) -> None:
         if manifest.period != DEVELOPMENT:
             raise HoldoutSealed(
                 f"{manifest.path.name} is the {manifest.period} manifest; holdout data "
-                "cannot be loaded until the unseal is built (G1.6)"
+                "loads only in the holdout run after the unseal (G1.6), which passes it as "
+                "the holdout manifest"
             )
+        if holdout is not None and (holdout.period != HOLDOUT or integrity_audit):
+            raise HoldoutSealed("the holdout manifest is for the holdout run alone (G1.6)")
+        if boundary_ms > HOLDOUT_START_MS or (boundary_ms != HOLDOUT_START_MS and holdout is None):
+            raise ValueError("a rehearsal boundary lies in development, with its stand-in part")
         self.manifest = manifest
         self.store = store
         self.integrity_audit = integrity_audit
+        self.holdout = holdout
+        # The holdout's start, or, in the rehearsal alone, an earlier month whose
+        # development data stands in for the holdout (``rehearsal_split``).
+        self.boundary_ms = boundary_ms
+
+    def _entry(self, series: str, reaches_holdout: bool) -> dict:
+        """The series' pins: the development manifest's, and inside the holdout run
+        the holdout manifest's beside them (a pair can be in either or both)."""
+        if not reaches_holdout:
+            return self.manifest.entry(series)
+        parts = [m.datasets[series] for m in (self.manifest, self.holdout) if series in m.datasets]
+        if not parts:
+            raise ManifestError(f"{series} is in neither the development nor the holdout manifest")
+        return {
+            "files": [f for part in parts for f in part["files"]],
+            "gaps": [g for part in parts for g in part["gaps"]],
+            "repeated": [t for part in parts for t in part.get("repeated", [])],
+            "off_grid": [t for part in parts for t in part.get("off_grid", [])],
+        }
 
     def load(
         self,
@@ -129,11 +191,18 @@ class DatasetLoader:
     ) -> Loaded:
         """Rows of ``series`` with time in [start, end), verified against the manifest."""
         start_ms, end_ms = _ms(start), _ms(end)
-        if end_ms > HOLDOUT_START_MS:
+        rehearsal = self.boundary_ms != HOLDOUT_START_MS
+        reaches_holdout = end_ms > self.boundary_ms
+        if (end_ms > HOLDOUT_START_MS and rehearsal) or (
+            reaches_holdout and (self.holdout is None or unsealed_run() is None)
+        ):
             raise HoldoutSealed(
                 f"{series}: requested until {end.isoformat()}, past the holdout start "
-                f"{HOLDOUT_START.isoformat()}; sealed until G1.6"
+                f"{HOLDOUT_START.isoformat()}; holdout rows load only inside the holdout "
+                "run the ledger ties to the unseal entry (G1.6)"
             )
+        if end_ms > HOLDOUT_END_MS:
+            raise MissingData(f"{series}: no registered data after {HOLDOUT_END.date()}")
         if start_ms >= end_ms:
             raise ValueError("start must be before end")
         if end_ms > OUT_OF_SAMPLE_START_MS and not self.integrity_audit:
@@ -144,7 +213,7 @@ class DatasetLoader:
                     "ledger entry: run through the harness (G1.5)"
                 )
         spec = DatasetSpec.from_name(series)
-        entry = self.manifest.entry(series)
+        entry = self._entry(series, reaches_holdout)
         pinned = {f[0]: f for f in entry["files"]}
 
         months = months_between(_month(start_ms), _month(end_ms - 1))
@@ -181,9 +250,10 @@ class DatasetLoader:
                 raise GapError(f"{series}: {len(gaps)} gap(s) in range, for example {shown}")
         selected = [r for r in on_grid if start_ms <= r[0] < end_ms]
         set_aside = [t for t in off_grid if start_ms <= t < end_ms]
-        if any(r[0] >= HOLDOUT_START_MS for r in selected):  # pragma: no cover
-            raise HoldoutSealed("a holdout row reached the loader's output")
-        return Loaded(series, selected, gaps, self.manifest.sha256, keys, set_aside)
+        if not reaches_holdout and any(r[0] >= HOLDOUT_START_MS for r in selected):
+            raise HoldoutSealed("a holdout row reached the loader's output")  # pragma: no cover
+        holdout_sha = self.holdout.sha256 if reaches_holdout else None
+        return Loaded(series, selected, gaps, self.manifest.sha256, keys, set_aside, holdout_sha)
 
     @staticmethod
     def _range_gaps(

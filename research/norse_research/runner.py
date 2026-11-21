@@ -1,7 +1,9 @@
 """Runs one pinned strategy in a fresh interpreter (G1.5; security review N1, N4, N9).
 
-The harness starts this module as ``python -I -B -X pycache_prefix=<an empty folder>``
-with an empty environment, after the run's open entry is pushed, in a folder holding
+The harness starts this module as ``python -s -P -B -X pycache_prefix=<an empty folder>``
+with an environment holding only ``PYTHONHASHSEED=0``, so that string hashing, and with
+it the order of a set of names, is the same on every run (G1.6 security review round 2,
+N3), after the run's open entry is pushed, in a folder holding
 only the files committed at HEAD that the run needs: this package, the hypothesis's
 strategy paths and the registered manifest. So the code that computes a result is the
 committed code, executed from its source (never a cached ``.pyc``), in a process no
@@ -16,6 +18,15 @@ state through frames or the garbage collector can disable it (security review ro
 R1), so it is not a sandbox, and the control against a deliberate escape is that the
 code is committed, recorded in the ledger and reviewed (threat T13). The result goes
 back over standard output as one JSON line, the last.
+
+For the holdout run alone (G1.6), the payload also names the committed holdout
+manifest and the unseal entry: the loader is then given the holdout manifest, its
+files join the readable set, and the strategy runs inside the unsealed run, so its
+loads may reach 2026. The harness names the unseal only after it has pushed the run's
+open entry and found the unseal entry on the remote's ledger. For the rehearsal
+(``seal rehearse``), the payload names a development month instead: the development
+manifest is split there, its later months stand in for the holdout, and the same
+loading path runs across that boundary on development data only.
 """
 
 from __future__ import annotations
@@ -25,6 +36,7 @@ import os
 import sys
 import types
 from collections.abc import Mapping
+from contextlib import nullcontext
 from pathlib import Path
 from types import MappingProxyType
 
@@ -97,23 +109,32 @@ class DataView:
 
 def run(payload: dict) -> list:
     from .formats import DatasetSpec
-    from .loader import DatasetLoader, inside_ledger_entry
+    from .loader import DatasetLoader, inside_ledger_entry, rehearsal_split
     from .manifest import Manifest
+    from .periods import HOLDOUT_START_MS, inside_unsealed_run
     from .store import ArchiveStore
 
     code_root = payload["code_root"]
     files: set[str] = set()
     loader = None
+    unseal = payload.get("unseal")
+    rehearsal = payload.get("rehearsal")  # a development month: ``seal rehearse`` only
     if payload.get("store_root"):
         manifest = Manifest.load(Path(code_root) / payload["manifest"])
+        holdout, boundary = None, HOLDOUT_START_MS
+        if rehearsal:
+            manifest, holdout, boundary = rehearsal_split(manifest, rehearsal)
+        elif unseal and payload.get("holdout_manifest"):
+            holdout = Manifest.load(Path(code_root) / payload["holdout_manifest"])
         store = ArchiveStore(Path(payload["store_root"]))
-        for name, entry in manifest.datasets.items():
-            spec = DatasetSpec.from_name(name)
-            for month, *_ in entry["files"]:
-                path = store.path(spec.key(month))
-                files.add(os.path.normpath(str(path)))
-                files.add(os.path.normpath(str(path) + ".CHECKSUM"))
-        loader = DatasetLoader(manifest, store)
+        for pinned in (manifest, holdout):
+            for name, entry in (pinned.datasets.items() if pinned is not None else ()):
+                spec = DatasetSpec.from_name(name)
+                for month, *_ in entry["files"]:
+                    path = store.path(spec.key(month))
+                    files.add(os.path.normpath(str(path)))
+                    files.add(os.path.normpath(str(path) + ".CHECKSUM"))
+        loader = DatasetLoader(manifest, store, holdout=holdout, boundary_ms=boundary)
     module_file = os.path.join(code_root, payload["module_path"])
     source = Path(module_file).read_bytes()
     roots = [code_root, payload["pycache"], sys.prefix, sys.base_prefix, sys.exec_prefix,
@@ -124,7 +145,8 @@ def run(payload: dict) -> list:
     module.__file__ = module_file
     module.__package__ = payload["module_name"].rpartition(".")[0]
     sys.modules[payload["module_name"]] = module
-    with inside_ledger_entry(payload["entry"]):
+    sealed = inside_unsealed_run(unseal) if unseal else nullcontext()
+    with inside_ledger_entry(payload["entry"]), sealed:
         exec(compile(source, module_file, "exec"), module.__dict__)
         function = module.__dict__[payload["function"]]
         series = function(_freeze(payload["configuration"]), DataView(loader))

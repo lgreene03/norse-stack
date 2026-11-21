@@ -1,9 +1,9 @@
 """The threat model's adversarial tests exist and run (G1.5, threat model T28).
 
 docs/research/ledger-threat-model.md names, under "Adversarial test inventory", the
-tests G1.5 and G1.6 implement. For G1.5, which this package delivers, and for every
-goal docs/ITERATION_GOALS.md marks done, each named test must exist, be collected by
-pytest, and be neither skipped nor expected to fail. The two sensitivity tests that
+tests G1.5 and G1.6 implement. For G1.5 and G1.6, which this package delivers, and for
+every goal docs/ITERATION_GOALS.md marks done, each named test must exist, be collected
+by pytest, and be neither skipped nor expected to fail. The two sensitivity tests that
 section 15, item 11 of docs/PREREGISTRATION.md assigns to G1.5 are held to the same
 rule, and each must have run and passed, so a skip by a fixture or a hook, or a
 deselection, fails it too. A pull request that removes a test can also edit the table;
@@ -23,7 +23,7 @@ RESEARCH = TESTS.parent
 DOCS = RESEARCH.parent / "docs"
 THREAT_MODEL = DOCS / "research" / "ledger-threat-model.md"
 GOALS = DOCS / "ITERATION_GOALS.md"
-ALWAYS = {"G1.5"}  # delivered here, whatever the register says yet
+ALWAYS = {"G1.5", "G1.6"}  # delivered here, whatever the register says yet
 PREREGISTRATION_TESTS = {
     "G1.5": {
         "test_sensitivity_run_before_the_freeze_is_refused",
@@ -136,7 +136,8 @@ def run_and_report(tests: Path, rootdir: Path, names: set[str]) -> dict[str, set
 
 def test_every_threat_model_test_exists_and_is_not_skipped():
     tables = inventory()
-    assert len(tables.get("G1.5", ())) >= 50 and len(tables.get("G1.6", ())) >= 20
+    # G1.6's table holds 22 names since security review round 2 added check-key's test.
+    assert len(tables.get("G1.5", ())) >= 50 and len(tables.get("G1.6", ())) >= 22
     enforced = ALWAYS | (done_goals() & set(tables))
     required = set()
     for goal in enforced:

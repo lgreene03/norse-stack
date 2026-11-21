@@ -9,6 +9,7 @@ import random
 
 import pytest
 from norse_research.benchmark import (
+    beta_matched,
     equal_weight_buy_and_hold,
     excess_returns,
     volatility_matched,
@@ -67,6 +68,29 @@ def test_volatility_matching_by_hand():
     matched = volatility_matched(benchmark, strategy)
     assert matched == pytest.approx(strategy)
     assert excess_returns(strategy, matched) == pytest.approx([0.0] * 4, abs=1e-15)
+
+
+def test_beta_matching_by_hand():
+    # D15 (H2's DEV-2; PREREGISTRATION.md section 15, item 7). Benchmark 1, 2, 3, 4
+    # (mean 2.5), strategy 2, 4, 5, 9 (mean 5): the cross products of deviations sum to
+    # (-1.5)(-3) + (-0.5)(-1) + (0.5)(0) + (1.5)(4) = 11 and the benchmark's squared
+    # deviations to 5, so beta = 2.2 and the excess is s - 2.2 b.
+    benchmark, strategy = [1.0, 2.0, 3.0, 4.0], [2.0, 4.0, 5.0, 9.0]
+    assert beta_matched(benchmark, strategy) == pytest.approx([2.2, 4.4, 6.6, 8.8])
+    excess = excess_returns(strategy, beta_matched(benchmark, strategy))
+    assert excess == pytest.approx([-0.2, -0.4, -1.6, 0.2])
+    # The intercept is in the regression: a constant added to the strategy leaves beta.
+    shifted = [s + 0.5 for s in strategy]
+    assert beta_matched(benchmark, shifted) == pytest.approx(beta_matched(benchmark, strategy))
+    # A strategy that is a multiple of the benchmark has that beta and no excess.
+    tripled = [3 * b for b in benchmark]
+    assert excess_returns(tripled, beta_matched(benchmark, tripled)) == pytest.approx([0.0] * 4)
+    # A market-neutral strategy (uncorrelated with the benchmark) has beta 0.
+    assert beta_matched([1.0, -1.0, 1.0, -1.0], [1.0, 1.0, -1.0, -1.0]) == [0.0] * 4
+    with pytest.raises(ValueError, match="no variance"):
+        beta_matched([0.01, 0.01, 0.01], [0.0, 0.01, 0.02])
+    with pytest.raises(ValueError, match="same days"):
+        beta_matched([0.01, 0.02], [0.01])
 
 
 def market(rng, days, drift=0.0015, vol=0.03):
