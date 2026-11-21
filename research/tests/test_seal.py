@@ -774,8 +774,9 @@ def test_no_candidate_means_no_unseal(tmp_path, monkeypatch):
     world = a_grid_world(tmp_path, monkeypatch, skilled=None)
     try:
         issued_ledger = gate.gate_ledger(world.ledger)
-        assert [gate.development(issued_ledger, h) for h in ("H1", "H2")][1] is None
-        assert not gate.development(issued_ledger, "H1").passes
+        judged = [gate.development(issued_ledger, h) for h in ("H1", "H2")]
+        assert all(j is not None and not j.passes for j in judged)  # both grids, no pass
+        assert gate.unseal_early_error(issued_ledger) is None
         assert gate.holdout_candidate(issued_ledger) is None
         read = key()
         with pytest.raises(SealRefused, match="no holdout candidate"):
