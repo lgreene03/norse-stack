@@ -107,8 +107,9 @@ ratio was above zero and no more than 1.645 standard errors below its developmen
 development criteria, but either the other hypothesis's candidate ranked higher and took the
 holdout, or the other hypothesis's grid was neither complete nor out of budget when the verdict
 was given, so no unseal could happen and the holdout stayed sealed (decision D23). It is not a
-pass, and under this registration it can never be tested or become one, because the holdout
-opens only once both grids are complete or exhausted, and then to one candidate only. **FAIL**: its candidate missed at least one development
+pass, it was not tested on the holdout in this iteration, and it cannot become one in it, because
+the holdout opens only once both grids are complete or exhausted, and then to one candidate
+only. **FAIL**: its candidate missed at least one development
 criterion; or it was the holdout candidate and HOLD-1 did not hold, which includes a holdout
 run that never returned a result; or its own trial entries and the reserve ran out before it
 could pass. **NOT RUN**: when development closed, not every one of its registered

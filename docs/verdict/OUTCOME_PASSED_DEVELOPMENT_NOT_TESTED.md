@@ -3,8 +3,8 @@
 **H1, dated-universe trend: {{H1_VERDICT}}. H2, funding carry: {{H2_VERDICT}}.**
 
 No hypothesis passed. {{OTHER_HYPOTHESIS}}'s candidate, {{OTHER_CANDIDATE}}, met all five
-development criteria registered before any trial ran, but it never read the holdout, and under
-this registration it never will. The holdout table below shows which of two reasons applies. If
+development criteria registered before any trial ran, but it was not tested on the holdout in
+this iteration. The holdout table below shows which of two reasons applies. If
 it names a holdout candidate and an unseal, both hypotheses passed development, and that
 candidate ranked higher on the development deflated Sharpe ratio, compared unrounded with ties
 going to H1, so the registered rule gave it the holdout, which is open to one candidate only;
@@ -121,8 +121,9 @@ ratio was above zero and no more than 1.645 standard errors below its developmen
 development criteria, but either the other hypothesis's candidate ranked higher and took the
 holdout, or the other hypothesis's grid was neither complete nor out of budget when the verdict
 was given, so no unseal could happen and the holdout stayed sealed (decision D23). It is not a
-pass, and under this registration it can never be tested or become one, because the holdout
-opens only once both grids are complete or exhausted, and then to one candidate only. **FAIL**: its candidate missed at least one development
+pass, it was not tested on the holdout in this iteration, and it cannot become one in it, because
+the holdout opens only once both grids are complete or exhausted, and then to one candidate
+only. **FAIL**: its candidate missed at least one development
 criterion; or it was the holdout candidate and HOLD-1 did not hold, which includes a holdout
 run that never returned a result; or its own trial entries and the reserve ran out before it
 could pass. **NOT RUN**: when development closed, not every one of its registered
@@ -176,7 +177,7 @@ does not settle it.
 
 No hypothesis passed, so the claim that Norse trades with an edge is retired here, in writing,
 as it would be on a fail. The kill criteria stop strategy search when both hypotheses fail;
-{{OTHER_HYPOTHESIS}} did not fail, but nothing left in this registration can test it. The only
+{{OTHER_HYPOTHESIS}} did not fail, but nothing left in this iteration can test it. The only
 evidence that could is data no one has yet seen, through a new pre-registration with a holdout
 of its own or a forward paper test registered as a goal of its own. Whether to do either is the
 owner's decision when the next iteration's goal is drafted, and its result would be a new

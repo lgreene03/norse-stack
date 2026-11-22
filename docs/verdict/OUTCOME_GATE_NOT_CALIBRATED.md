@@ -11,7 +11,7 @@ of the 1,000 ledgers in each of the four such families. It did not pass: either 
 table below missed its mark, or the calibration did not complete before the verdict, and the
 table shows which. The gate had already been revised once, before any trial, after a first
 calibration of an earlier form of it (decision D22), and the registration rules out revising it
-again on the strength of this result (decision D24). The report gives the method, the seeds,
+again in this iteration (decision D24). The report gives the method, the seeds,
 the code and the figures at 1.0 and 1.5.
 
 | Calibration (G1.7), generated on {{GENERATED_AT}} | |
