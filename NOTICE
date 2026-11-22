@@ -1,0 +1,46 @@
+Norse Stack
+Copyright the Norse Stack authors.
+
+The code in this repository is licensed under the Apache License, Version 2.0 (see
+LICENSE). The files listed below are not. They are Binance market data, or files
+computed from it, and stay under the licence Binance publishes them under.
+
+Binance Vision data
+-------------------
+
+Binance market data in this repository is from Binance Vision (data.binance.vision),
+provided by Binance under the Binance Vision Dataset Terms, version 1.0, and the
+Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International Public License
+(https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode.en). These files are
+offered under CC BY-NC-SA 4.0, not under Apache-2.0, and may be used only for
+non-commercial purposes:
+
+  research/tests/fixtures/BTCUSDT-15m-2026-11-09.zip
+  research/tests/fixtures/BTCUSDT-15m-2026-11-09.zip.CHECKSUM
+  research/tests/fixtures/BTCUSDT-4h-2026-11-09.zip
+  research/tests/fixtures/BTCUSDT-4h-2026-11-09.zip.CHECKSUM
+      Unmodified archive files and their checksums, downloaded on 2026-11-11.
+
+  research/manifests/binance-vision-development.json
+  research/manifests/binance-vision-holdout.json
+  research/coverage/series-coverage.json
+  research/coverage/universe-candidates.json
+      Computed from the archive: file hashes, row counts, bar times and volume ranks.
+      Whether these are derivative works is unclear; they are offered under the same
+      licence so that the question does not need answering.
+
+Binance market-data REST responses
+----------------------------------
+
+  research/tests/fixtures/rest-BTCUSDT-15m-2026-11-09.json
+  research/tests/fixtures/rest-BTCUSDT-4h-2026-11-09.json
+  research/manifests/rest-differences.json
+
+These are, or are computed from, responses from data-api.binance.vision. They are
+offered under CC BY-NC-SA 4.0 on the reading that this host is one of the "associated
+endpoints" the Binance Vision Dataset Terms cover. If it is not, the Binance Terms of
+Use govern them, and they will be replaced with synthetic fixtures (DATA_LICENCES.md,
+finding 3).
+
+Binance does not endorse this project. See DATA_LICENCES.md for every data source the
+stack reads and the terms that govern it.
