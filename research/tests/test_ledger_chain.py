@@ -255,3 +255,57 @@ def test_n_counts_entries_not_distinct_configurations():
     assert len({e.body["configuration_sha256"] for e in trials}) == 3
     assert trials[0].body["configuration_sha256"] == trials[1].body["configuration_sha256"]
     assert trial_count(entries) == 4
+
+
+def with_crossed_gaps(book: Book, cid: str, values, gaps) -> None:
+    """A result entry for ``cid`` whose crossed gaps are ``gaps``, chained as the harness
+    chains it."""
+    opened = book.open(cid)
+    body = {k: v for k, v in book.result(opened, values).body.items()
+            if k not in ("seq", "prev", "time")}
+    book.entries.pop()
+    book.add({**body, "crossed_gaps": gaps})
+
+
+GAP = ["spot/klines/GUSDT/4h", "2025-12-04 08:00", "2025-12-04 16:00", 1]
+
+
+def test_replay_accepts_crossed_gaps_only_in_the_shape_the_harness_writes():
+    """Section 5, Gaps: a run's ledger entry lists the recorded gaps it crossed. The
+    harness checks them against the registered manifest; replay checks the shape."""
+    book = Book()
+    later = ["spot/klines/XUSDT/1d", "2025-03-01 00:00", "2025-03-03 00:00", 1]
+    with_crossed_gaps(book, "H1-01", lcg_returns(1, N_H1), [GAP, later])
+    assert parse_ledger(book.data)[-1].body["crossed_gaps"] == [GAP, later]
+    malformed = [
+        ({"gap": GAP}, "is not a list"),
+        ([GAP[:3]], "not \\[series, after, before, missing\\]"),
+        ([["not/a/series", *GAP[1:]]], "not \\[series"),
+        ([[GAP[0], "2025-12-04T08:00", *GAP[2:]]], "not \\[series"),
+        ([[GAP[0], GAP[2], GAP[1], 1]], "not \\[series"),
+        ([[*GAP[:3], -1]], "not \\[series"),
+        ([[*GAP[:3], True]], "not \\[series"),
+        ([[*GAP[:3], "1"]], "not \\[series"),
+        ([later, GAP], "not sorted without repeats"),
+        ([GAP, GAP], "not sorted without repeats"),
+    ]
+    for gaps, message in malformed:
+        bad = Book()
+        with_crossed_gaps(bad, "H1-01", lcg_returns(1, N_H1), gaps)
+        with pytest.raises(VerificationError, match=message):
+            parse_ledger(bad.data)
+    failed = Book()
+    with_crossed_gaps(failed, "H1-01", None, [GAP])
+    with pytest.raises(VerificationError, match="a failed run lists no crossed gaps"):
+        parse_ledger(failed.data)
+
+
+def test_replay_refuses_a_genesis_whose_harness_paths_leave_part_of_the_package_out():
+    """Security review round 3: the harness digest covers the whole package, the
+    simulation engine strategies import included."""
+    parts = {"harness": ["research/norse_research/sim"], "H1": ["strategies/h1"],
+             "H2": ["strategies/h2"]}
+    with pytest.raises(VerificationError, match="does not cover all of research/norse_research"):
+        parse_ledger(Book(tree_paths=parts).data)
+    wider = {**parts, "harness": ["research"]}
+    assert genesis_of(parse_ledger(Book(tree_paths=wider).data)) is not None

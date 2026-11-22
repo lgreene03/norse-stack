@@ -84,7 +84,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from . import seal
 from .canonical import sha256_hex
@@ -165,6 +165,14 @@ class UnmanifestedData(RunRefused):
 
 class StrategyFailed(RuntimeError):
     """The strategy process returned no result."""
+
+
+class StrategyOutput(NamedTuple):
+    """What the strategy process reported: its daily returns, and the recorded gaps its
+    loads crossed, as the runner's loader collected them."""
+
+    returns: list
+    crossed_gaps: Any
 
 
 @dataclass(frozen=True)
@@ -256,8 +264,9 @@ def _run_strategy(
     store: ArchiveStore | None,
     unsealed: tuple[str, str] | None = None,
     rehearsal: str | None = None,
-) -> list:
-    """The strategy's daily returns, computed in a fresh ``python -s -P -B`` process
+) -> StrategyOutput:
+    """The strategy's daily returns, and the recorded gaps its loads crossed (section 5,
+    Gaps), computed in a fresh ``python -s -P -B`` process
     whose environment holds only ``PYTHONHASHSEED=0``, from the files committed at
     ``head``. ``unsealed`` is the
     holdout run's alone: the committed holdout manifest's path and the unseal entry,
@@ -304,7 +313,28 @@ def _run_strategy(
     result = json.loads(lines[-1][len(RESULT_PREFIX):])
     if not result.get("ok"):
         raise StrategyFailed(result.get("error", "the strategy failed"))
-    return result["returns"]
+    return StrategyOutput(result["returns"], result.get("crossed_gaps"))
+
+
+def crossed_gaps(reported: Any, manifests: Sequence[Manifest]) -> list[list]:
+    """The gaps the runner reports a run crossed, for its result entry (section 5, Gaps:
+    "a gap the committed manifest records is crossed and listed in the run's ledger
+    entry"). Each must be a gap one of the registered ``manifests`` records for that
+    series; anything else fails the run rather than reach the ledger."""
+    if not isinstance(reported, list):
+        raise StrategyFailed("the strategy process reported no crossed gaps")
+    gaps = set()
+    for gap in reported:
+        recorded = (
+            isinstance(gap, list) and len(gap) == 4 and isinstance(gap[0], str)
+            and any(gap[0] in m.datasets and gap[1:] in m.datasets[gap[0]]["gaps"]
+                    for m in manifests)
+        )
+        if not recorded:
+            raise StrategyFailed(f"the run reported a crossed gap no registered manifest records: "
+                                 f"{str(gap)[:200]}")
+        gaps.add(tuple(gap))
+    return [list(g) for g in sorted(gaps)]
 
 
 def public_error(exc: BaseException, repo: Path | None = None, store=None) -> str:
@@ -623,19 +653,21 @@ def run(
     error = None
     files: dict[str, bytes] = {}
     pin = genesis.body["strategies"][cid]
+    crossed: list[list] = []
     try:
-        returned = _run_strategy(
+        output = _run_strategy(
             git, head, pin, genesis.body["tree_paths"][resolved.hypothesis], manifest_rel,
             resolved.configuration, opened.hash, store,
         )
-        pairs, summary = _summary(returned, resolved.window)
+        pairs, summary = _summary(output.returns, resolved.window)
+        crossed = crossed_gaps(output.crossed_gaps, [manifest])
         data = encode_returns(pairs)
         digest = sha256_hex(data)
         files[returns_path(digest)] = data
         status = COMPLETED
     except Exception as exc:  # a failed run is still a ledgered run
         error = public_error(exc, repo, store)
-        status, summary, digest = FAILED, {"error": error}, None
+        status, summary, digest, crossed = FAILED, {"error": error}, None, []
     closed = ledger.append(
         {
             "type": RESULT,
@@ -649,6 +681,7 @@ def run(
             "result": summary,
             "result_sha256": digest,
             "returns_path": returns_path(digest) if digest else None,
+            "crossed_gaps": crossed,
         },
         files,
         require_in_step=False,
@@ -855,13 +888,14 @@ def _run_holdout_locked(
     files: dict[str, bytes] = {}
     pin = genesis.body["strategies"][cid]
     unsealed = False
+    crossed: list[list] = []
     try:
         seal.require_unseal_on_remote(ledger, unseal.hash, opened.hash)
         committed = [(d, float(v)) for d, v in snapshot.returns_of(candidate_result)]
         reproduced = _run_strategy(
             git, head, pin, paths[h], manifest_rel, candidate.body["configuration"],
             opened.hash, store,
-        )
+        ).returns
         if [(str(d), float(v)) for d, v in reproduced] != committed:
             raise HoldoutCheckFailed(
                 "the development returns do not reproduce the candidate's committed series, so "
@@ -878,7 +912,7 @@ def _run_holdout_locked(
         unsealed = True
         outcome = FAILED
         try:
-            returned = _run_strategy(
+            output = _run_strategy(
                 git, head, pin, paths[h], manifest_rel, resolved.configuration, opened.hash,
                 store, unsealed=(seal.HOLDOUT_MANIFEST, unseal.hash),
             )
@@ -890,14 +924,15 @@ def _run_holdout_locked(
                 require_in_step=False,
                 attempts=3,
             )
-        pairs, summary = _holdout_summary(returned, resolved.window, committed)
+        pairs, summary = _holdout_summary(output.returns, resolved.window, committed)
+        crossed = crossed_gaps(output.crossed_gaps, [manifest, holdout_manifest])
         data = encode_returns(pairs)
         digest = sha256_hex(data)
         files[returns_path(digest)] = data
         status = COMPLETED
     except Exception as exc:  # a failed attempt is still a ledgered attempt (item 6)
         error = _holdout_failure(exc, unsealed, repo, store)
-        status, summary, digest = FAILED, {"error": error}, None
+        status, summary, digest, crossed = FAILED, {"error": error}, None, []
     closed = ledger.append(
         {
             "type": RESULT,
@@ -911,6 +946,7 @@ def _run_holdout_locked(
             "result": summary,
             "result_sha256": digest,
             "returns_path": returns_path(digest) if digest else None,
+            "crossed_gaps": crossed,
         },
         files,
         require_in_step=False,
@@ -983,7 +1019,7 @@ def rehearse_holdout(
             git, head, genesis.body["strategies"][cid], paths[h], manifest_rel,
             candidate.open_entry.body["configuration"], REHEARSAL_TOKEN, store,
             rehearsal=boundary,
-        )
+        ).returns
     except StrategyFailed as exc:
         raise RunRefused(
             f"the rehearsal failed ({public_error(exc, repo, store)}); fix data loading or the "

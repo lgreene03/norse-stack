@@ -115,6 +115,64 @@ def test_every_run_appends_an_entry_holding_the_fields_g15_names(world):
     assert opened.body["strategy"] == world.pin("H1-01")
     assert set(opened.body["trees"]) == {"harness", "H1", "H2"}
     assert opened.body["environment"]["git"].startswith("git version")
+    assert closed.body["crossed_gaps"] == []  # the run's loads crossed no recorded gap
+
+
+def test_a_result_entry_lists_the_recorded_gaps_the_run_crossed(tmp_path, monkeypatch):
+    """Section 5, Gaps: "a gap the committed manifest records is crossed and listed in
+    the run's ledger entry" (quant review 1, finding 4). The strategy also reads the
+    series' coverage through its DataView, from the manifest (finding 3)."""
+    dropped = int(datetime(2025, 12, 10, tzinfo=UTC).timestamp()) * 1000
+    world = a_world(tmp_path, monkeypatch, behaviours={"H1-01": "crosses_gap"}, drop={dropped})
+    try:
+        record = run(world, "H1-01")
+        assert record.status == "completed", record.error
+        manifest = Manifest.load(world.repo / "research/manifests/binance-vision-development.json")
+        (gap,) = manifest.datasets["spot/klines/XUSDT/1d"]["gaps"]
+        assert gap == ["2025-12-09 00:00", "2025-12-11 00:00", 1]
+        result = remote_entries(world)[-1]
+        assert result.hash == record.result_entry.hash
+        assert result.body["crossed_gaps"] == [["spot/klines/XUSDT/1d", *gap]]
+    finally:
+        world.close()
+
+
+def test_the_harness_lists_only_gaps_a_registered_manifest_records(tmp_path):
+    """The runner's report reaches the ledger only as gaps the registered manifests
+    record; anything else fails the run. The holdout run passes both manifests."""
+    from norse_research.formats import DatasetSpec
+    from norse_research.manifest import build, write
+    from norse_research.periods import DEVELOPMENT, HOLDOUT
+    from norse_research.store import ArchiveStore
+    from synthetic_store import make_series, month_times
+
+    store = ArchiveStore(tmp_path / "mirror")
+    name = "spot/klines/XUSDT/1d"
+    times = {m: month_times(DatasetSpec.from_name(name), m)
+             for m in ("2025-12", "2026-01")}
+    make_series(store, name, "2025-11", "2026-02", drop={times["2025-12"][9], times["2026-01"][4]})
+    manifests = []
+    for period in (DEVELOPMENT, HOLDOUT):
+        write(build(store, period, [(DatasetSpec.from_name(name),
+                                     ["2025-11", "2025-12"] if period == DEVELOPMENT
+                                     else ["2026-01", "2026-02"])]), tmp_path / period)
+        manifests.append(Manifest.load(tmp_path / period))
+    development, holdout = manifests
+    (dev_gap,) = development.datasets[name]["gaps"]
+    (held_gap,) = holdout.datasets[name]["gaps"]
+    assert harness.crossed_gaps([], [development]) == []
+    assert harness.crossed_gaps([[name, *dev_gap], [name, *dev_gap]], [development]) == [
+        [name, *dev_gap]]
+    assert harness.crossed_gaps([[name, *held_gap], [name, *dev_gap]],
+                                [development, holdout]) == [[name, *dev_gap], [name, *held_gap]]
+    with pytest.raises(harness.StrategyFailed, match="reported no crossed gaps"):
+        harness.crossed_gaps(None, [development])  # a runner that reports nothing
+    for bad in ([name, *held_gap],  # recorded, but only in the holdout manifest
+                [name, dev_gap[0], dev_gap[1], dev_gap[2] + 1],
+                [name, dev_gap[0], "2025-12-12 00:00", dev_gap[2]],
+                ["spot/klines/YUSDT/1d", *dev_gap], [name, *dev_gap[:2]], name, None):
+        with pytest.raises(harness.StrategyFailed, match="no registered manifest records"):
+            harness.crossed_gaps([bad], [development])
 
 
 # --- T1: every run counts --------------------------------------------------------------
@@ -547,6 +605,172 @@ def test_strategy_modules_import_only_the_allowlist(world, calls):
     world.push()
     with pytest.raises(RunRefused, match=r"strategies/h1/helper\.py reaches outside"):
         run(world)
+    assert calls == []
+
+
+def test_a_strategy_cannot_change_or_reach_behind_the_code_it_imports():
+    """Security review round 3, E1 and E2, from its probe (probe_pr61_sources.py). With
+    the engine allowlisted, one line in a hypothesis file could rebind its fill or cost
+    path for that run while the ledger certified the registered rules (E1); and
+    ``import norse_research.<x>`` binds the package root, which reaches every module the
+    runner has imported, the loader, the store and the runner itself (E2)."""
+
+    def problems(source):
+        return disallowed_imports(source, "strategies.h1.probe", False, ["strategies/h1"])
+
+    refused = {
+        "E1": "from norse_research.sim import execution, model\n"
+              "execution._apply = lambda book, costs, unit, rows, scale: []\n"
+              "model.Costs.total = 0.0\n",
+        "E2": "import norse_research.sim\n"
+              "def run(config, data):\n"
+              "    norse_research.periods.inside_unsealed_run('e' * 64)\n"
+              "    norse_research.store.ArchiveStore('x').read('k', holdout_audit=True)\n"
+              "    norse_research.runner.json.dumps = None\n",
+        "E3": "import norse_research.formats\nnorse_research.loader.DatasetLoader\n",
+        "dotted import of a sim submodule": "import norse_research.sim.execution\n",
+        "an alias of the package": "import norse_research.sim as sim\n",
+        "sys through the root": "import norse_research.sim\nnorse_research.runner.sys\n",
+        "deletion": "from norse_research.sim import execution\ndel execution.execute_bar\n",
+        "augmented assignment": "from norse_research.sim import model\nmodel.FEE_BPS += 1\n",
+        "an item of an imported table":
+            "from norse_research.sim import model\nmodel.TABLE['x'] = 1\n",
+        "an imported class's attribute": "from norse_research.sim import Costs\nCosts.fee = 0\n",
+        "a private attribute read": "from norse_research.sim import execution\n"
+                                    "f = execution._apply\n",
+        "a subclass of an engine class": "from norse_research.sim import Book\n"
+                                         "class Free(Book):\n    pass\n",
+        "a standard module changed": "import math\nmath.pi = 3\n",
+    }
+    for case, source in refused.items():
+        assert problems(source), case
+    def lines(source):
+        return {int(p.split(":")[0].split()[1]) for p in problems(source)}
+
+    assert lines(refused["E1"]) == {2, 3}
+    assert lines(refused["E2"]) == {1, 3, 4, 5}  # the import and every reach through it
+    # The engine's public surface is the point of allowlisting it (E4, informational);
+    # changing what a strategy owns is untouched.
+    accepted = (
+        "from norse_research.sim import targeting\ntargeting.rank_month_ends\n",
+        "from norse_research.sim import Book\n"
+        "def run(config, data):\n"
+        "    book = Book(cash=0.0)\n    book.cash = 1.0\n    weights = {}\n"
+        "    weights['X'] = 0.5\n    del weights['X']\n    return []\n",
+        "import math\n\n\nclass Mine:\n    def __init__(self):\n        self.x = math.sqrt(4.0)\n",
+    )
+    for source in accepted:
+        assert problems(source) == [], source
+
+
+def test_private_state_is_reached_only_through_self_or_cls():
+    """Security review of PR 61, the residual stated in round 2: a ``BookView`` keeps
+    the engine's live book behind ``_book``, and ``view._book.cash = 1e9`` changed it in
+    a sealed run. A private attribute is now read or written only on ``self`` or
+    ``cls``, which are bound only as a method's first parameter."""
+
+    def problems(source):
+        return disallowed_imports(source, "strategies.h1.probe", False, ["strategies/h1"])
+
+    decide = "class S:\n    def decide(self, history, book):\n"
+    refused = {
+        "the residual itself": decide + "        book._book.cash = 1e9\n",
+        "a read through a second name": decide + "        v = book\n        return v._book\n",
+        "the rows behind a series view":
+            decide + "        history.series('x')._rows[0] = None\n",
+        "self rebound": decide + "        self = book\n        self._book.cash = 1e9\n",
+        "self through a walrus": decide + "        (self := book)._book\n",
+        "self as a for target": decide + "        for self in (book,):\n            self._book\n",
+        "self as a second parameter": "class S:\n    def m(this, self):\n        self._book\n",
+        "self in a module function": "def f(self):\n    self._book.cash = 1e9\n",
+        "self in a lambda": "f = lambda self: self._book\n",
+        "self in a static method": "class S:\n    @staticmethod\n    def m(self):\n"
+                                   "        self._book\n",
+        "self imported": "from norse_research.sim import BookView as self\nself._x\n",
+        "self caught": "try:\n    pass\nexcept ValueError as self:\n    self._x\n",
+        "self matched": decide + "        match book:\n            case self:\n"
+                                 "                self._book\n",
+        "self declared global": "def f():\n    global self\n",
+        "an attribute of self's attribute": decide + "        self._view._book.cash = 1e9\n",
+        "a private name imported from the engine":
+            "from norse_research.formats import _engine_sealed\n",
+        "a module's builtins imported by name":
+            "from collections import __builtins__ as b\nb['exec']('1')\n",
+        "a dunder imported from the strategy's own package":
+            "from . import __builtins__ as b\n",
+    }
+    for case, source in refused.items():
+        assert problems(source), case
+    accepted = (
+        "class S:\n    def __init__(self):\n        self._x = 1\n\n"
+        "    def decide(self, history, book):\n        self._x += 1\n"
+        "        del self._x\n        return None\n\n"
+        "    @classmethod\n    def build(cls):\n        cls._made = True\n        return cls()\n",
+        "from norse_research.formats import Kline\n"
+        "row = Kline(0, 1.0, 1.0, 1.0, 1.0, 2.0, 1, 2.0, 1, 1.0, 1.0)\n"
+        "fields = Kline._fields\nrow = row._replace(close=2.0)\n",
+        "from .helpers import _shared\n",
+    )
+    for source in accepted:
+        assert problems(source) == [], source
+
+
+def test_the_private_rule_follows_scope_and_a_method_is_not_reached_through_its_class():
+    """Security review of PR 61, the rule at its root. A private attribute is allowed
+    only on the first parameter of the method it sits in, a method defined directly in
+    a class body; and ``C.m(x)`` would bind ``self`` to ``x``, so a class's own methods
+    are not reached through the class."""
+
+    def problems(source):
+        return disallowed_imports(source, "strategies.h1.probe", False, ["strategies/h1"])
+
+    method = "class C:\n    def m(self):\n        return self._x\n\n\n"
+    refused = {
+        "a module function's parameter named self": "def f(self):\n    return self._x\n",
+        "a function nested in a function, not in a class body":
+            "def outer():\n    def m(self):\n        return self._x\n    return m\n",
+        "a private attribute at module level": "self = None\nself._x\n",
+        "C.m(x), the probe's shape": method + "C.m(object())\n",
+        "a method referenced through its class": method + "f = C.m\n",
+        "a method mapped through its class": method + "list(map(C.m, [object()]))\n",
+        "an inherited method through a subclass":
+            method + "class D(C):\n    pass\n\n\nD.m(object())\n",
+        "a method through its class from inside another method":
+            method + "class E:\n    def go(self, view):\n        return C.m(view)\n",
+    }
+    for case, source in refused.items():
+        assert problems(source), case
+    assert any("reached through class C" in p for p in problems(method + "C.m(object())\n"))
+    accepted = (
+        "class C:\n    LIMIT = 3\n\n    def __init__(self):\n        self._seen = []\n\n"
+        "    def m(self):\n        keep = lambda: self._seen\n"
+        "        return [self._seen for _ in range(C.LIMIT)], keep()\n\n"
+        "    @classmethod\n    def build(cls):\n        cls._made = True\n        return cls()\n\n"
+        "    @staticmethod\n    def helper(x):\n        return x\n\n\n"
+        "c = C.build()\nc.m()\nC.helper(1)\nC().m()\n",
+    )
+    for source in accepted:
+        assert problems(source) == [], source
+
+
+def test_a_forbidden_builtin_is_refused_by_name_before_anything_runs(world, calls):
+    """Security review of PR 61, round 2, B1 and B6: a forbidden builtin bound to
+    another name would undo the other rules (``s = setattr`` redoes E1; ``imp =
+    __import__`` passes the import allowlist). Every other variant of that review is in
+    test_sim_sealed.py, against the source check and the sealed engine in the runner."""
+    world.write("strategies/h1/helper.py", (
+        "from norse_research.sim import execution\n"
+        "s = setattr\n"
+        "s(execution, 'execute_bar', None)\n"
+        "imp = __import__\n"
+        "imp('o' + 's').getcwd\n"
+    ))
+    world.commit("a helper that aliases setattr and __import__")
+    world.push()
+    with pytest.raises(RunRefused, match=r"helper\.py reaches outside") as refused:
+        run(world)
+    assert "line 2: builtin setattr" in str(refused.value)
+    assert "line 4: builtin __import__" in str(refused.value)
     assert calls == []
 
 

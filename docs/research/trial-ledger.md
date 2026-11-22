@@ -48,6 +48,10 @@ informative only: no trust decision reads the clock, and a test fails if code ou
 * **Result** closes an open entry: the status, a summary, and for a completed run the
   SHA-256 of its committed return series. It repeats the open entry's configuration hash,
   commit, manifest hash and cost basis, so each result entry holds every field G1.5 names.
+  It also lists, as `crossed_gaps`, every gap the registered manifests record that the
+  run's loads crossed, as `[series, after, before, missing]` (section 5, Gaps); the
+  harness checks each against those manifests before writing it, and a failed run lists
+  none.
 * **Unseal** (G1.6) is written at most once, when the owner's passphrase verifies, and
   closes development: there is no ledger freeze (decision D21), so no trial, benchmark or
   control run may be opened after it, and N, V and the holdout candidate are computed on
@@ -74,9 +78,12 @@ committed at HEAD (the package, the hypothesis's strategy paths and the manifest
 reads the daily returns back over a pipe. In that process an audit hook, installed before
 the strategy's module-level code runs, lets it read the interpreter's own library, the
 committed code it was given and the dataset files the registered manifest pins, read-only,
-and nothing else: no other file, socket or process. The hook deters accidents, not intent:
-the round 3 security review (R1) showed that committed strategy code reaching the hook's
-state through frames or the garbage collector can disable it, so the control against a
+and nothing else: no other file, socket or process. The round 3 security review (R1)
+showed that committed strategy code reaching the hook's state through frames or the
+garbage collector could disable it; since PR 61's round 4 the hook also refuses the four
+ways in to a frame (`gi_frame`, `cr_frame`, `ag_frame`, `tb_frame`) and every use of the
+garbage collector, and the source check refuses the frame names. It is still not a
+sandbox, since Python cannot be sealed from inside itself, so the control against a
 deliberate escape remains that the code is committed, ledgered and reviewed (T13).
 Nothing survives from one run to the next.
 
@@ -177,8 +184,10 @@ python -m norse_research.gitledger genesis --key-record <commit>:<path> \
 every id, that lie outside their hypothesis's paths, whose module does not declare the id in
 `CONFIGURATIONS`, or whose hypothesis's modules fail the source checks; tree paths missing on
 main or overlapping (a hypothesis's paths may sit inside the harness paths, which leaves
-them out of the harness digest; no other overlap is allowed); and a key record that breaks
-its contract.
+them out of the harness digest; no other overlap is allowed); harness paths that do not
+cover all of `research/norse_research`, which would leave part of the package, the
+simulation engine included, out of the harness digest; and a key record that breaks its
+contract.
 
 Straight after the genesis step the owner runs, in a terminal of their own,
 `python -m norse_research.seal check-key`. It checks the typed passphrase against the key

@@ -12,20 +12,128 @@ Format traps handled here, each with a test:
 * A few files repeat a row exactly; ``collapse_repeats`` keeps one and reports it.
 * A few bars sit off the interval grid; ``split_off_grid`` sets them aside and
   reports them, so the slots they occupy count as a gap rather than a shifted bar.
+
+This module and the simulation engine (``norse_research.sim``) are what a strategy may
+import, so their classes are ``EngineClass`` instances and their tables read-only: the
+runner seals both before a strategy's module runs (security review of PR 61, round 2).
 """
 
 from __future__ import annotations
 
-import io
-import zipfile
-from collections.abc import Sequence
+from abc import ABCMeta as _ABCMeta
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from io import BytesIO as _BytesIO
 from itertools import pairwise
-from typing import NamedTuple
+from types import MappingProxyType as _MappingProxyType
+from typing import NamedTuple as _NamedTuple
+from zipfile import BadZipFile as _BadZipFile
+from zipfile import ZipFile as _ZipFile
 
 LICENCE = "CC BY-NC-SA 4.0 (Binance public data, data.binance.vision)"
 
-INTERVAL_MS = {
+# Set once, by ``seal_engine_classes``, in the strategy process; nothing sets it back.
+_engine_sealed = False
+
+
+def _engine_module(name: str) -> bool:
+    """A module of the harness and engine package, not of the strategies loaded into it."""
+    inside = name == "norse_research" or name.startswith("norse_research.")
+    strategy = name == "norse_research.strategies" or name.startswith("norse_research.strategies.")
+    return inside and not strategy
+
+
+class EngineClass(type):
+    """The metaclass of every class in this module and in the simulation engine. Once
+    the runner seals the engine, before a strategy's module runs, no class attribute
+    can be set or deleted, whatever name the class is reached by, so a strategy cannot
+    change a rule for its run while the ledger certifies the registered one.
+
+    Only the engine subclasses an engine class, and only before it is sealed: a
+    subclass made in any other module, or made at all in a strategy's run, is refused,
+    whatever name its base is reached by (``K = Costs; class Free(K)``) and however the
+    class is built (a class statement, ``type``, ``__build_class__``)."""
+
+    def __new__(mcls, name: str, bases: tuple, namespace: dict, **kwargs):
+        if any(isinstance(base, EngineClass) for base in bases) and (
+            _engine_sealed or not _engine_module(namespace.get("__module__", ""))
+        ):
+            raise TypeError(f"{name}: an engine class is subclassed only by the engine itself "
+                            "(security review of PR 61)")
+        return super().__new__(mcls, name, bases, namespace, **kwargs)
+
+    def __setattr__(cls, name: str, value) -> None:
+        if _engine_sealed:
+            raise AttributeError(f"{cls.__name__} is sealed for this run: {name} cannot be set")
+        super().__setattr__(name, value)
+
+    def __delattr__(cls, name: str) -> None:
+        if _engine_sealed:
+            raise AttributeError(f"{cls.__name__} is sealed for this run: {name} cannot be deleted")
+        super().__delattr__(name)
+
+
+class EngineABCMeta(EngineClass, _ABCMeta):
+    """``EngineClass`` for an engine class built on a ``collections.abc`` base."""
+
+
+def seal_engine_classes() -> None:
+    """From now on, in this process, no engine class can change. Only the runner calls
+    this, before a strategy's module runs; there is no way back."""
+    global _engine_sealed
+    _engine_sealed = True
+
+
+class Frozen(metaclass=EngineClass):
+    """Base of the engine objects a strategy can hold or is lent: their attributes are
+    given once, by ``build`` in ``__init__``, and can never be set or deleted after, so
+    nothing a strategy does to one, under any name, changes what the engine reads from
+    it later (security review of PR 61, the sweep of what a strategy can reach). State
+    such an object must keep changing is held in closures, with no attribute path to it."""
+
+    __slots__ = ("_complete",)
+
+    def __setattr__(self, name: str, value) -> None:
+        raise AttributeError(f"{type(self).__name__} is read-only: {name} cannot be set")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError(f"{type(self).__name__} is read-only: {name} cannot be deleted")
+
+
+# build's verdict on each class it has seen (private: no strategy can reach it).
+_OWN_FROZEN: dict[type, bool] = {}
+
+
+def build(instance: Frozen, **attributes) -> None:
+    """Give a ``Frozen`` object its attributes, once, while it is built. Anything else is
+    refused: an object already built, a module, a class, a frozen dataclass, any object
+    that is not one of the engine's own ``Frozen`` ones (security review of PR 61, round
+    4, H1: ``build(execution, vwap=f)`` replaced the fill price in a sealed run)."""
+    kind = type(instance)
+    own = _OWN_FROZEN.get(kind)
+    if own is None:  # once per class: a view is built at every new row count
+        own = _OWN_FROZEN[kind] = issubclass(kind, Frozen) and _engine_module(kind.__module__)
+    if not own:
+        raise TypeError(f"build gives attributes to the engine's own frozen objects only, not to "
+                        f"a {kind.__name__}")
+    try:
+        object.__getattribute__(instance, "_complete")
+    except AttributeError:
+        pass
+    else:
+        raise AttributeError(f"{type(instance).__name__} is already built")
+    for name, value in attributes.items():
+        object.__setattr__(instance, name, value)
+    object.__setattr__(instance, "_complete", True)
+
+
+def read_only(mapping: Mapping) -> Mapping:
+    """A read-only view of a copy of ``mapping``: the module-level tables a strategy can
+    reach, so none can be changed in place (``update``, an item store)."""
+    return _MappingProxyType(dict(mapping))
+
+
+INTERVAL_MS = read_only({
     "1m": 60_000,
     "5m": 300_000,
     "15m": 900_000,
@@ -33,7 +141,7 @@ INTERVAL_MS = {
     "4h": 14_400_000,
     "8h": 28_800_000,
     "1d": 86_400_000,
-}
+})
 
 KLINE_COLUMNS = (
     "open_time",
@@ -57,12 +165,12 @@ FUNDING_TOLERANCE_MS = 60_000
 ROW_BYTES_CAP = 512
 
 
-class DataIntegrityError(ValueError):
+class DataIntegrityError(ValueError, metaclass=EngineClass):
     """A file's contents break the format or the time grid it must follow."""
 
 
 @dataclass(frozen=True)
-class DatasetSpec:
+class DatasetSpec(metaclass=EngineClass):
     """One archive series: a market, a kind, a symbol and (for bars) an interval."""
 
     market: str  # "spot" or "um" (USDT-margined futures)
@@ -144,28 +252,37 @@ class DatasetSpec:
         return self.max_rows() * ROW_BYTES_CAP + 4_096
 
 
-class Kline(NamedTuple):
-    open_time: int
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float
-    close_time: int
-    quote_volume: float
-    trades: int
-    taker_buy_volume: float
-    taker_buy_quote_volume: float
+# A ``NamedTuple`` class cannot take a metaclass, so each row type is an engine class
+# over a named tuple that is bound to no name: its base is reachable only through
+# ``__bases__``, ``__mro__`` or ``mro()``, which the source check refuses.
+class Kline(
+    _NamedTuple("Kline", [
+        ("open_time", int),
+        ("open", float),
+        ("high", float),
+        ("low", float),
+        ("close", float),
+        ("volume", float),
+        ("close_time", int),
+        ("quote_volume", float),
+        ("trades", int),
+        ("taker_buy_volume", float),
+        ("taker_buy_quote_volume", float),
+    ]),
+    metaclass=EngineClass,
+):
+    __slots__ = ()
 
 
-class Funding(NamedTuple):
-    calc_time: int
-    interval_hours: int
-    rate: float
+class Funding(
+    _NamedTuple("Funding", [("calc_time", int), ("interval_hours", int), ("rate", float)]),
+    metaclass=EngineClass,
+):
+    __slots__ = ()
 
 
 @dataclass(frozen=True)
-class Gap:
+class Gap(metaclass=EngineClass):
     """Missing rows between two present ones (times in ms since the epoch, UTC)."""
 
     after: int
@@ -180,8 +297,8 @@ def to_ms(value: int) -> int:
 def read_csv_member(zip_bytes: bytes, csv_name: str, max_uncompressed: int) -> str:
     """The single CSV inside an archive file, refusing anything else or anything large."""
     try:
-        archive = zipfile.ZipFile(io.BytesIO(zip_bytes))
-    except zipfile.BadZipFile as exc:
+        archive = _ZipFile(_BytesIO(zip_bytes))
+    except _BadZipFile as exc:
         raise DataIntegrityError(f"{csv_name}: not a zip archive") from exc
     with archive:
         infos = archive.infolist()

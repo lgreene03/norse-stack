@@ -113,7 +113,22 @@ start, end)`, with timezone-aware UTC bounds and `end` exclusive. It:
   outages leave real gaps in the archive (listed in data-coverage.md); a caller that
   must cross one passes `accept_recorded_gaps=True`, which allows only gaps the
   committed manifest records and returns them with the rows so the run can record
-  them. A gap the manifest does not record still fails.
+  them. A gap the manifest does not record still fails. The loader also keeps every
+  recorded gap a load crossed (`crossed_gaps`), which the runner returns to the harness
+  for the run's ledger entry.
+
+The loader reports each series' archived coverage (`coverage`) from the manifests'
+metadata alone: the runs between its first and last row, split only at a recorded gap
+that spans a month with no pinned file. In the holdout run it joins the holdout
+manifest's part without reading a holdout file. The runner's `DataView` exposes it, so
+strategies never commit span constants.
+
+The loader also lists the series its manifests pin (`list_series`), a tuple of names
+sorted alphabetically, from the manifests' keys alone: the development manifest's in a
+development run, and the holdout manifest's beside them in the holdout run, which
+includes pairs first archived in 2026 (their coverage starts in the holdout). The
+`DataView` exposes it as `list_series()`, so a strategy ranks over the pinned series
+rather than a committed list.
 
 Every result carries the manifest's SHA-256 and the files read.
 

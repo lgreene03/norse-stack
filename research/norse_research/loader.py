@@ -117,6 +117,11 @@ def _month(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000, tz=UTC).strftime("%Y-%m")
 
 
+def _parse_time(text: str) -> int:
+    """A manifest time ("YYYY-MM-DD HH:MM", UTC) in ms."""
+    return int(datetime.strptime(text, "%Y-%m-%d %H:%M").replace(tzinfo=UTC).timestamp() * 1000)
+
+
 def rehearsal_split(manifest: Manifest, month: str) -> tuple[Manifest, Manifest, int]:
     """The development manifest split for the holdout rehearsal (``seal rehearse``):
     the months before ``month``, and the months from it to the end of development, which
@@ -166,6 +171,60 @@ class DatasetLoader:
         # The holdout's start, or, in the rehearsal alone, an earlier month whose
         # development data stands in for the holdout (``rehearsal_split``).
         self.boundary_ms = boundary_ms
+        # Every recorded gap a load returned, as [series, after, before, missing]: the
+        # runner hands them to the harness for the run's ledger entry (section 5, Gaps).
+        self._crossed: set[tuple] = set()
+
+    def crossed_gaps(self) -> list[list]:
+        """The recorded gaps this loader's loads crossed, sorted, without repeats."""
+        return [list(g) for g in sorted(self._crossed)]
+
+    def list_series(self) -> tuple[str, ...]:
+        """Every series the manifests this loader holds pin, sorted by name, from their
+        keys alone: no data file is opened. A development run lists the development
+        manifest's series; the holdout run lists those and the holdout manifest's, among
+        them pairs first archived in 2026, which have no development rows (their
+        ``coverage`` starts in the holdout); a rehearsal lists the development series.
+        Strategies take the series to rank from here rather than committing a list, so a
+        listing error is a data-loading fix (section 11, item 6)."""
+        names = set(self.manifest.datasets)
+        if self.holdout is not None:
+            names |= set(self.holdout.datasets)
+        return tuple(sorted(names))
+
+    def coverage(self, series: str) -> list[tuple[int, int]]:
+        """Each archived run of ``series`` this loader can read, as (first, last) times in
+        ms, from the committed manifests' metadata alone: no data file is opened, so the
+        holdout run learns the holdout's spans without reading a holdout file first.
+
+        A run breaks where a recorded gap skips a month the manifests pin no file for
+        (FTTUSDT's suspension from 2022-12 to 2023-08, for example), since the loader
+        refuses an unpinned month; a gap inside pinned months stays inside one run and is
+        crossed as recorded (section 5, Gaps). Times are the manifests' minute precision,
+        exact for bars; a funding settlement's ``calc_time`` can be up to a minute later.
+        A development run reads the development manifest only; the holdout run (and the
+        rehearsal) reads the holdout part too, joined to it at the boundary. Strategies
+        take spans from here rather than committing them, so a span error is a
+        data-loading fix (section 11, item 6)."""
+        parts = [m.datasets[series] for m in (self.manifest, self.holdout)
+                 if m is not None and series in m.datasets]
+        if not parts:
+            raise ManifestError(f"{series} is in no manifest this run reads")
+        pinned = {f[0] for part in parts for f in part["files"]}
+        breaks = {(_parse_time(a), _parse_time(b)) for part in parts for a, b, _ in part["gaps"]}
+        if len(parts) == 2:  # the boundary between the development and holdout parts
+            breaks.add((_parse_time(parts[0]["last"]), _parse_time(parts[1]["first"])))
+        start = min(_parse_time(part["first"]) for part in parts)
+        last = max(_parse_time(part["last"]) for part in parts)
+        runs = []
+        for after, before in sorted(breaks):
+            if after >= before or after < start:
+                continue
+            if any(m not in pinned for m in months_between(_month(after), _month(before))):
+                runs.append((start, after))
+                start = before
+        runs.append((start, last))
+        return runs
 
     def _entry(self, series: str, reaches_holdout: bool) -> dict:
         """The series' pins: the development manifest's, and inside the holdout run
@@ -248,6 +307,7 @@ class DatasetLoader:
             if not accept_recorded_gaps or unrecorded:
                 shown = [gap_record(g) for g in (unrecorded or gaps)[:5]]
                 raise GapError(f"{series}: {len(gaps)} gap(s) in range, for example {shown}")
+            self._crossed.update((series, *gap_record(g)) for g in gaps)
         selected = [r for r in on_grid if start_ms <= r[0] < end_ms]
         set_aside = [t for t in off_grid if start_ms <= t < end_ms]
         if not reaches_holdout and any(r[0] >= HOLDOUT_START_MS for r in selected):

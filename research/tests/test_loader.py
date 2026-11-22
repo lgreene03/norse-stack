@@ -1,4 +1,5 @@
 import json
+import shutil
 from datetime import UTC, datetime
 
 import pytest
@@ -9,10 +10,12 @@ from norse_research.loader import (
     HoldoutSealed,
     MissingData,
     inside_ledger_entry,
+    rehearsal_split,
 )
 from norse_research.manifest import Manifest, ManifestError, build, dumps, write
 from norse_research.periods import DEVELOPMENT, HOLDOUT, HOLDOUT_START_MS
 from norse_research.store import ArchiveStore
+from norse_research.universe import months_between
 from synthetic_store import make_series, month_times, put
 
 
@@ -165,3 +168,113 @@ def test_funding_loads_and_bad_arguments_are_refused(world):
         loader.load("um/fundingRate/XUSDT", datetime(2025, 11, 1), utc(2025, 12, 1))
     with pytest.raises(ValueError, match="before"):
         loader.load("um/fundingRate/XUSDT", utc(2025, 12, 1), utc(2025, 11, 1))
+
+
+# --- coverage and crossed gaps (G1.9; quant review 1, findings 3 and 4) -----------------
+
+
+def ms(*args):
+    return int(utc(*args).timestamp() * 1000)
+
+
+@pytest.fixture
+def covered(tmp_path):
+    """A pair that skips two whole months (as FTTUSDT skips 2022-12 to 2023-08), one with a
+    bar missing inside a pinned month, funding settled with millisecond jitter, a pair
+    that runs from development into the holdout, and one first archived in the holdout."""
+    store = ArchiveStore(tmp_path / "mirror")
+    suspended = DatasetSpec.from_name("spot/klines/SUSDT/1d")
+    early = months_between("2025-06", "2025-07")
+    late = months_between("2025-10", "2025-12")
+    for month in early + late:
+        put(store, suspended, month, month_times(suspended, month))
+    dropped = month_times(DatasetSpec.from_name("spot/klines/GUSDT/4h"), "2025-12")[20]
+    series = [
+        (suspended, early + late),
+        make_series(store, "spot/klines/GUSDT/4h", "2025-11", "2025-12", drop={dropped}),
+        make_series(store, "um/fundingRate/XUSDT", "2025-11", "2025-12"),
+        make_series(store, "spot/klines/XUSDT/1d", "2025-10", "2026-01"),
+        make_series(store, "spot/klines/NUSDT/1d", "2026-01", "2026-01"),
+    ]
+    manifests = {}
+    for period in (DEVELOPMENT, HOLDOUT):
+        path = tmp_path / f"{period}.json"
+        write(build(store, period, series), path)
+        manifests[period] = Manifest.load(path)
+    return store, manifests
+
+
+def test_coverage_comes_from_the_manifest_and_breaks_only_at_unpinned_months(covered):
+    store, manifests = covered
+    loader = DatasetLoader(manifests[DEVELOPMENT], store)
+    # Two runs around the two months no file is pinned for; the loader would refuse one
+    # read across them.
+    assert loader.coverage("spot/klines/SUSDT/1d") == [
+        (ms(2025, 6, 1), ms(2025, 7, 31)), (ms(2025, 10, 1), ms(2025, 12, 31))]
+    with pytest.raises(MissingData):
+        loader.load("spot/klines/SUSDT/1d", utc(2025, 7, 1), utc(2025, 10, 5),
+                    accept_recorded_gaps=True)
+    # A bar missing inside a pinned month is a recorded gap the loader crosses: one run.
+    assert loader.coverage("spot/klines/GUSDT/4h") == [(ms(2025, 11, 1), ms(2025, 12, 31, 20))]
+    # Funding at the manifest's minute precision; the settlements are 3 ms after it.
+    assert loader.coverage("um/fundingRate/XUSDT") == [(ms(2025, 11, 1), ms(2025, 12, 31, 16))]
+    # A development run sees development coverage only.
+    assert loader.coverage("spot/klines/XUSDT/1d") == [(ms(2025, 10, 1), ms(2025, 12, 31))]
+
+
+def test_the_holdout_runs_coverage_joins_the_holdout_part_without_reading_a_holdout_file(
+        covered):
+    store, manifests = covered
+    x = DatasetSpec.from_name("spot/klines/XUSDT/1d")
+    store.path(x.key("2026-01")).unlink()  # the holdout file is off the mirror (D17)
+    loader = DatasetLoader(manifests[DEVELOPMENT], store, holdout=manifests[HOLDOUT])
+    assert loader.coverage(x.name) == [(ms(2025, 10, 1), ms(2026, 1, 31))]
+    with pytest.raises(ManifestError, match="no manifest"):
+        DatasetLoader(manifests[DEVELOPMENT], store).coverage("spot/klines/QUSDT/1d")
+
+
+def test_the_rehearsals_coverage_is_the_development_coverage(covered):
+    store, manifests = covered
+    plain = DatasetLoader(manifests[DEVELOPMENT], store)
+    before, after, boundary = rehearsal_split(manifests[DEVELOPMENT], "2025-11")
+    rehearsal = DatasetLoader(before, store, holdout=after, boundary_ms=boundary)
+    for name in ("spot/klines/SUSDT/1d", "spot/klines/GUSDT/4h", "spot/klines/XUSDT/1d"):
+        assert rehearsal.coverage(name) == plain.coverage(name)
+
+
+def test_the_loader_records_every_recorded_gap_a_load_crosses(covered):
+    """Section 5, Gaps: crossed gaps are listed in the run's ledger entry; the runner
+    takes them from here."""
+    store, manifests = covered
+    loader = DatasetLoader(manifests[DEVELOPMENT], store)
+    assert loader.crossed_gaps() == []
+    loader.load("spot/klines/GUSDT/4h", utc(2025, 12, 10), utc(2025, 12, 20))
+    assert loader.crossed_gaps() == []
+    for _ in range(2):  # crossing it twice lists it once
+        loader.load("spot/klines/GUSDT/4h", utc(2025, 12, 1), utc(2025, 12, 10),
+                    accept_recorded_gaps=True)
+    (gap,) = manifests[DEVELOPMENT].datasets["spot/klines/GUSDT/4h"]["gaps"]
+    assert loader.crossed_gaps() == [["spot/klines/GUSDT/4h", *gap]]
+
+
+def test_the_loader_lists_the_series_its_manifests_pin_without_reading_a_file(covered):
+    """What a strategy ranks over comes from the committed manifests, not a committed
+    list (the strategies' H1 ranking covers every pinned spot daily series)."""
+    store, manifests = covered
+    shutil.rmtree(store.root)  # no data file, holdout or development, is read
+    development = DatasetLoader(manifests[DEVELOPMENT], store)
+    listed = development.list_series()
+    assert listed == ("spot/klines/GUSDT/4h", "spot/klines/SUSDT/1d", "spot/klines/XUSDT/1d",
+                      "um/fundingRate/XUSDT")
+    assert isinstance(listed, tuple)  # immutable, as everything a DataView hands out
+    # The holdout run adds what only the holdout manifest pins: a pair first archived in
+    # 2026, whose coverage starts in the holdout.
+    holdout = DatasetLoader(manifests[DEVELOPMENT], store, holdout=manifests[HOLDOUT])
+    assert holdout.list_series() == ("spot/klines/GUSDT/4h", "spot/klines/NUSDT/1d",
+                                     "spot/klines/SUSDT/1d", "spot/klines/XUSDT/1d",
+                                     "um/fundingRate/XUSDT")
+    assert holdout.coverage("spot/klines/NUSDT/1d") == [(ms(2026, 1, 1), ms(2026, 1, 31))]
+    # The rehearsal's two manifests are both cut from the development one.
+    before, after, boundary = rehearsal_split(manifests[DEVELOPMENT], "2025-11")
+    rehearsal = DatasetLoader(before, store, holdout=after, boundary_ms=boundary)
+    assert rehearsal.list_series() == listed
