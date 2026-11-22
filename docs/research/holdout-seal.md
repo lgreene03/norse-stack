@@ -126,37 +126,45 @@ G2.7 ledger audit and after both README outcomes are drafted (G3.1). It is refus
 hypothesis has a selectable run of every registered configuration or has exhausted its own
 entries and the reserve (a hypothesis that ran out is FAIL at the verdict), so neither grid is
 stopped early by the other's unseal (section 11, item 4). First see what the unseal must name,
-which needs no key:
+which needs no key. Read, on GitHub's view of `ledger/trials.jsonl` on the `ledger` branch, the
+commit of the holdout candidate's selectable run: the `commit` of its open entry, in full. Call it
+C, and give it to the command:
 
 ```bash
-python -m norse_research.seal candidate
+python -m norse_research.seal candidate --candidate-commit <C>
 ```
 
-It prints, for each hypothesis, its candidate and whether it meets DEV-1 to DEV-5 on the ledger as
-it stands (provisional until the unseal), then the pre-registration the genesis entry names, the
-holdout candidate's configuration id and hash, the commit of its selectable run, the data loading
-and seal files changed since that run, the two pins the unseal needs (`unseal_commit`, HEAD now,
-and `ledger_head`, the ledger's head now), the full unseal command line with them, and the git
-every ledger command runs (`/usr/bin/git`). It prints neither the diff nor the hash that accepts
-it: both come only from `seal unseal`, which prints the hash after the full diff, and only at an
-interactive terminal, so the hash is never seen without what it covers (security review of #65,
-L-2 and I-7). If no hypothesis passes development there is no holdout candidate, and then no
-unseal and no holdout run (section 11, item 3).
+If you do not yet know which run that is, give the commit of any completed trial there: the
+command then refuses, naming the open entry the registered rule selects and its commit; check that
+entry on GitHub and run the command again with the commit you read there. It prints, for each
+hypothesis, its candidate and whether it meets DEV-1 to DEV-5 on the ledger as it stands
+(provisional until the unseal), then the pre-registration the genesis entry names, the holdout
+candidate's configuration id and hash, C and the hash of the open entry that ran at it
+(`candidate_open_entry`), the data loading and seal files changed since that run, the two pins the
+unseal needs (`unseal_commit`, HEAD now, and `ledger_head`, the ledger's head now), the owner's
+unseal procedure with all of them filled in (`unseal_procedure`, below), and the git every ledger
+command runs (`/Library/Developer/CommandLineTools/usr/bin/git` on the owner's Mac). It prints
+neither the diff nor the hash that accepts it: both come only from `seal unseal`, which prints the
+hash after the full diff, and only at an interactive terminal, so the hash is never seen without
+what it covers (security review of #65, L-2 and I-7). If no hypothesis passes development there is
+no holdout candidate, and then no unseal and no holdout run (section 11, item 3).
 
-**Both `seal candidate` and `seal unseal` run the candidate's code, never HEAD's** (security
-review of #70, H-3). Item 6 lets `seal.py` and data loading change after the candidate's run,
-and `seal.py` is the code that renders the owner's review of exactly that change and reads the
+**Both `seal candidate` and `seal unseal` run C's code, or nothing** (security review of #70, H-3,
+and round 2, H-4). Item 6 lets `seal.py` and data loading change after the candidate's run, and
+`seal.py` is the code that renders the owner's review of exactly that change and reads the
 passphrase; HEAD's `seal.py` could leave its own lines out of the diff and keep the passphrase.
 So, before Python imports any module of the seal or of data loading, the package's launcher
-(`relaunch.py`, run from `__init__.py`) reads the clone's ledger with git alone and finds the
-candidate's run: for `unseal`, the last completed trial of the configuration hash the command
-names; for `candidate`, the last completed trial, then the candidate's own run. If the package
-on disk is not that commit's, file for file, it writes that commit's package, from git's
-objects and without a checkout, into a new temporary folder, runs the same command there with
-`--repo` naming your clone, and removes the folder afterwards. It says so on the terminal: "seal:
-running with the code of commit ..., the candidate's run". That code then checks, itself, that
-every module it loaded is the candidate's commit's, and refuses otherwise. You run the commands
-as written; nothing has to be done by hand.
+(`relaunch.py`, run from `__init__.py`) takes C from `--candidate-commit` alone, spelt out in full.
+It never chooses code from the clone's own `ledger` ref, which any process of the owner's user can
+rewrite (H-4). It fetches the remote's `ledger` branch with the pinned git and refuses unless C is
+the commit of a completed trial there: for `unseal`, the last completed trial of the configuration
+hash the command names, which is how the gate picks a configuration's selectable run. If the
+package on disk is C's, file for file, the command runs in place. Otherwise the launcher writes C's
+package, from git's objects and without a checkout, into a new temporary folder, runs the same
+command there with `--repo` naming your clone, and removes the folder afterwards. It says so on the
+terminal: "seal: running with the code of commit C, the candidate's run". C's code then checks,
+against the remote's verified ledger, that the registered rule selects the run at C and that every
+module it loaded is C's, and refuses otherwise, all before any passphrase is asked for.
 
 Then rehearse the holdout run, which also needs no key and writes nothing to the ledger:
 
@@ -174,26 +182,39 @@ here, fixed and committed on main, and the rehearsal run again until it passes. 
 the real boundary at 2026-01-01, whose data stays off disk, so a gap there is still G3.2's to check
 (below).
 
-Otherwise the owner runs, in a terminal of their own, the unseal command `seal candidate` printed,
-first without `--accept-diff`, which prints the full diff and then its hash and refuses, and then,
-once every line has been read, with that hash. Accept only a hash read in your own terminal
-straight after the diff, never one handed to you in a prepared command line:
+Otherwise the owner unseals, in a terminal of their own, by the procedure below. **Run the unseal
+from C's own code, exported with plain git into a new folder, never from the clone** (review of
+#70, round 2). Run from the clone, the launcher is HEAD's code: it lives outside the seal set, so a
+change to it after the candidate's run is one item 6 never allows, but code that changes it can
+also skip it and run HEAD's seal. Run from the exported folder, the launcher that runs is C's, and
+it finds its own package is C's and runs in place. `seal candidate` prints these steps with every
+value filled in (`unseal_procedure`):
+
+1. On GitHub's view of `ledger/trials.jsonl` on the `ledger` branch, check that C is the commit of
+   the open entry `seal candidate` named. Use the commit you read there, not the printed one.
+2. `folder=$(mktemp -d)`
+3. `GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 /Library/Developer/CommandLineTools/usr/bin/git -C <clone> archive <C> research | tar -x -C "$folder"`
+4. `cd "$folder/research"`
+5. `python -m norse_research.seal --repo <clone> unseal --candidate-commit <C> --commit <the pre-registration commit> --configuration-sha256 <the candidate's hash> --unseal-commit <HEAD, as seal candidate printed it> --ledger-head <the ledger head, as seal candidate printed it>`
+6. Without `--accept-diff`, step 5 prints the full diff, then its hash, and refuses. Once every
+   line has been read, run step 5 again with `--accept-diff <the hash printed after the diff>`,
+   and type the passphrase.
+7. Then, back in the clone, fetch the holdout files (below).
+
+Accept only a hash read in your own terminal straight after the diff, never one handed to you in a
+prepared command line. `git archive` writes C's tree as committed, with no checkout, so no hook,
+filter or ignore file of the clone runs. It does read the clone's `.git/info/attributes`, so a
+rewritten one could leave files out of the export: C's launcher then finds its package is not C's
+and runs C's code from git's objects instead, or the import fails. The `python` printed is the
+interpreter `seal candidate` ran with.
+
+**A second look, outside the repository's code** (security review of #70, H-3, option 3). To see
+every change since the candidate's run with nothing of the repository's code in the way, run git
+yourself with no configuration, from C to HEAD:
 
 ```bash
-python -m norse_research.seal unseal --commit <the pre-registration commit> --configuration-sha256 <the candidate's hash> --unseal-commit <HEAD, as seal candidate printed it> --ledger-head <the ledger head, as seal candidate printed it>
-python -m norse_research.seal unseal ... the same ... --accept-diff <the hash printed after the diff>
-```
-
-**A second look, outside the repository's code** (security review of #70, H-3, option 3). The
-launcher that picks the candidate's code is itself HEAD's code, though outside the seal set, so
-a change to it after the candidate's run is one item 6 never allows. To see every change since the
-candidate's run with nothing of the repository's code in the way, run git yourself with no
-configuration, from the commit `seal candidate` names as `candidate_commit` (check it against the
-candidate's open entry on GitHub's view of the `ledger` branch) to HEAD:
-
-```bash
-GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 /usr/bin/git -c core.attributesFile=/dev/null diff --stat --no-textconv --no-ext-diff <candidate_commit> HEAD -- research
-GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 /usr/bin/git -c core.attributesFile=/dev/null diff --no-textconv --no-ext-diff <candidate_commit> HEAD -- research/norse_research
+GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 /Library/Developer/CommandLineTools/usr/bin/git -c core.attributesFile=/dev/null diff --stat --no-textconv --no-ext-diff <C> HEAD -- research
+GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 /Library/Developer/CommandLineTools/usr/bin/git -c core.attributesFile=/dev/null diff --no-textconv --no-ext-diff <C> HEAD -- research/norse_research
 ```
 
 Only the seal and data loading files (`seal.py`, `loader.py`, `store.py`, `manifest.py`,
@@ -208,9 +229,11 @@ hypothesis has neither a selectable run of every registered configuration nor it
 the reserve used up, which is what an early unseal means here (T20; an unseal while the other grid
 can still run would stop it early); a ledger that already holds an unseal entry (T23); a dirty
 tree, a HEAD other than the `--unseal-commit` given, a HEAD not on main, or code running that is not
-the code of the candidate's commit; period constants that differ from the genesis entry's (T20); a pre-registration commit,
-tag or file hash other than the genesis entry's (T24); a configuration hash other than the holdout
-candidate's, which it computes by the registered rule over the ledger before the unseal (T22); a
+the code of the candidate's commit; period constants that differ from the genesis entry's (T20); a
+pre-registration commit, tag or file hash other than the genesis entry's (T24); a configuration
+hash other than the holdout candidate's, which it computes by the registered rule over the ledger
+before the unseal (T22), or a `--candidate-commit` other than the commit of that candidate's
+selectable run (H-4); a
 HEAD at which anything but data loading or the seal has changed since the candidate's selectable
 run, or any `.gitattributes` file has (section 11, item 6, applied here once; the entry records
 that HEAD); and an accepted diff hash that is not the hash of the data loading and seal diff from
@@ -290,19 +313,24 @@ changes trust (`SSL_CERT_FILE`), loads code (`DYLD_INSERT_LIBRARIES`) or picks t
 tools (`DEVELOPER_DIR`), never reaches a ledger command (L-6). The owner no longer needs to
 inspect the global and system configuration before the unseal.
 
-**The git itself is `/usr/bin/git`, always** (review of #70, L-6). No ledger, seal or launcher
-command looks git up on `PATH`, so a wrapper an agent puts first on `PATH`, by an edit to the
-shell profile, never runs. `/usr/bin/git` is root's and protected by macOS's System Integrity
-Protection; on the owner's Mac it is Apple's launcher for the Command Line Tools' git (2.50.1 on
-2026-11-22), whose exec path, `/Library/Developer/CommandLineTools/usr/libexec/git-core`, holds
-Apple's own `git-credential-osxkeychain`. The code refuses to run unless that binary, its exec
-path, the helper there and every folder above them belong to root and are writable by no group or
-other user (`environment.git_program`), so neither the owner's user nor any agent can replace
-them. `seal candidate` prints the path, and the unseal prints it again when it is written. On
-2026-11-22 a dry-run push through exactly this command line, to a branch name that does not exist,
-authenticated with the owner's existing GitHub credential and sent nothing, so the push works with
-it. The genesis step and every run push the same way from the same clone, so a push that worked for
-them works at the unseal.
+**The git itself is the Command Line Tools' git, named in full, always** (review of #70, L-6 and
+round 2): `/Library/Developer/CommandLineTools/usr/bin/git` on macOS (`environment.GIT_PROGRAM`),
+and `/usr/bin/git` on Linux, where CI runs. No ledger, seal or launcher command looks git up on
+`PATH`, so a wrapper an agent puts first on `PATH`, by an edit to the shell profile, never runs.
+Nor does any go through macOS's `/usr/bin/git`, which is not git but a shim that asks `xcrun` for
+the developer folder, and `xcrun` keeps a cache that any process of the owner's user can write
+(`xcrun_db` in the user's temporary folder, present on the owner's Mac on 2026-11-22). The Command
+Line Tools' git is 2.50.1 on 2026-11-22, and its exec path,
+`/Library/Developer/CommandLineTools/usr/libexec/git-core`, holds Apple's own
+`git-credential-osxkeychain`. That folder is not under System Integrity Protection, as `/usr/bin`
+is, so ownership is the control: the code refuses to run unless the binary, its exec path, the
+helper there and every folder above them belong to root and are writable by no group or other user
+(`environment.git_program`), so neither the owner's user nor any agent can replace them. They do on
+the owner's Mac. `seal candidate` prints the path, and the unseal prints it again when it is
+written. On 2026-11-22 a dry-run push through exactly this command line, to a branch name that does
+not exist, authenticated with the owner's existing GitHub credential and sent nothing, so the push
+works with it. The genesis step and every run push the same way from the same clone, so a push that
+worked for them works at the unseal.
 
 Inside the clone, the refusals stay as belt and braces, and are now an allowlist (review of #70,
 L-5). The clone's own configuration, its local and worktree scopes and any file they include, may
@@ -324,9 +352,11 @@ may set `GIT_ASKPASS`, so unseal from a plain terminal. `GIT_SSH`, `GIT_SSH_COMM
 are refused for every ledger write. The clean-tree check reads no ignore or attributes file under
 the home folder, so `~/.config/git/ignore` cannot hide an untracked file from it (review of #70,
 I-8). What is left is the Python interpreter, which belongs to the owner's user (T15), and the
-Python files the seal imports, which a process of that user can rewrite on disk between the
-moment they are written and the moment they are imported; the loaded-modules check finds a changed
-file, but only after it ran.
+files it reads, which a process of that user can rewrite on disk: the Python files the seal
+imports, between the moment they are written and the moment they are imported, and the virtual
+environment's `site-packages`, whose `.pth` files Python runs at start-up, before any of the
+seal's code. The loaded-modules check finds a changed seal module, but only after it ran, and
+nothing finds a `.pth` file.
 
 Once the unseal entry is on the remote, the holdout files are fetched again (D17), as a separate
 step, at HEAD, in your clone: data loading is the code item 6 lets differ from the candidate's,
@@ -528,8 +558,15 @@ fails the unseal's push, or stops the seal, denies the iteration's single unseal
 all it can do, and it is detected, not prevented; and since the pins, it cannot make the key sign
 twice either (review of #70, M-4). A change after the candidate's run to the seal's launcher
 (`relaunch.py`, `environment.py`, `__init__.py`), which item 6 never allows, could skip the launcher
-and run HEAD's code: the second look at the unseal shows it, and nothing earlier refuses it (review
-of #70, H-3). A process of the owner's user that rewrites the Python files the seal is about to
-import, on disk, the candidate's exported copy included, runs its code before any check; that is
-the interpreter's tier (T15). The G3.1 drafts, as above. The research gateway (G1.2), which runs no
+and run HEAD's code when the unseal is run from the clone; the owner's procedure runs it from C's
+exported code instead, and the second look shows such a change (review of #70, H-3 and round 2).
+Which configuration the registered rule selects is computed by code, C's own: the owner checks on
+GitHub that C is the commit of the open entry it names, not the selection itself, so a `seal.py`
+that was already hostile when it was merged to main, and ran a completed trial, could name its own
+run. Every trial runs at a commit on main, so that change went through a pull request. A process of
+the owner's user that rewrites files the interpreter reads, on disk, runs its code before any
+check: the Python files the seal is about to import, the candidate's exported copy included, and
+the virtual environment's `site-packages`, a `.pth` file there above all, which Python runs at
+start-up and which also decides what `import norse_research` finds where the export lacks it. That
+is the interpreter's tier (T15). The G3.1 drafts, as above. The research gateway (G1.2), which runs no
 holdout run and must keep its run endpoint off for H1 and H2.

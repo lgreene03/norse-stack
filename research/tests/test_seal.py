@@ -21,10 +21,12 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import zipfile
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from conftest import clear_overrides
@@ -44,7 +46,17 @@ from ledger_fixtures import (
     seed_for,
     sign_as_owner,
 )
-from norse_research import gate, gitledger, harness, lamport, ledger, relaunch, rules, seal
+from norse_research import (
+    environment,
+    gate,
+    gitledger,
+    harness,
+    lamport,
+    ledger,
+    relaunch,
+    rules,
+    seal,
+)
 from norse_research.coverage import read_rows
 from norse_research.environment import EnvironmentRefused
 from norse_research.formats import DatasetSpec
@@ -111,13 +123,14 @@ def accepted_diff(world, cid=CANDIDATE):
 
 def request_for(world, cid=CANDIDATE):
     """The owner's request, pinning HEAD and the ledger head as seal candidate prints them
-    (review of #70, M-4)."""
+    (review of #70, M-4), and the candidate's commit as GitHub shows it (round 2, H-4)."""
     return {
         "preregistration": copy.deepcopy(genesis_of(world).body["preregistration"]),
         "configuration_sha256": trial(world, cid)[0].body["configuration_sha256"],
         "accepted_diff": accepted_diff(world, cid),
         "unseal_commit": git(world.repo, "rev-parse", "HEAD"),
         "ledger_head": world.ledger.local_head(),
+        "candidate_commit": trial(world, cid)[0].body["commit"],
     }
 
 
@@ -359,7 +372,7 @@ def test_key_is_read_only_from_an_interactive_terminal(monkeypatch):
     options = set(re.findall(r'add_argument\(\s*"(--[a-z0-9-]+)"', source))
     assert options == {"--repo", "--remote", "--out", "--commit", "--tag",
                        "--configuration-sha256", "--accept-diff", "--boundary",
-                       "--unseal-commit", "--ledger-head"}
+                       "--unseal-commit", "--ledger-head", "--candidate-commit"}
     # Nothing in the module reads the environment or a file for it.
     tree = ast.parse(source)
     for node in ast.walk(tree):
@@ -938,7 +951,10 @@ def test_the_candidate_command_prints_neither_the_diff_nor_its_hash(tmp_path, mo
     world = a_grid_world(tmp_path, monkeypatch, loader_changed=True)
     try:
         digest = accepted_diff(world)
-        assert seal.main(["--repo", str(world.repo), "candidate"]) == 0
+        opened = trial(world, CANDIDATE)[0]
+        candidate = opened.body["commit"]
+        assert seal.main(["--repo", str(world.repo), "candidate",
+                          "--candidate-commit", candidate]) == 0
         out = capsys.readouterr().out
         printed = json.loads(out[out.index("{\n"):])
         named = printed["holdout_candidate"]
@@ -946,13 +962,26 @@ def test_the_candidate_command_prints_neither_the_diff_nor_its_hash(tmp_path, mo
         assert "without --accept-diff" in named["diff_to_accept"]
         assert digest not in out and "accept_diff_at_head" not in out
         # The two pins the unseal needs (review of #70, M-4), the candidate's commit whose
-        # code ran this (H-3), and the git every ledger command runs (L-6).
+        # code ran this (H-3, H-4), and the git every ledger command runs (L-6).
         head = git(world.repo, "rev-parse", "HEAD")
         assert named["unseal_commit"] == head and named["ledger_head"] == world.ledger.local_head()
-        assert named["candidate_commit"] == trial(world, CANDIDATE)[0].body["commit"] != head
-        assert f"--unseal-commit {head} --ledger-head {named['ledger_head']}" in (
-            named["unseal_command"])
-        assert printed["git"] == "/usr/bin/git"
+        assert named["candidate_commit"] == candidate != head
+        assert named["candidate_open_entry"] == opened.hash
+        assert printed["git"] == environment.GIT_PROGRAM
+        # The owner's procedure, filled in: check C on GitHub, export C's code with plain
+        # git, run the unseal from there (review of #70, round 2).
+        steps = "\n".join(named["unseal_procedure"])
+        assert f"check that {candidate} is the commit of {CANDIDATE}'s open entry" in steps
+        assert (f"{environment.GIT_PROGRAM} -C {world.repo} archive {candidate} research | "
+                f'tar -x -C "$folder"') in steps
+        assert (f"-m norse_research.seal --repo {world.repo} unseal --candidate-commit "
+                f"{candidate}") in steps
+        assert f"--unseal-commit {head} --ledger-head {named['ledger_head']}" in steps
+        # Another commit is refused, naming the one the rule selects (H-4).
+        with pytest.raises(SealRefused, match=f"selectable run, open entry {opened.hash}"):
+            seal.main(["--repo", str(world.repo), "candidate", "--candidate-commit", head])
+        with pytest.raises(SystemExit):
+            seal.main(["--repo", str(world.repo), "candidate"])  # the pin is required
     finally:
         world.close()
 
@@ -1022,7 +1051,8 @@ def test_replay_checks_the_accepted_diff_hash_without_rendering_it(tmp_path, mon
         entry = unseal(world, request, fetch=False)
         assert entry.body["accepted_diff"] == request["accepted_diff"]
         assert unseal_of(world.ledger.verify().snapshot.entries).hash == entry.hash
-        assert seal.main(["--repo", str(world.repo), "candidate"]) == 0
+        assert seal.main(["--repo", str(world.repo), "candidate", "--candidate-commit",
+                          request["candidate_commit"]]) == 0
     finally:
         world.close()
 
@@ -1098,14 +1128,15 @@ def test_the_unseal_command_names_the_genesis_tag_and_asks_for_the_diff(ready, m
     sha = trial(ready, CANDIDATE)[0].body["configuration_sha256"]
     command = ["--repo", str(ready.repo), "unseal", "--commit", ready.prereg_commit,
                "--configuration-sha256", sha,
+               "--candidate-commit", trial(ready, CANDIDATE)[0].body["commit"],
                "--unseal-commit", git(ready.repo, "rev-parse", "HEAD"),
                "--ledger-head", ready.ledger.local_head()]
     with pytest.raises(SealRefused, match=f"--accept-diff {accepted_diff(ready)}"):
         seal.main(command)
     with pytest.raises(SealRefused, match="pre-registration other than"):
         seal.main([*command, "--tag", "prereg-v1"])
-    # The pins are required, and spelt out in full (review of #70, M-4).
-    for missing in ("--unseal-commit", "--ledger-head"):
+    # The pins are required, and spelt out in full (review of #70, M-4 and round 2, H-4).
+    for missing in ("--candidate-commit", "--unseal-commit", "--ledger-head"):
         index = command.index(missing)
         with pytest.raises(SystemExit):
             seal.main(command[:index] + command[index + 2:])
@@ -1647,6 +1678,7 @@ def test_heads_seal_never_renders_the_review_or_reads_the_passphrase(ready, tmp_
     tmpdir.mkdir()
     base = ["unseal", "--commit", ready.prereg_commit,
             "--configuration-sha256", opened.body["configuration_sha256"],
+            "--candidate-commit", opened.body["commit"],
             "--unseal-commit", head, "--ledger-head", ready.ledger.local_head()]
 
     # The review, with no terminal (an agent's shell, or the owner's).
@@ -1762,34 +1794,157 @@ def test_non_ascii_in_the_diff_to_accept_is_escaped_and_flagged(tmp_path, monkey
         world.close()
 
 
-def test_the_launcher_picks_the_candidates_run_and_exports_its_code(ready, tmp_path):
-    # Review of #70, H-3: the launcher reads the ledger with git alone, picks the commit of
-    # the configuration's last completed trial (as the gate picks a selectable run), lets
-    # the command run in place only when the package on disk is that commit's, and
-    # otherwise writes that commit's package from git's objects.
+def test_the_launcher_runs_the_named_commit_or_refuses(ready, tmp_path):
+    # Review of #70, H-3 and round 2, H-4: the launcher takes the candidate's commit from
+    # the command line alone, checks it against the remote's ledger, fetched with the
+    # pinned git, lets the command run in place only when the package on disk is that
+    # commit's, and otherwise writes that commit's package from git's objects.
     opened, _ = trial(ready, CANDIDATE)
-    sha = opened.body["configuration_sha256"]
+    sha, commit = opened.body["configuration_sha256"], opened.body["commit"]
     argv = [sys.executable, "-s", "-m", "norse_research.seal", "--repo", str(ready.repo),
-            "unseal", "--configuration-sha256", sha, "--commit", "c"]
+            "unseal", "--configuration-sha256", sha, "--commit", "c",
+            "--candidate-commit", commit]
     arguments = relaunch.seal_arguments(argv)
     assert relaunch.parse(arguments) == ("unseal", {
-        "--repo": str(ready.repo), "--configuration-sha256": sha, "--commit": "c"})
+        "--repo": str(ready.repo), "--configuration-sha256": sha, "--commit": "c",
+        "--candidate-commit": commit})
     assert relaunch.seal_arguments([sys.executable, "-m", "pytest"]) is None
-    entries = relaunch.ledger_entries(ready.repo)
-    assert relaunch.trial_commit(entries, sha) == opened.body["commit"]
+    entries = relaunch.remote_ledger_entries(ready.repo, "origin")
+    assert relaunch.trial_commit(entries, sha) == commit
     assert relaunch.trial_commit(entries, "0" * 64) is None
-    assert relaunch.package_matches(ready.repo, opened.body["commit"])
+    assert commit in {body["commit"] for body in relaunch.completed_trials(entries)}
+    assert relaunch.package_matches(ready.repo, commit)
     relaunch.maybe_relaunch(argv)  # the package here is the candidate's: in place
-    with pytest.raises(relaunch.RelaunchRefused, match="no completed trial"):
+    for named in (argv[:-2], [*argv[:-1], commit[:12]]):  # missing, or abbreviated
+        with pytest.raises(relaunch.RelaunchRefused, match="needs --candidate-commit"):
+            relaunch.maybe_relaunch(named)
+    with pytest.raises(relaunch.RelaunchRefused, match="has no completed trial"):
         relaunch.maybe_relaunch([*argv[:8], "0" * 64, *argv[9:]])
+    with pytest.raises(relaunch.RelaunchRefused, match="not a remote name"):
+        relaunch.maybe_relaunch([*argv, "--remote", str(ready.remote)])
     exported = tmp_path / "exported"
-    relaunch.export_package(ready.repo, opened.body["commit"], exported)
+    relaunch.export_package(ready.repo, commit, exported)
     package = exported / "research" / "norse_research"
-    assert relaunch.package_matches(ready.repo, opened.body["commit"], package)
+    assert relaunch.package_matches(ready.repo, commit, package)
     (package / "seal.py").write_text((package / "seal.py").read_text() + "\n# changed\n")
-    assert not relaunch.package_matches(ready.repo, opened.body["commit"], package)
+    assert not relaunch.package_matches(ready.repo, commit, package)
     (package / "seal.py").unlink()
-    assert not relaunch.package_matches(ready.repo, opened.body["commit"], package)
+    assert not relaunch.package_matches(ready.repo, commit, package)
+
+
+def forge_local_trial(world, opened, closed, commit) -> str:
+    """The reviewer's round 2 H-4 probe: a completed trial of ``opened``'s configuration at
+    ``commit``, appended by plumbing to the clone's own ledger refs alone, never pushed."""
+    ledger_ = world.ledger
+    head = ledger_.local_head()
+    data = ledger_.git.blob(head, LEDGER_PATH)
+    entries = parse_ledger(data)
+    time = entries[-1].body["time"]
+    fake_open = ledger.make_entry({**opened.body, "commit": commit, "seq": len(entries),
+                                   "prev": entries[-1].hash, "time": time})
+    fake_result = ledger.make_entry({**closed.body, "commit": commit, "opens": fake_open.hash,
+                                     "open_seq": len(entries), "seq": len(entries) + 1,
+                                     "prev": fake_open.hash, "time": time})
+    lines = f"{fake_open.line}\n{fake_result.line}\n".encode()
+    forged = ledger_._commit(head, data + lines, {}, "forged")
+    for ref in ("refs/heads/ledger", "refs/remotes/origin/ledger"):
+        git(world.repo, "update-ref", ref, forged)
+    return forged
+
+
+def test_a_forged_local_ledger_never_chooses_the_code_that_runs(ready, tmp_path):
+    # Review of #70, round 2, H-4 (the reviewer's probe, made a refusing test): the
+    # launcher took the candidate's commit from the clone's own ledger ref, which any
+    # process of the owner's user can rewrite. An agent committed a hostile seal.py, left
+    # it unpushed, appended to the local ledger a completed trial of the candidate's
+    # configuration at that commit, and the launcher ran the hostile code in place. The
+    # commit now comes from the command line, as the owner reads it on GitHub, and is
+    # checked against the remote's ledger, fetched with the pinned git: the hostile commit
+    # is refused before any of its code is imported, and the honest one runs its own
+    # code, which refuses the forged ledger before any passphrase is asked for.
+    opened, closed = trial(ready, CANDIDATE)
+    honest = opened.body["commit"]
+    ledger_head = ready.ledger.local_head()
+    seal_path = ready.repo / "research" / "norse_research" / "seal.py"
+    source = seal_path.read_text()
+    marker = '\nif __name__ == "__main__":'
+    assert source.count(marker) == 1
+    seal_path.write_text(source.replace(marker, HOSTILE_SEAL + "\n" + marker))
+    hostile = ready.commit("seal: tidy the data loading messages")  # never pushed
+    forged = forge_local_trial(ready, opened, closed, hostile)
+    assert relaunch.trial_commit(
+        [(e.hash, e.body) for e in parse_ledger(ready.ledger.git.blob(forged, LEDGER_PATH))],
+        opened.body["configuration_sha256"]) == hostile  # what the old launcher ran
+    tmpdir = tmp_path / "T"
+    tmpdir.mkdir()
+    unseal_base = ["unseal", "--commit", ready.prereg_commit,
+                   "--configuration-sha256", opened.body["configuration_sha256"],
+                   "--unseal-commit", hostile, "--ledger-head", ledger_head]
+
+    def run(arguments):
+        proc = _seal_process(ready, arguments, tmpdir, subprocess.DEVNULL)
+        out, err = proc.communicate(timeout=600)
+        return proc.returncode, (out + err).decode()
+
+    for arguments in ([*unseal_base, "--candidate-commit", hostile],
+                      ["candidate", "--candidate-commit", hostile], unseal_base, ["candidate"]):
+        code, shown = run(arguments)
+        assert code != 0 and "round 2, H-4" in shown, shown[-3000:]
+        assert "running with the code of commit" not in shown
+        assert not (tmpdir / "hostile-seal-imported").exists()
+    # The launcher's fetch replaced the forged remote-tracking ref with the remote's ledger.
+    assert git(ready.repo, "rev-parse", "refs/remotes/origin/ledger") == ledger_head
+    code, shown = run([*unseal_base, "--candidate-commit", honest])
+    assert code != 0 and f"seal: running with the code of commit {honest}" in shown, shown[-3000:]
+    assert "the local ledger is ahead of the remote" in shown
+    assert not (tmpdir / "hostile-seal-imported").exists()
+    assert not (tmpdir / "tapped-passphrase").exists()
+    assert unseal_of(remote_entries(ready)) is None
+
+
+def test_the_owners_procedure_runs_the_candidates_own_code(ready, tmp_path, capsys, request):
+    # Review of #70, round 2, the launcher residual: run from the clone, the launcher is
+    # HEAD's code, which a change after the candidate's run could rewrite. The owner's
+    # procedure, which seal candidate prints filled in, exports the candidate's code with
+    # plain git into a new folder and runs the unseal there, so the launcher that runs is
+    # the candidate's, and it runs in place. Its steps run here as printed, against a HEAD
+    # whose seal.py is hostile.
+    opened, _ = trial(ready, CANDIDATE)
+    commit = opened.body["commit"]
+    seal_path = ready.repo / "research" / "norse_research" / "seal.py"
+    source = seal_path.read_text()
+    marker = '\nif __name__ == "__main__":'
+    seal_path.write_text(source.replace(marker, HOSTILE_SEAL + "\n" + marker))
+    head = ready.commit("seal: tidy the data loading messages")
+    ready.push()
+    assert seal.main(["--repo", str(ready.repo), "candidate", "--candidate-commit", commit]) == 0
+    out = capsys.readouterr().out
+    steps = json.loads(out[out.index("{\n"):])["holdout_candidate"]["unseal_procedure"]
+    assert [step.split(". ", 1)[0] for step in steps] == [str(n) for n in range(1, 8)]
+    assert "ledger/trials.jsonl on the ledger branch of" in steps[0] and commit in steps[0]
+    commands = [step.split(". ", 1)[1] for step in steps[1:5]]
+    script = "\n".join(["set -e", *commands[:3], "printf 'export: %s\\n' \"$folder\"",
+                        commands[3]])
+    assert f"--unseal-commit {head} " in script and "--accept-diff" not in script
+    tmpdir = tmp_path / "T"
+    tmpdir.mkdir()
+    proc = subprocess.run(["/bin/sh", "-c", script], env={**os.environ, "TMPDIR": str(tmpdir)},
+                          stdin=subprocess.DEVNULL, capture_output=True, timeout=600,
+                          check=False)
+    shown = (proc.stdout + proc.stderr).decode()
+    # macOS's mktemp -d ignores TMPDIR, so the folder is found from the script's output.
+    exported = re.search(r"^export: (.+)$", proc.stdout.decode(), re.MULTILINE)
+    assert exported is not None, shown[-3000:]
+    folder = Path(exported.group(1))
+    request.addfinalizer(lambda: shutil.rmtree(folder, ignore_errors=True))
+    # The candidate's own launcher ran it in place: no second export, no HEAD code.
+    assert proc.returncode != 0 and "SealRefused: " in shown, shown[-3000:]
+    assert "running with the code of commit" not in shown
+    message = shown.split("SealRefused: ", 1)[1]
+    assert "research/norse_research/seal.py: M" in message and "hostile-seal-imported" in message
+    assert "interactive terminal" in message
+    assert not (tmpdir / "hostile-seal-imported").exists()
+    assert relaunch.package_matches(ready.repo, commit, folder / "research" / "norse_research")
 
 
 # --- security review H2, M1, L7: holdout attempts, one at a time ---------------------

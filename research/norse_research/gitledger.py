@@ -20,8 +20,9 @@ monitor turned off on the command line (``core.hooksPath=/dev/null``,
 ``core.fsmonitor=false``; H-1); on the commands that reach the remote, the credential
 helper reset and set to the owner's (``CREDENTIALS``); and an environment built from a
 short allowlist (``environment.PASSED_ENVIRONMENT``), never inherited. The git itself is
-always ``/usr/bin/git``, never one found on ``PATH``, and only while it, its exec path and
-its osxkeychain helper belong to root (``environment.git_program``; review of #70, L-6).
+always ``environment.GIT_PROGRAM`` (the Command Line Tools' git on macOS, ``/usr/bin/git``
+on Linux), never one found on ``PATH``, and only while it, its exec path and its
+osxkeychain helper belong to root (``environment.git_program``; review of #70, L-6).
 So no configuration file, variable or ``PATH`` entry an agent writes outside the clone
 runs a program inside a ledger command or redirects one. Inside the clone, a configuration
 that sets either hook key in any scope is refused, and so is any key in the clone's own
@@ -86,8 +87,10 @@ from pathlib import Path
 from . import ledger as _ledger
 from .canonical import CanonicalError, loads_strict, sha256_hex
 from .environment import (
+    CREDENTIALS,
     HARDENED,
     PINNED_CONFIGURATION,
+    REMOTE_COMMANDS,
     check_environment,
     git_environment,
 )
@@ -147,14 +150,6 @@ RESERVED = ("ledger-genesis",)
 # can read as a freeze that no longer exists (security review of #65, L-4), in any case,
 # since the tag ruleset makes ledger-Freeze-* as permanent as ledger-freeze-* (I-6).
 WITHDRAWN = ("ledger-freeze",)
-# The owner's credential helper, the only program a ledger command may run for a
-# credential. Only the commands that reach the remote carry it: the empty value first
-# clears every helper a configuration file names, so only this one runs (review of #65,
-# M-3). On the owner's Mac it is osxkeychain, which the pinned git, Apple's, keeps in its
-# own exec path (environment.git_program checks it).
-CREDENTIAL_HELPER = "osxkeychain"
-CREDENTIALS = ("-c", "credential.helper=", "-c", f"credential.helper={CREDENTIAL_HELPER}")
-REMOTE_COMMANDS = frozenset({"push", "fetch", "ls-remote"})
 _FALSE = frozenset({"false", "no", "off", "0"})
 # The clone's own configuration (the local and worktree scopes, and any file they include)
 # may hold these keys and no others: what `git init` and `git clone` write, the remotes'

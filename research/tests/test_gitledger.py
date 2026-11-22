@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -495,8 +496,8 @@ def test_every_ledger_git_command_runs_with_pinned_configuration_and_the_push_st
 def test_the_ledger_never_runs_a_git_found_on_path(world, monkeypatch):
     # Review of #70, L-6 (probe): a wrapper git put first on PATH, as an edit to the owner's
     # shell profile could, ran as every ledger git command of the unseal. The ledger now
-    # runs /usr/bin/git alone, checked to belong to root with its exec path and its
-    # osxkeychain helper, so the wrapper never runs; the ordinary append and push still do.
+    # runs environment.GIT_PROGRAM alone, checked to belong to root with its exec path and
+    # its osxkeychain helper, so the wrapper never runs; the ordinary append and push still do.
     bindir = world.tmp / "agent-bin"
     bindir.mkdir()
     marker = world.tmp / "wrapper-ran"
@@ -515,7 +516,12 @@ def test_the_ledger_never_runs_a_git_found_on_path(world, monkeypatch):
     world.ledger.verify()
     assert not marker.exists()
     assert len(parse_ledger(world.remote_ledger())) == before + 2
-    assert environment.git_program() == environment.GIT_PROGRAM == "/usr/bin/git"
+    assert environment.git_program() == environment.GIT_PROGRAM
+    # On macOS, the Command Line Tools' git itself, never the /usr/bin/git launcher, whose
+    # xcrun cache the owner's user can write (review of #70, round 2).
+    assert environment.GIT_PROGRAM == (
+        "/Library/Developer/CommandLineTools/usr/bin/git" if sys.platform == "darwin"
+        else "/usr/bin/git")
     assert environment.git_version().startswith("git version")
 
 
@@ -532,7 +538,7 @@ def test_a_git_the_owners_user_can_replace_is_refused(tmp_path):
         environment.git_program(str(tmp_path / "nowhere" / "git"))
     with pytest.raises(environment.EnvironmentRefused, match="does not exist"):
         environment.git_program("git")  # never a name to look up on PATH
-    environment.git_program()  # /usr/bin/git, and everything it runs, is root's
+    environment.git_program()  # GIT_PROGRAM, and everything it runs, is root's
 
 
 def test_genesis_pins_only_the_newest_preregistration_tag(tmp_path, monkeypatch):

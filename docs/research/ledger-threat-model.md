@@ -676,21 +676,28 @@ the full diff, rendered from the blobs themselves with long lines wrapped and fl
 at an interactive terminal only, its hash, refuses unless the owner passes that exact hash,
 and records it, and replay recomputes the hash without rendering the diff (security review
 round 3, T1; review of #65, M-1, L-7, L-10 and I-7); non-ASCII is escaped and flagged (review
-of #70, L-10). `seal candidate` and `seal unseal` run the candidate's code, exported from the
-candidate's commit by a launcher that runs before any module of the seal or of data loading is
-imported, never HEAD's, so a change item 6 allows cannot render its own review or read the
-passphrase (review of #70, H-3); the owner's second look, with git outside the repository's
-code, shows any change to the launcher. The unseal carries a one-time signature over its own
+of #70, L-10). `seal candidate` and `seal unseal` run the code of the commit the owner names with
+`--candidate-commit`, read on GitHub's view of the ledger, or refuse: a launcher that runs before
+any module of the seal or of data loading is imported checks that commit against the remote's
+ledger, fetched with the pinned git, never the clone's own ledger ref, and exports its code
+when the package on disk is not that commit's, never HEAD's, so a change item 6 allows cannot
+render its own review or read the passphrase (review of #70, H-3 and round 2, H-4). The owner
+runs the unseal from the candidate's code, exported with plain git into a new folder, so the
+launcher is the candidate's too, and the owner's second look, with git outside the repository's
+code, shows any change to the launcher (round 2). The unseal carries a one-time signature over its own
 bytes by the key the owner's passphrase derives, so a copy taken while it is pushed authorises
 nothing but that entry (decision D27; review of #65, H-2), and the owner pins the ledger head
 and HEAD it signs over, so a retry signs the same bytes or nothing (review of #70, M-4). Every
-ledger git command is `/usr/bin/git`, never one on `PATH`, and only while it, its exec path and
-its credential helper belong to root (review of #70, L-6); it runs with hooks and the file
+ledger git command is the Command Line Tools' git named in full, not the `/usr/bin/git` shim,
+never one on `PATH`, and only while it, its exec path and its credential helper belong to root
+(review of #70, L-6 and round 2); it runs with hooks and the file
 system monitor off, with no global or system configuration, an allowlisted environment and, when
 it reaches the remote, only the owner's credential helper (review of #65, H-1 and M-3); a clone
 whose own configuration holds any key outside a short allowlist is refused (review of #70, L-5),
 and the unseal refuses `GIT_ASKPASS` and `SSH_ASKPASS`. What remains is the interpreter and the
-Python files on disk, which the owner's user owns (T15). One result entry spends the
+files it reads, which the owner's user owns (T15): the Python files on disk and the virtual
+environment's `site-packages`, whose `.pth` files run at start-up; and which configuration the
+registered rule selects, which the candidate's own code computes. One result entry spends the
 seal. A run that
 fails may be retried under the same unseal, at the same commit, for the same configuration
 only, every attempt ledgered, until three runs have reached the unsealed stage (an attempt
@@ -1033,14 +1040,16 @@ marks a test the goal's own done-when already names.
 | `test_a_forged_or_moved_unseal_signature_is_refused` | A random signature, or the owner's signature moved onto another accepted diff, commit or candidate, or onto another place in the chain, is refused by the append and by replay (D27) | T22, T25 |
 | `test_a_key_record_whose_signer_does_not_match_is_refused` | A record whose `signer_sha256` the passphrase does not derive is refused by `check_key`, `check-key` and the unseal before anything is signed, and a signature by the passphrase's key fails replay under it (D27) | T25 |
 | `test_heads_seal_never_renders_the_review_or_reads_the_passphrase` | The reviewer's H-3 probe: a `seal.py` at HEAD that hides its own hunk and copies the passphrase is never imported by `python -m norse_research.seal unseal`, which runs the candidate's code; the review shows the hunk and no hash without a terminal, the passphrase typed at a terminal is read by the candidate's code, and the unseal lands (review of #70, H-3) | T22, T25 |
-| `test_the_launcher_picks_the_candidates_run_and_exports_its_code` | The launcher reads the ledger with git alone, picks the configuration's last completed trial, runs in place only when the package on disk is that commit's, refuses an unseal with no such trial, and exports the commit's package from git's objects (review of #70, H-3) | T22 |
+| `test_the_launcher_runs_the_named_commit_or_refuses` | The launcher refuses a missing or abbreviated `--candidate-commit`, a commit that is not the last completed trial of the named configuration on the remote's ledger, and a remote that is not a remote name; it runs in place only when the package on disk is that commit's, and exports the commit's package from git's objects (review of #70, H-3 and round 2, H-4) | T22 |
+| `test_a_forged_local_ledger_never_chooses_the_code_that_runs` | The reviewer's round 2 H-4 probe: an unpushed hostile `seal.py` commit, recorded as a completed trial of the candidate's configuration in the clone's own ledger refs only, is refused by `seal unseal` and `seal candidate` before any of its code is imported, as is a command with no `--candidate-commit`; the honest commit runs its own code, which refuses the forged ledger before the passphrase (review of #70, round 2, H-4) | T22, T25 |
+| `test_the_owners_procedure_runs_the_candidates_own_code` | The procedure `seal candidate` prints, run as printed against a HEAD whose `seal.py` is hostile, exports the candidate's code with plain git, runs the unseal there in place with no second export, never imports HEAD's code, and shows the hunk without a terminal (review of #70, round 2) | T22, T25 |
 | `test_a_retry_after_the_ledger_or_head_moved_is_refused_not_signed` | The reviewer's S4 and S4b: after a forced failure, a moved ledger or a moved HEAD refuses the identical retry before anything is signed (review of #70, M-4) | T22, T25 |
 | `test_non_ascii_in_the_diff_to_accept_is_escaped_and_flagged` | A homoglyph in a loader line is written as its escape and its line flagged, apart from a literal backslash in the code (review of #70, L-10) | T22 |
 | `test_the_clean_tree_check_reads_no_ignore_file_under_home` | An ignore file under the home folder, which hides an untracked module from the clone's own `git status`, does not hide it from the clean-tree check (review of #70, I-8) | T15, T22 |
-| `test_the_ledger_never_runs_a_git_found_on_path` | A wrapper git first on `PATH` never runs in a ledger command, and the append and push still work with `/usr/bin/git` (review of #70, L-6) | T15, T22, T25 |
+| `test_the_ledger_never_runs_a_git_found_on_path` | A wrapper git first on `PATH` never runs in a ledger command, and the append and push still work with the git named in full (review of #70, L-6) | T15, T22, T25 |
 | `test_a_git_the_owners_user_can_replace_is_refused` | A git binary, or a folder above it, that belongs to the owner's user is refused, as is a name to look up on `PATH` (review of #70, L-6) | T15, T22, T25 |
 | `test_a_gitattributes_change_since_the_candidate_refuses_the_unseal` | A changed `.gitattributes`, at the root or nested, refuses the unseal before the key is asked for (review of #65, M-1) | T22 |
-| `test_the_candidate_command_prints_neither_the_diff_nor_its_hash` | The key-free `candidate` command lists the changed files only and points to the unseal for the diff and its hash (review of #65, L-2), and prints the candidate's commit, the two pins, the unseal command line and the git it runs (review of #70, M-4 and L-6) | T22 |
+| `test_the_candidate_command_prints_neither_the_diff_nor_its_hash` | The key-free `candidate` command lists the changed files only and points to the unseal for the diff and its hash (review of #65, L-2), and prints the candidate's commit and open entry, the two pins, the owner's unseal procedure filled in and the git it runs; it refuses another commit, naming the open entry the rule selects, and a missing one (review of #70, M-4, L-6 and round 2, H-4) | T22 |
 | `test_the_holdout_reaches_its_unsealed_stage_at_most_three_times` | Three runs that reach the unsealed stage and fail, then no more, at the harness and on replay (round 3, C1) | T22 |
 | `test_holdout_runs_that_fail_before_the_unsealed_stage_do_not_count` | More failures before the attempt entry than the cap still leave the holdout run possible (round 3, C1) | T22 |
 | `test_second_unseal_is_refused` | Spec. A second unseal on the same ledger is refused | T23 |

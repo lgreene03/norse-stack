@@ -14,14 +14,15 @@ harness, the genesis step, the milestone tags and the seal all refuse:
 
 The strategy itself runs in a fresh interpreter with an empty environment.
 
-**The ledger's git** (security review of #65, M-3 and L-6; review of #70, L-6). Every git
-command the ledger, the seal and the seal's launcher run is ``GIT_PROGRAM``,
-``/usr/bin/git``, never one found on ``PATH``, and only if it, its exec path, the
-osxkeychain credential helper there and every folder above them belong to root and are
-writable by no group or other user (``git_program``), so the owner's user, and with it any
-agent, cannot replace them. On the owner's Mac ``/usr/bin/git`` is Apple's SIP-protected
-launcher for the Command Line Tools' git, whose exec path holds Apple's own osxkeychain
-helper. Each command runs with ``HARDENED`` settings first, ``PINNED_CONFIGURATION`` (no
+**The ledger's git** (security review of #65, M-3 and L-6; review of #70, L-6 and round 2).
+Every git command the ledger, the seal and the seal's launcher run is ``GIT_PROGRAM``,
+never one found on ``PATH``, and only if it, its exec path, the osxkeychain credential
+helper there and every folder above them belong to root and are writable by no group or
+other user (``git_program``), so the owner's user, and with it any agent, cannot replace
+them. On the owner's Mac it is ``/Library/Developer/CommandLineTools/usr/bin/git``, Apple's
+git called directly rather than through the ``/usr/bin/git`` launcher, whose xcrun lookup
+keeps a cache the owner's user can write; its exec path holds Apple's own osxkeychain
+helper. On Linux it is ``/usr/bin/git``. Each command runs with ``HARDENED`` settings first, ``PINNED_CONFIGURATION`` (no
 global or system configuration file, no replacement objects) and an environment built
 from ``PASSED_ENVIRONMENT`` alone (``git_environment``). These live here, not in
 ``gitledger``, so the seal's launcher (``relaunch``) can run git before it imports any
@@ -40,8 +41,22 @@ from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
 
-# The one git binary every ledger and seal command runs (review of #70, L-6).
-GIT_PROGRAM = "/usr/bin/git"
+# The one git binary every ledger and seal command runs (review of #70, L-6). On macOS it
+# is the Command Line Tools' git itself, not the /usr/bin/git launcher, which finds it
+# through xcrun and a per-user cache in the temporary folder that the owner's user can
+# write (review of #70, round 2). Elsewhere, Linux in CI, /usr/bin/git is the binary.
+GIT_PROGRAM = (
+    "/Library/Developer/CommandLineTools/usr/bin/git" if sys.platform == "darwin"
+    else "/usr/bin/git"
+)
+# The owner's credential helper, the only program a ledger command may run for a
+# credential. Only the commands that reach the remote carry it: the empty value first
+# clears every helper a configuration file names, so only this one runs (review of #65,
+# M-3). It is osxkeychain, which the pinned git keeps in its own exec path (git_program
+# checks it).
+CREDENTIAL_HELPER = "osxkeychain"
+CREDENTIALS = ("-c", "credential.helper=", "-c", f"credential.helper={CREDENTIAL_HELPER}")
+REMOTE_COMMANDS = frozenset({"push", "fetch", "ls-remote"})
 # Every git command runs with these first: hooks and the file system monitor would run a
 # program the clone chooses inside a ledger command (security review of #65, H-1).
 HARDENED = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")

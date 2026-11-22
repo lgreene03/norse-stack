@@ -98,8 +98,10 @@ Before it writes anything the harness refuses on any of these:
 * a remote that is not the pinned one: its resolved fetch and push URLs must equal the URL
   genesis pins, and no URL rewrite, `receivepack`, `uploadpack`, proxy or SSH command may
   be configured in any scope git reads; `refs/replace/` refs are refused and git runs with
-  `GIT_NO_REPLACE_OBJECTS`. Every ledger git command is `/usr/bin/git`, never one found
-  on `PATH`, and only while it, its exec path and its credential helper belong to root; it
+  `GIT_NO_REPLACE_OBJECTS`. Every ledger git command is the Command Line Tools' git named
+  in full (`/Library/Developer/CommandLineTools/usr/bin/git` on macOS, not the
+  `/usr/bin/git` shim; `/usr/bin/git` on Linux), never one found on `PATH`, and only while
+  it, its exec path and its credential helper belong to root; it
   reads no global or system configuration (`GIT_CONFIG_GLOBAL=/dev/null`,
   `GIT_CONFIG_NOSYSTEM=1`), gets an environment built from a short allowlist rather than the
   shell's, and, if it reaches the remote, the owner's credential helper alone; and the clone's

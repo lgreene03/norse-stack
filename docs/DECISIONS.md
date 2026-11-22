@@ -370,12 +370,18 @@ passphrase, typed once. Any process of the owner's user can still fail the push 
 single unseal; that is detected, not prevented. The same review (H-3) found that HEAD's
 `seal.py`, which item 6 lets change after the candidate's run, rendered the owner's review of
 that change and read the passphrase; `seal candidate` and `seal unseal` now run the code of the
-candidate's commit, exported there automatically, never HEAD's. No key record existed, so
-nothing was migrated; the owner creates the record with `seal key-record` as before, and no
-agent creates it. The same pull request hardens the seal's git: every ledger and seal git command
-runs `/usr/bin/git`, which belongs to root, never a git on `PATH`, with no global or system
-configuration, an allowlisted environment and, on the commands that reach the remote, only the
-owner's credential helper (#65's review, M-3 and L-6; #70's, L-6). It does not close L-5 by that
+commit the owner names with `--candidate-commit`, read on GitHub's view of the ledger, never
+HEAD's, and never a commit taken from the clone's own ledger ref, which the review's second round
+showed any process of the owner's user can forge (H-4). The owner runs the unseal from that
+commit's code, exported with plain git into a new folder, so the launcher that runs is the
+candidate's too. No key record existed, so nothing was migrated; the owner creates the record
+with `seal key-record` as before, and no agent creates it. The same pull request hardens the
+seal's git: every ledger and seal git command runs the Command Line Tools' git named in full
+(`/Library/Developer/CommandLineTools/usr/bin/git`; not the `/usr/bin/git` shim, whose `xcrun`
+lookup reads a cache the owner's user can write), which belongs to root, never a git on `PATH`,
+with no global or system configuration, an allowlisted environment and, on the commands that
+reach the remote, only the owner's credential helper (#65's review, M-3 and L-6; #70's, L-6).
+It does not close L-5 by that
 pinning: the clone's own configuration stayed a denylist until #70's review, and is now an
 allowlist of the keys `git clone` writes, remotes, branch tracking and a local identity (#70's
 L-5). It also pins the registration's content beside its tag, on the genesis step, the append

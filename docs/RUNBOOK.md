@@ -20,6 +20,7 @@ design), see [SECURITY.md](SECURITY.md).
 | Recording gap audit | `RECORDING_AUDIT_DIR`, default `./data/recording-audit`; metrics on http://127.0.0.1:8098/metrics (§6.3) |
 | Notification when recording stops | `make heartbeat-install` / `make heartbeat-uninstall` (macOS, §6.4) |
 | Research gateway token | `secrets/research_token`, created by `make up` when absent (§1.1) |
+| Holdout unseal (owner only, once) | `seal candidate --candidate-commit C`, then the steps it prints (§1.2) |
 | End-to-end smoke test | `./scripts/smoke.sh --teardown` |
 | Provision Kafka topics | `./scripts/provision-topics.sh` |
 | Grafana | http://localhost:3001 (board: **Norse Stack — Trading Pipeline**) |
@@ -92,6 +93,40 @@ If the research panel stays on "connecting to research…", check
 `docker compose logs --tail=20 research` for "No research token configured" or
 "Research token rejected" (which names the cause), and the console's startup
 line `research token:`, which says whether the file is usable and, if not, why.
+
+### 1.2 The holdout unseal (G1.6): owner only
+
+The unseal happens once per iteration, by the owner, in a terminal of their own;
+no agent runs it. The full procedure, its checks and what it does not cover are in
+[holdout-seal.md](research/holdout-seal.md); this is the short form. C is the
+full commit of the holdout candidate's selectable run, read on GitHub's view of
+`ledger/trials.jsonl` on the `ledger` branch, never from the clone.
+
+1. In the clone's `research` folder:
+   `python -m norse_research.seal candidate --candidate-commit <C>`. It refuses
+   any other commit, naming the open entry the registered rule selects; check that
+   entry on GitHub and use its commit. Its output ends with `unseal_procedure`,
+   the steps below with every value filled in.
+2. Check on GitHub that C is the commit of the open entry it names.
+3. Export C's code with plain git into a new folder, and run the unseal from there,
+   never from the clone:
+
+   ```bash
+   folder=$(mktemp -d)
+   GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 /Library/Developer/CommandLineTools/usr/bin/git -C <clone> archive <C> research | tar -x -C "$folder"
+   cd "$folder/research"
+   python -m norse_research.seal --repo <clone> unseal --candidate-commit <C> --commit <pre-registration commit> --configuration-sha256 <hash> --unseal-commit <HEAD as printed> --ledger-head <ledger head as printed>
+   ```
+
+4. It prints the full diff since C, then its hash, and refuses. Read every line,
+   then run the same command with `--accept-diff <that hash>` and type the
+   passphrase. Accept only a hash read in your own terminal straight after the diff.
+5. Back in the clone's `research` folder: `python -m norse_research.seal fetch-holdout`.
+
+Stop and treat it as an incident if a step refuses because the ledger or HEAD
+moved since step 1 (do not change a pin to get past it), if the unseal's push
+fails and the remote holds another unseal entry, or if the second look in
+holdout-seal.md shows any file outside the seal and data loading.
 
 ---
 

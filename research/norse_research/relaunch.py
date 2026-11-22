@@ -10,35 +10,41 @@ unseal`` and ``... candidate`` therefore never run HEAD's seal. The package's
 ``__init__.py`` calls ``maybe_relaunch`` before Python imports ``seal.py`` or any module of
 the seal or of data loading; it:
 
-1. reads the clone's local ledger with git alone (``environment``'s pinned git; this module
-   imports nothing of the package but ``environment``) and picks the candidate's commit:
-   for ``unseal``, the commit of the last completed trial of the configuration hash the
-   command names, which is how the gate picks a configuration's selectable run; for
-   ``candidate``, which names none, the commit of the last completed trial of all;
-2. if the package on disk is that commit's, file for file, lets the command run in place;
-3. otherwise writes that commit's package, read from git's objects with ``cat-file``
-   (no checkout, so no hook, attribute or filter of the clone runs, and nothing is added
-   to the clone's git folder), into a new temporary folder, runs the same command there
-   with this interpreter and ``--repo`` naming the clone, so every module it imports is
-   that commit's, and removes the folder afterwards.
+1. takes the candidate's commit from the command line alone, ``--candidate-commit C``, a
+   full commit id the owner reads on GitHub's view of the ``ledger`` branch. It never
+   chooses code from the clone's local ledger ref, which any process of the owner's user
+   can rewrite (review of #70, round 2, H-4);
+2. fetches the remote's ``ledger`` branch with ``environment``'s pinned git (this module
+   imports nothing of the package but ``environment``) and refuses unless ``C`` is the
+   commit of a completed trial there: for ``unseal``, the last completed trial of the
+   configuration hash the command names, which is how the gate picks a configuration's
+   selectable run;
+3. if the package on disk is ``C``'s, file for file, lets the command run in place;
+4. otherwise writes ``C``'s package, read from git's objects with ``cat-file`` (no
+   checkout, so no hook, attribute or filter of the clone runs, and nothing is added to the
+   clone's git folder), into a new temporary folder, runs the same command there with this
+   interpreter and ``--repo`` naming the clone, so every module it imports is ``C``'s, and
+   removes the folder afterwards.
 
-The command then checks, in that commit's own code, that the candidate the registered rule
-selects is the one it runs as (``seal`` compares its loaded modules with the candidate's
-commit), and refuses otherwise; ``candidate`` moves once more to the candidate's commit if
-the last trial's was another. The keyless re-fetch of the holdout files, which needs
-data loading as fixed after the candidate's run, stays at HEAD: ``seal fetch-holdout``.
+``C``'s own code then checks, against the remote's verified ledger, that the registered
+rule selects the run at ``C`` and that every module it loaded is ``C``'s, and refuses
+otherwise, before any passphrase is read. The keyless re-fetch of the holdout files, which
+needs data loading as fixed after the candidate's run, stays at HEAD: ``seal
+fetch-holdout``.
 
-What this cannot do: the launcher itself is HEAD's code. It lives outside the seal set
-(this module, ``environment.py`` and ``__init__.py``), so a change to it after the
-candidate's run is one item 6 never allows, but code that changes it can also skip it.
-The owner's second look in holdout-seal.md (git, outside the repository's code, from the
-candidate's commit to HEAD) shows any such change.
+What this cannot do: the launcher itself is HEAD's code when the owner runs the command
+from the clone. It lives outside the seal set (this module, ``environment.py`` and
+``__init__.py``), so a change to it after the candidate's run is one item 6 never allows,
+but code that changes it can also skip it. So the owner runs the unseal from ``C``'s own
+code, exported with plain git into a new folder (holdout-seal.md; ``seal candidate`` prints
+the commands): then the launcher that runs is ``C``'s.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -46,25 +52,24 @@ import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
-from .environment import HARDENED, git_environment
+from .environment import CREDENTIALS, HARDENED, REMOTE_COMMANDS, git_environment
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 PACKAGE_PATH = "research/norse_research"
 REPO_ROOT = PACKAGE_DIR.parents[1]
-LEDGER_REF = "refs/heads/ledger"
+LEDGER_BRANCH = "ledger"
 LEDGER_PATH = "ledger/trials.jsonl"
 MODULE = "norse_research.seal"
 COMMANDS = frozenset({"unseal", "candidate"})
+CANDIDATE_COMMIT = "--candidate-commit"
 # The seal's options that take a value; ``seal`` parses with allow_abbrev off, so these are
 # spelt out in full on any command line it accepts.
 VALUED = frozenset({
     "--repo", "--remote", "--commit", "--tag", "--configuration-sha256", "--accept-diff",
-    "--unseal-commit", "--ledger-head", "--boundary", "--out", "--at-candidate",
+    "--unseal-commit", "--ledger-head", "--boundary", "--out", CANDIDATE_COMMIT,
 })
-# Given by ``seal candidate`` alone, naming the candidate's commit, when it moves there
-# from the last trial's: the launcher then runs that commit's code, and the code there
-# refuses rather than move again. It never lets HEAD's code run in its place.
-AT_CANDIDATE = "--at-candidate"
+FULL_COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+REMOTE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 class RelaunchRefused(SystemExit):
@@ -73,9 +78,10 @@ class RelaunchRefused(SystemExit):
 
 def _git(repo: Path, *args: str, input: bytes | None = None) -> bytes:
     program, environ = git_environment()
+    credentials = CREDENTIALS if args and args[0] in REMOTE_COMMANDS else ()
     proc = subprocess.run(
-        [program, *HARDENED, *args], cwd=repo, input=input, capture_output=True, env=environ,
-        check=False,
+        [program, *HARDENED, *credentials, *args], cwd=repo, input=input, capture_output=True,
+        env=environ, check=False,
     )
     if proc.returncode:
         message = proc.stderr.decode(errors="replace").strip()[:400]
@@ -111,28 +117,41 @@ def parse(arguments: Sequence[str]) -> tuple[str | None, dict[str, str]]:
     return command, values
 
 
-def ledger_entries(repo: Path) -> list[tuple[str, dict]]:
-    """The clone's local ledger as (entry hash, body) pairs, parsed with ``json`` alone:
-    what the launcher picks from it is checked afterwards by the candidate's own code."""
-    data = _git(repo, "cat-file", "blob", f"{LEDGER_REF}:{LEDGER_PATH}")
+def remote_ledger_entries(repo: Path, remote: str) -> list[tuple[str, dict]]:
+    """The remote's ``ledger`` branch, fetched now with the pinned git into the clone's
+    remote-tracking ref, as (entry hash, body) pairs parsed with ``json`` alone. The
+    clone's own ``refs/heads/ledger`` is never read (review of #70, round 2, H-4); what is
+    taken from this is checked afterwards by the candidate's own code against the verified
+    ledger."""
+    if not REMOTE_NAME.fullmatch(remote):
+        raise RelaunchRefused(f"seal: {remote!r} is not a remote name")
+    tracking = f"refs/remotes/{remote}/{LEDGER_BRANCH}"
+    _git(repo, "fetch", "--no-tags", "--quiet", "--", remote,
+         f"+refs/heads/{LEDGER_BRANCH}:{tracking}")
+    data = _git(repo, "cat-file", "blob", f"{tracking}:{LEDGER_PATH}")
     return [
         (hashlib.sha256(line.encode("ascii")).hexdigest(), json.loads(line))
         for line in data.decode("ascii").splitlines()
     ]
 
 
-def trial_commit(entries: Sequence[tuple[str, dict]], configuration_sha256: str | None) -> str | None:
-    """The commit of the last completed trial (of ``configuration_sha256``, if given)."""
+def completed_trials(entries: Sequence[tuple[str, dict]]) -> list[dict]:
+    """The open entries of every completed trial, in ledger order."""
     completed = {
         body.get("opens") for _, body in entries
         if body.get("type") == "result" and body.get("status") == "completed"
     }
+    return [
+        body for digest, body in entries
+        if body.get("type") == "open" and body.get("kind") == "trial" and digest in completed
+    ]
+
+
+def trial_commit(entries: Sequence[tuple[str, dict]], configuration_sha256: str) -> str | None:
+    """The commit of the last completed trial of ``configuration_sha256``."""
     chosen = None
-    for digest, body in entries:
-        if (
-            body.get("type") == "open" and body.get("kind") == "trial" and digest in completed
-            and (configuration_sha256 is None or body.get("configuration_sha256") == configuration_sha256)
-        ):
+    for body in completed_trials(entries):
+        if body.get("configuration_sha256") == configuration_sha256:
             chosen = body.get("commit")
     return chosen
 
@@ -193,7 +212,7 @@ def export_package(repo: Path, commit: str, dest: Path) -> None:
         target.write_bytes(data)
 
 
-def run_at(repo: Path, commit: str, arguments: Sequence[str], extra: Sequence[str] = ()) -> int:
+def run_at(repo: Path, commit: str, arguments: Sequence[str]) -> int:
     """Run ``python -m norse_research.seal`` with ``commit``'s package, ``--repo`` naming
     ``repo``, and return its exit status. The folder is removed afterwards."""
     rest = []
@@ -216,44 +235,52 @@ def run_at(repo: Path, commit: str, arguments: Sequence[str], extra: Sequence[st
             f"{folder}, against the clone at {repo} (review of #70, H-3)",
             file=sys.stderr, flush=True,
         )
-        command = [sys.executable, "-s", "-B", "-m", MODULE, "--repo", str(repo), *extra, *rest]
+        command = [sys.executable, "-s", "-B", "-m", MODULE, "--repo", str(repo), *rest]
         return subprocess.run(command, cwd=folder / "research", check=False).returncode
     finally:
         shutil.rmtree(folder, ignore_errors=True)
 
 
 def maybe_relaunch(argv: Sequence[str]) -> None:
-    """Run ``seal unseal`` or ``seal candidate`` with the candidate's code, as the module
-    docstring says, and exit with its status; return, so the command runs in place, when
-    ``argv`` runs neither, asks only for help, or the package on disk is already the
-    commit's. Raises ``SystemExit`` in every other case."""
+    """Run ``seal unseal`` or ``seal candidate`` with the code of the commit
+    ``--candidate-commit`` names, as the module docstring says, and exit with its status;
+    return, so the command runs in place, when ``argv`` runs neither, asks only for help,
+    or the package on disk is already that commit's. Raises ``SystemExit`` in every other
+    case, refusals included: nothing then runs, at HEAD or anywhere."""
     arguments = seal_arguments(argv)
     if arguments is None:
         return
     command, values = parse(arguments)
     if command not in COMMANDS or "-h" in arguments or "--help" in arguments:
         return
+    commit = values.get(CANDIDATE_COMMIT, "")
+    if not FULL_COMMIT.fullmatch(commit):
+        raise RelaunchRefused(
+            f"seal: {command} needs {CANDIDATE_COMMIT} with the full commit id of the "
+            "candidate's selectable run, read on GitHub's view of the ledger branch; the "
+            "launcher never takes it from the clone's own ledger. Nothing ran (review of #70, "
+            "round 2, H-4)"
+        )
     repo = Path(values.get("--repo", REPO_ROOT)).resolve()
-    hashed = values.get("--configuration-sha256") if command == "unseal" else None
-    try:
-        entries = ledger_entries(repo)
-    except RelaunchRefused:
-        if command == "unseal":
-            raise
-        return  # no local ledger: nothing to judge, and nothing secret runs
-    if command == "candidate" and AT_CANDIDATE in values:
-        commit = values[AT_CANDIDATE]
-    else:
-        commit = trial_commit(entries, hashed)
-    if commit is None:
-        if command == "unseal":
+    remote = values.get("--remote", "origin")
+    entries = remote_ledger_entries(repo, remote)
+    if command == "unseal":
+        hashed = values.get("--configuration-sha256", "")
+        found = trial_commit(entries, hashed)
+        if found != commit:
+            where = ("has no completed trial" if found is None
+                     else f"has its last completed trial at {found}")
             raise RelaunchRefused(
-                f"seal: the local ledger holds no completed trial of configuration {hashed}, "
-                "so there is no candidate's code to run the unseal with; sync the ledger "
-                "(python -m norse_research.gitledger sync) and name the configuration seal "
-                "candidate prints. Nothing ran at HEAD (review of #70, H-3)"
+                f"seal: on the remote's ledger, configuration {hashed} {where}, not at "
+                f"{commit}; nothing ran. Check the commit on GitHub's view of the ledger "
+                "branch (review of #70, round 2, H-4)"
             )
-        return
+    elif commit not in {body.get("commit") for body in completed_trials(entries)}:
+        raise RelaunchRefused(
+            f"seal: no completed trial on the remote's ledger ran at {commit}; nothing ran. "
+            "Check the commit on GitHub's view of the ledger branch (review of #70, round 2, "
+            "H-4)"
+        )
     if package_matches(repo, commit):
         return
     raise SystemExit(run_at(repo, commit, arguments))
