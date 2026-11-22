@@ -217,8 +217,11 @@ before the unseal; the matching one is merged.
 ## Kill criteria
 
 If H1 and H2 both fail, strategy search stops for this product: no re-tuning and no
-hypotheses invented after seeing results. If the gate fails its no-skill
-calibration, no strategy is judged. If the trial budget is exhausted before a pass,
+hypotheses invented after seeing results. If the gate fails its calibration, either
+half of it (at most 5% false passes in every no-skill family, and detection of a
+planted Sharpe of 2.0 under decision D22; section 10 of PREREGISTRATION.md), no
+strategy is judged and the iteration closes NOT JUDGED, with no further revision of
+the gate in it (decision D24). If the trial budget is exhausted before a pass,
 that is a fail. If the ledger's chain breaks, the iteration is void and restarts
 from pre-registration. The verdict in each case, an exhausted budget included, is
 governed by the verdict table in section 11 of PREREGISTRATION.md (its section 15,

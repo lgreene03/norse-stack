@@ -657,10 +657,12 @@ square root of 365.
 **Calibration.** The gate as registered here, with these windows, a family N of up to 30,
 V the null variance of the candidate's window and per-hypothesis PBO matrices of 8 and 6
 columns, is what G1.7 must calibrate. No strategy is judged until both halves hold, at
-N = 30 and in G1.7's families
-([#66](https://github.com/lgreene03/norse-stack/pull/66)). No skill: in every one of
-G1.7's no-skill families separately, the gate produces a holdout candidate in at most 50
-of 1,000 simulated ledgers (5%); the two serially correlated families are reported only.
+N = 30, in the families of G1.7's study as it stands at
+[#66](https://github.com/lgreene03/norse-stack/pull/66)'s commit c2365ee (seed 20261121,
+1,000 ledgers each), unchanged for the rerun except V and the detection constants; the
+JSON's `gate.calibration` lists them by id. No skill: in every one of its 17 no-skill
+families separately, the gate produces a holdout candidate in at most 50 of 1,000
+simulated ledgers (5%); its two serially correlated families are reported only.
 Detection: in each of the four single-planted families at an annualised Sharpe ratio of
 2.0 (`single-H1-s2-low`, `single-H1-s2-high`, `single-H2-s2-low` and `single-H2-s2-high`),
 the planted hypothesis passes development, its candidate meeting DEV-1 to DEV-5, in more
@@ -671,8 +673,8 @@ reported with the same families. The no-skill families include configurations co
 within each hypothesis and across the two, where the null variance's charge for
 independent trials is furthest from the trials' own dispersion. If G1.7's full rerun
 under this gate does not meet both halves, `prereg-v2` is still tagged as it stands, the
-gate is not revised again on the strength of that result, and the iteration closes NOT
-JUDGED (decision D24).
+gate is not revised again in this iteration, and the iteration closes NOT JUDGED
+(decision D24).
 
 ## 11. The holdout candidate, the single holdout run and the verdict
 
@@ -740,6 +742,15 @@ come from the iteration's kill criteria and replace every other row for both hyp
 PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT comes before FAIL, so a hypothesis that
 passes development is never read as FAIL because the other's unfinished grid kept the
 holdout sealed (decision D23); that other hypothesis is then NOT RUN.
+
+**When the verdict waits.** No verdict is given for either hypothesis while the ledger
+holds an unseal entry whose holdout run has neither returned a result nor used up the runs
+the seal allows, or while a holdout candidate exists, both hypotheses' grids are complete
+or exhausted, and the ledger holds no unseal entry. So a hypothesis whose candidate is the
+holdout candidate, and whose holdout is still to come, is never given FAIL by the table
+above for want of a holdout result. A development pass beside a grid that is neither
+complete nor exhausted does not wait: it is PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT
+(decision D23). This is the publication rule of the verdict texts (docs/verdict).
 
 **What closes development when there is no holdout candidate.** Without a holdout
 candidate there is no unseal. Development then closes once each hypothesis has a
@@ -912,9 +923,9 @@ raised (those roles are AI agents; their reviews are advice, not approvals).
 | D16 | rulesets: main cannot be force pushed or deleted and needs the `research` and `validate` checks; `prereg-*` and `ledger-*` tags cannot be moved or deleted |
 | D17 | the holdout files stay off the local mirror until the single unseal, then are fetched again and verified against the frozen holdout manifest |
 | D21 | there is no ledger freeze: the unseal entry closes development, N, V and the holdout candidate are computed on the entries before it, and the unseal comes only once each hypothesis's grid is complete or its budget exhausted, so a hypothesis without a selectable run of every configuration at the unseal is FAIL (its budget is exhausted); NOT RUN arises only at a verdict given before development closes |
-| D22 | V in SR0 is the null variance 1/(T − 1) of the candidate's window, for DEV-1 and DEV-2; the calibration's detection condition is at N = 30, in each of the four single-planted families at an annualised Sharpe ratio of 2.0, the planted hypothesis passing development in more than 500 of 1,000 ledgers; the three section 11 clarifications of `prereg-v2` confirmed unchanged |
+| D22 | V in SR0 is the null variance 1/(T − 1) of the candidate's window, for DEV-1 and DEV-2; the calibration's detection condition is at N = 30, in each of the four single-planted families at an annualised Sharpe ratio of 2.0, the planted hypothesis passing development in more than 500 of 1,000 ledgers; `prereg-v2` is tagged only once G1.7's full rerun under the revised gate has completed and been recorded; the three section 11 clarifications of `prereg-v2` confirmed unchanged |
 | D23 | a hypothesis that passes development while the other's grid is neither complete nor exhausted when the verdict is given is PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT, not FAIL, and the holdout stays sealed (section 11) |
-| D24 | if G1.7's full rerun under the revised gate does not meet section 10's calibration condition, `prereg-v2` is tagged as it stands, the gate is not revised again on that result, and the iteration closes NOT JUDGED |
+| D24 | if G1.7's full rerun under the revised gate does not meet section 10's calibration condition, `prereg-v2` is tagged as it stands, the gate is not revised again in this iteration, and the iteration closes NOT JUDGED |
 | D25 | only the owner starts holdout runs, straight after the unseal; no agent, scheduled task or second clone starts one. The code does not enforce it (section 11, item 7) |
 
 ## 15. Where NEXT_ITERATION.md, the register and merged code disagree with this
@@ -1076,15 +1087,15 @@ terms that the full calibration is rerun before tagging, which extends that inst
 the same tag with D22 in it. The lead creates that annotated tag on the commit on main that
 holds this revision, once G1.7's full rerun under it has completed and been recorded. If
 that rerun does not meet section 10's calibration condition, the tag is still created on
-that commit, as the revision stands: the gate is not revised again on the strength of that
-result, and the iteration closes NOT JUDGED (decision D24).
+that commit, as the revision stands: the gate is not revised again in this iteration, and
+the iteration closes NOT JUDGED (decision D24).
 
 **Change log.**
 
 | Tag | Date | Reason |
 |---|---|---|
 | `prereg-v1` | 2026-11-14 | first version |
-| `prereg-v2` | 2026-11-21 and 2026-11-22 | the ledger freeze removed; the unseal closes development (D21); section 1 discloses huginn's fixture `data/btc_test.jsonl`, BTC data from 2026-05-18 inside the holdout, found by the G2.5 audit; section 11, from the G3.1 drafting (#64): the unseal waits until each hypothesis's grid is complete or its budget exhausted (no early stopping across hypotheses), what closes development with no holdout candidate (minimal, in prose; no ledger entry marks it), and the verdicts VOID and NOT JUDGED, which the owner confirmed unchanged on 2026-11-22 (D22); section 10, after G1.7's calibration (#66) and before any trial or genesis entry: V is the null variance 1/(T − 1) of the candidate's window for DEV-1 and DEV-2, and the calibration's detection condition is at N = 30, in each of the four single-planted families at an annualised Sharpe ratio of 2.0, the planted hypothesis passing development in more than 500 of 1,000 ledgers (D22), with the consequential edits to sections 12, 13 and 14 and section 15, items 1, 9 and 24; after the quant and security roles' reviews of #65 (AI agent roles, not approvals): section 10's detection clause pinned to N = 30, the four single-planted families at 2.0 and the metric "the planted hypothesis passes development", and its Slepian sentence limited to non-negative correlation; section 12's H2 four-in-five figure at N = 30 corrected to 1.87; section 13's meaning of a FAIL; section 14's D21 row (an incomplete hypothesis at the unseal is FAIL); "no entry may follow the unseal" reworded in sections 9 and 11 (a result of a run opened before it is accepted and ignored); and the owner's decisions of 2026-11-22: a development pass beside an unfinished grid is PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT (D23), a failed calibration rerun means tagging anyway and NOT JUDGED (D24), and only the owner starts holdout runs (D25, section 11, item 7) |
+| `prereg-v2` | 2026-11-21 and 2026-11-22 | the ledger freeze removed; the unseal closes development (D21); section 1 discloses huginn's fixture `data/btc_test.jsonl`, BTC data from 2026-05-18 inside the holdout, found by the G2.5 audit; section 11, from the G3.1 drafting (#64): the unseal waits until each hypothesis's grid is complete or its budget exhausted (no early stopping across hypotheses), what closes development with no holdout candidate (minimal, in prose; no ledger entry marks it), and the verdicts VOID and NOT JUDGED, which the owner confirmed unchanged on 2026-11-22 (D22); section 10, after G1.7's calibration (#66) and before any trial or genesis entry: V is the null variance 1/(T − 1) of the candidate's window for DEV-1 and DEV-2, and the calibration's detection condition is at N = 30, in each of the four single-planted families at an annualised Sharpe ratio of 2.0, the planted hypothesis passing development in more than 500 of 1,000 ledgers (D22), with the consequential edits to sections 12, 13 and 14 and section 15, items 1, 9 and 24; after the quant and security roles' reviews of #65 (AI agent roles, not approvals): section 10's detection clause pinned to N = 30, the four single-planted families at 2.0 and the metric "the planted hypothesis passes development", and its Slepian sentence limited to non-negative correlation; section 12's H2 four-in-five figure at N = 30 corrected to 1.87; section 13's meaning of a FAIL; section 14's D21 row (an incomplete hypothesis at the unseal is FAIL); "no entry may follow the unseal" reworded in sections 9 and 11 (a result of a run opened before it is accepted and ignored); and the owner's decisions of 2026-11-22: a development pass beside an unfinished grid is PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT (D23), a failed calibration rerun means tagging anyway and NOT JUDGED (D24), and only the owner starts holdout runs (D25, section 11, item 7); after the quant role's second review: D24 worded as "not revised again in this iteration", the calibration's families pinned by id to #66 at c2365ee (section 10 and `gate.calibration`), section 11's rule on when the verdict waits, and section 14's D22 row giving the tag's wait for the rerun |
 
 **Signatures.**
 

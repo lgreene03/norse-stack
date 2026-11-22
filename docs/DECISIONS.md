@@ -319,7 +319,7 @@ only.
 **D24. If the calibration rerun fails, tag anyway and close NOT JUDGED.** Decided by the
 owner on 2026-11-22: "Tag anyway, NOT JUDGED". If G1.7's full rerun under the revised gate
 does not meet the restated calibration clause, `prereg-v2` is tagged as it stands, the gate
-is not revised again on the strength of that result, and the iteration closes NOT JUDGED.
+is not revised again in this iteration, and the iteration closes NOT JUDGED.
 Deciding this before the rerun runs keeps D22's property that the condition is fixed
 before its results are seen. Section 10's "Calibration", section 16's tagging paragraph and
 the JSON's `gate.calibration` and `change_control.signing_and_tag` say so.
