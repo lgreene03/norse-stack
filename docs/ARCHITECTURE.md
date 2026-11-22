@@ -39,7 +39,6 @@ flowchart LR
         odin["odin<br/>Python<br/>analytics (Sharpe, VaR, cost)"]
         bragi["bragi<br/>Python<br/>trade explainability"]
         huginnai["huginn-ai<br/>Python<br/>XGBoost signal-quality model<br/>served, not a live signal"]
-        newssentinel["news-sentinel<br/>Python<br/>LLM news sentiment"]
     end
 
     subgraph planes["Research, data & execution-quality planes"]
@@ -63,8 +62,6 @@ flowchart LR
         tempo["tempo<br/>traces (OTLP)"]
         alertmanager["alertmanager"]
     end
-
-    ollama["Ollama<br/>host LLM"]
 
     %% ── Market data in ──────────────────────────────────────────────
     binance -->|"WS trades"| muninn
@@ -101,7 +98,6 @@ flowchart LR
     muninn -.->|S3| minio
     huginn -.->|portfolio state| pghuginn
     redpanda -.-> console
-    newssentinel -.->|sentiment| ollama
 
     %% ── Observability (dashed) ──────────────────────────────────────
     muninn -.->|OTLP| tempo

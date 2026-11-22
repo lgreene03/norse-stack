@@ -96,13 +96,13 @@ The quick ASCII view:
                         │  │ 10-Layer │  │Analytics│ │Explain│ │  ML/    │    │       │
                         │  │ Signals  │  │ Monitor │ │Engine │ │ XGBoost │    │       │
                         │  └──────────┘  └─────────┘ └──────┘ └─────────┘    │       │
-                        │       │                                             │       │
-                        │       ▼              ┌──────────────────┐           │       │
-                        │  ┌──────────┐        │   OBSERVABILITY  │           │       │
-                        │  │  NEWS    │        │  ┌────────────┐  │           │       │
-                        │  │ SENTINEL │        │  │ Prometheus │  │           │       │
-                        │  │ LLM/NLP  │        │  │  + Grafana │  │           │       │
-                        │  └──────────┘        │  └────────────┘  │           │       │
+                        │                                                     │       │
+                        │                      ┌──────────────────┐           │       │
+                        │                      │   OBSERVABILITY  │           │       │
+                        │                      │  ┌────────────┐  │           │       │
+                        │                      │  │ Prometheus │  │           │       │
+                        │                      │  │  + Grafana │  │           │       │
+                        │                      │  └────────────┘  │           │       │
                         │                      └──────────────────┘           │       │
                         └──────────────────────────────────────────────────────────────┘
 ```
@@ -118,7 +118,6 @@ The quick ASCII view:
 | **Odin** | Python | Performance analytics: Sharpe, Sortino, CVaR, VaR, Monte Carlo, correlation matrix |
 | **Bragi** | Python | Trade explainability engine with human-readable decision logs |
 | **Huginn-AI** | Python | XGBoost signal-quality model, served with versioning, provenance and online retraining; not a live signal in the shipped config (OBI ML gate off by default) |
-| **News Sentinel** | Python | LLM-powered crypto news sentiment via Ollama |
 | **Research Gateway** | Go 1.25 | Read-only since G1.2: serves earlier walk-forward runs behind a bearer token and starts none; trials run through `research/norse_research` |
 | **Mimir** | Python | Point-in-time (no-lookahead) feature store: event_time + ingest_time, as-of queries |
 | **Forseti** | Python | Execution TCA from real fills, plus market-impact (square-root law) and strategy-capacity modelling |
@@ -139,7 +138,7 @@ The bridge computes 10 independent signal layers from live Binance data, each ca
 | 6 | Funding Rate | Perpetual futures positioning pressure |
 | 7 | Open Interest Cascade | Futures contract count delta |
 | 8 | ML Confidence | XGBoost probability, carried as provenance; consumed only when STRATEGY_OBI_ML_GATE is on (off by default) |
-| 9 | News Sentiment | Ollama LLM headline analysis |
+| 9 | News Sentiment | Always 0 since news-sentinel was retired (G2.6, [docs/CONTAINERS.md](docs/CONTAINERS.md)) |
 | 10 | Regime Detection | Hurst exponent + autocorrelation classification |
 
 ### Data Flow
@@ -238,7 +237,6 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 | 8086 | Odin Analytics | http://localhost:8086/api/analytics |
 | 8087 | Bragi Explainer | http://localhost:8087/api/decisions |
 | 8088 | Redpanda Console | http://localhost:8088 |
-| 8089 | News Sentinel | http://localhost:8089/api/sentiment |
 | 8092 | Huginn-AI ML | http://localhost:8092/api/model/status |
 | 8094 | Research Gateway | http://localhost:8094/api/research/runs |
 | 8095 | Mimir Feature Store | http://localhost:8095/api/features |
@@ -316,9 +314,8 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 
 ### Python service resilience
 - **Per-message decode isolation:** odin/bragi/huginn-ai decode each Kafka record inside its own try/except; a poison (undecodable) record increments a `*_decode_failure_total` counter and is republished to a `<topic>.dlq` topic (best-effort) instead of stalling or dropping the rest of the batch.
-- **Consumer-thread liveness:** each consumer publishes a per-cycle heartbeat. `/healthz` (odin, bragi, huginn-ai) and `/readyz` (news-sentinel) return `503` once the heartbeat is stale beyond `HEALTH_MAX_STALENESS_SECS`, so a wedged consumer is detectable even while the HTTP server is up. Health reports OK until the loop has started so container startup isn't failed closed during Kafka connect/retry.
+- **Consumer-thread liveness:** each consumer publishes a per-cycle heartbeat. `/healthz` (odin, bragi, huginn-ai) returns `503` once the heartbeat is stale beyond `HEALTH_MAX_STALENESS_SECS`, so a wedged consumer is detectable even while the HTTP server is up. Health reports OK until the loop has started so container startup isn't failed closed during Kafka connect/retry.
 - **Bragi replay-safety:** Bragi consumes from `earliest` (configurable via `AUTO_OFFSET_RESET`) and dedups on feature `eventId` / fill `execution_id` with a bounded seen-set, so a restart rebuilds the decision log without losing or double-counting events.
-- **News Sentinel honest Ollama state:** sentiment is only counted when Ollama returns a genuinely parsed classification. Failed/unparsed responses increment `ollama_failures`, tag the headline `unclassified`, and exclude it from aggregate sentiment (no falsely-neutral signal). `/api/status` exposes `ollama_status` (`ok`/`degraded`).
 - **obi-bridge batched flush:** the producer flushes once per poll cycle (all symbols together) rather than synchronously per message.
 - **Configurable CORS:** the read-only HTTP APIs default to `Access-Control-Allow-Origin: *` but can be locked to a single origin via `ACCESS_CONTROL_ALLOW_ORIGIN` (see `.env.example`).
 

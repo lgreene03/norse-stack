@@ -2,7 +2,7 @@
 
 ## What Is norse-stack
 
-Meta-repository and entry point for the Norse Stack, a distributed quantitative trading infrastructure that boots as 24 containers (`docker compose config --services | wc -l`) via one-command `make bootstrap`. This repo provides the unified docker-compose, console, monitoring stack, end-to-end smoke test, and architecture documentation. The core engines (muninn, huginn, sleipnir) live in their own sibling repos, but this repo is **not** purely orchestration: the analytics, ML, research, and bridge services under `services/` are application code built directly from here.
+Meta-repository and entry point for the Norse Stack, a distributed quantitative trading infrastructure that boots as 23 containers (`docker compose config --services | wc -l`) via one-command `make bootstrap`. Which of them this iteration keeps, freezes or would retire, and what each costs, is in `docs/CONTAINERS.md` (G2.6). This repo provides the unified docker-compose, console, monitoring stack, end-to-end smoke test, and architecture documentation. The core engines (muninn, huginn, sleipnir) live in their own sibling repos, but this repo is **not** purely orchestration: the analytics, ML, research, and bridge services under `services/` are application code built directly from here.
 
 ## Commands
 
@@ -46,7 +46,6 @@ norse-stack/services/
   mimir/           ← point-in-time feature store (port 8095)
   forseti/         ← execution TCA + market impact / capacity (port 8096)
   heimdall/        ← market-regime detector (Gaussian HMM) (port 8097)
-  news-sentinel/   ← LLM news-sentiment feed (port 8089)
   recording-audit/ ← daily recording gap audit, G0.15 (port 8098)
 ```
 
@@ -63,7 +62,6 @@ Postgres databases publish no host port; use `docker compose exec`.
 | 8086  | Odin Analytics     |
 | 8087  | Bragi Explainer    |
 | 8088  | Redpanda Console   |
-| 8089  | News Sentinel      |
 | 8092  | Huginn AI (ML)     |
 | 8094  | Research Gateway   |
 | 8095  | Mimir Feature Store|
@@ -104,11 +102,6 @@ Served with versioning, provenance and online retraining; the score is provenanc
 - `GET /api/predict?instrument=BTC-USDT` — XGBoost confidence score for current signal
 - `GET /api/model/status` — model state, sample counts, feature importance
 - `GET /api/model/metrics` — precision, recall, F1, accuracy
-
-### News Sentinel (LLM News Sentiment)
-- `GET /api/sentiment` — per-instrument aggregate sentiment (BTC, ETH, SOL, XRP, DOGE) via Ollama
-- `GET /api/headlines` — recent headlines with individual sentiment scores
-- `GET /api/status` — service status, feed health, Ollama connectivity
 
 ### Research Gateway (read-only since G1.2, `huginn` cmd/research)
 - Runs nothing: `POST /api/research/runs` is refused with or without a token, because H1 and H2 trials run only through `research/norse_research`'s ledgered harness. Do not re-enable it without the ledgered path G1.2 describes.

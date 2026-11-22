@@ -28,6 +28,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   follows no backend redirect and ignores proxy environment variables. New
   stdlib tests in `console/tests` run in CI's validate job
 
+### Removed
+- news-sentinel (G2.6). Its two RSS sources, CoinDesk and Cointelegraph, bar automated
+  access and AI use (DATA_LICENCES.md, finding 1), and the owner stopped it on
+  2026-11-21. The service, its build context under `services/` and its CI job are gone;
+  obi-bridge's `newsSentiment` field reads 0.0. `docs/CONTAINERS.md` records a keep,
+  freeze or retire decision, with its memory and attention cost, for every container
+
 ### Added
 - Unified docker-compose.yml booting the full stack (23 containers) plus infrastructure
 - End-to-end smoke test validating the full trade-to-fill pipeline

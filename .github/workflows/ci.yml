@@ -146,8 +146,6 @@ jobs:
             has_tests: "true"
           - service: bragi
             has_tests: "true"
-          - service: news-sentinel
-            has_tests: "true"
           - service: recording-audit
             has_tests: "true"
     steps:

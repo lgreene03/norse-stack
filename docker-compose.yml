@@ -728,34 +728,9 @@ services:
     mem_limit: 256m
     restart: unless-stopped
 
-  # ── Intelligence ─────────────────────────────────────────────────────
-
-  news-sentinel:
-    build:
-      context: ./services/news-sentinel
-      dockerfile: Dockerfile
-    ports:
-      - "127.0.0.1:8089:8089"
-    environment:
-      OLLAMA_HOST: "http://host.docker.internal:11434"
-      OLLAMA_MODEL: "qwen2.5:14b"
-      POLL_INTERVAL: "300"
-      PORT: "8089"
-      # CORS: defaults to "*" (permissive). Lock to a single origin in prod.
-      ACCESS_CONTROL_ALLOW_ORIGIN: ${ACCESS_CONTROL_ALLOW_ORIGIN:-*}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8089/healthz',timeout=3)"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    mem_limit: 256m
-    cpus: "1.0"
-    pids_limit: 256
-    security_opt:
-      - no-new-privileges:true
-    restart: unless-stopped
+  # news-sentinel was retired by G2.6 (docs/CONTAINERS.md): its two RSS
+  # sources' terms bar automated access and AI use (DATA_LICENCES.md, finding 1).
+  # obi-bridge's newsSentiment field falls back to 0.0 without it.
 
 volumes:
   sleipnir-data:
