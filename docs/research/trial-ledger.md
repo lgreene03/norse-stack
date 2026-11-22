@@ -220,12 +220,13 @@ clone and by `audit.force_push_findings` over GitHub's activity record.
 
 ## Open questions
 
-* **V and a disqualified hypothesis (security review L7, for the quant).** Under run rule
-  4, a hypothesis whose selectable runs come from different trees is treated as having
-  none, and V is then computed over the other hypothesis's runs only. If that lowers V, it
-  lowers the bar for the other hypothesis's candidate. The gate does this exactly as
-  section 10 registers it; whether it should is a registration question, and nothing here
-  changes it.
+* **V and a disqualified hypothesis (security review L7, for the quant). Closed by
+  decision D22.** Under run rule 4, a hypothesis whose selectable runs come from different
+  trees is treated as having none. Under `prereg-v1`, V was then computed over the other
+  hypothesis's runs only, which could lower the bar for the other hypothesis's candidate.
+  Since `prereg-v2`, V is the null variance of the candidate's window, which reads no run,
+  so the other hypothesis's bar is the same either way
+  (`test_one_hypothesis_s_sr0_does_not_change_when_the_other_has_no_selectable_runs`).
 
 ## What this does not cover
 

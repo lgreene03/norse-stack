@@ -2,7 +2,8 @@
 
 **Status: signed by the owner on 2026-11-14; drafted on 2026-11-11 and revised on
 2026-11-13 after review (PR 52); revised on 2026-11-21 on the owner's instruction to remove
-the ledger freeze (decision D21), as `prereg-v2`. It binds nothing until the commit holding
+the ledger freeze (decision D21), and on 2026-11-22 on the owner's decision to revise V after
+G1.7's calibration (decision D22), as `prereg-v2`. It binds nothing until the commit holding
 it is tagged (`prereg-v1`, and for this revision `prereg-v2`; section 16).** The owner is the only person on this project. The quant, CTPO, technical,
 security and interface roles named in this document are AI agents the owner runs, defined
 in [.claude/agents](../.claude/agents); the quant role drafted this document and the CTPO
@@ -554,24 +555,25 @@ and the deflated Sharpe ratio is DSR = PSR(SR0), where
 is the Sharpe ratio the best of N skill-less trials is expected to show (taken as 0 when
 N = 1). N is the ledger's count from section 9.
 
-**V, with no floor.** V is the sample variance (the denominator is one less than the
-number of selectable runs) of the daily Sharpe ratios of every selectable run in the
-ledger, both hypotheses together, each over its own window: the holdout candidate is
-chosen across both, so the deflation charges for the whole family. There is no floor at
-the null variance. If fewer than two selectable runs exist, V = 1/(T − 1) of the
-candidate's window (run rule 2 makes that impossible in practice). The DSR is computed
-with `norse_research.sharpe.deflated_sharpe_ratio(SR, T, γ3, γ4, N, V)`, V from
-`cross_trial_sharpe_variance` over the selectable runs and N from the ledger. This
-supersedes the floor that G1.3 chose (gate-statistics.md, "Decisions made here"), which
-`sharpe.deflated_sharpe` applies as max(1/(T − 1), V) and which also requires one Sharpe
-ratio per trial counted in N; that function must not be used for the gate as it stands.
-The reasons: the grid is fixed here, so near-duplicate trials cannot be added to lower V,
-which is the abuse the floor guards against; for equally correlated trials the paper's V
-with the raw count N reproduces the right expected maximum, whereas a floor would charge
-correlated trials as if they were independent; and both forms keep DEV-1's no-skill pass
-rate below 5% in every case simulated, the floor by a wide margin and the paper's form by
-at least one point (section 12), the paper's keeping more of the power the gate lacks
-(section 13).
+**V, the null variance.** V = 1/(T − 1), with T the number of daily returns of the
+candidate's window: the variance of a Sharpe ratio estimate when the true Sharpe ratio is
+zero. SR0 = √V × E[max Z_N] is then the Sharpe ratio the best of N independent skill-less
+trials is expected to show. Trials that are positively correlated can only show a smaller
+maximum (Slepian's inequality), so the deflation charges for selection at least as much as
+the trials could exploit, whatever their correlation. V does not depend on any run's
+result: a real edge in one configuration or one hypothesis does not raise its own bar, and
+neither hypothesis's bar depends on whether the other has selectable runs. DEV-2 uses the
+same V, of the excess series, whose window is the same. The DSR is
+`norse_research.sharpe.deflated_sharpe_ratio(SR, T, γ3, γ4, N, 1/(T − 1))`, with N from
+the ledger and V from `norse_research.sharpe.null_sharpe_variance(T)`, which
+`norse_research.gate.trial_sharpe_variance` returns for every run. This supersedes
+prereg-v1's cross-trial variance, the sample variance of every selectable run's Sharpe
+ratio across both hypotheses with no floor (decision D22). G1.7 showed that it charges a
+real edge as selection noise: SR0 is 0.554 times a single planted edge and 1.065 times an
+edge shared within one hypothesis. Under it, a hypothesis whose configurations share an
+edge, beside one without skill, passed at most 8% of the time at Sharpe ratios of 1 to 2.
+G1.3's `sharpe.deflated_sharpe`, which takes the larger of 1/(T − 1) and a cross-trial
+variance and requires one Sharpe ratio per trial counted in N, is not the gate's function.
 
 Known answers, from the paper's own example and reproduced by G1.3's tests (N = 100, V of
 1/2 in annual terms, an annualised Sharpe of 2.5 over T = 1,250 daily returns at 250 a
@@ -603,7 +605,7 @@ a matrix in which one column has the highest Sharpe ratio in every block gives 0
 which the in-sample best is always the out-of-sample worst gives 1. A PBO over all
 selectable runs of both hypotheses, on their common days, is reported too, but is not a
 criterion: each hypothesis's verdict depends on its own trials, and the choice between two
-passing candidates is charged by the deflated Sharpe's family-wide N and V.
+passing candidates is charged by the deflated Sharpe's family-wide N.
 
 **The criteria.** A hypothesis passes development only if its candidate (section 11) meets
 all five:
@@ -625,9 +627,8 @@ slope of r on r_B, intercept included, over the window (decision D15): H2 holds 
 quantities long and short, so there is no market exposure for it to pass on, and a
 volatility-matched comparison would instead ask it to beat the market's Sharpe ratio
 (section 12). H1's excess is G1.3's `excess_returns(r, volatility_matched(r_B, r))`; H2's
-has no implementation yet (section 15). The DSR of an excess series uses the same N, and V
-computed the same way, with no floor, over every selectable run's excess-return Sharpe
-ratio. Calendar years for DEV-4 are 2018 (from
+has no implementation yet (section 15). The DSR of an excess series uses the same N and
+the same V, 1/(T − 1) of its window. Calendar years for DEV-4 are 2018 (from
 05-01) to 2025 for H1, and 2020 (from 01-08) to 2025 for H2.
 
 **The holdout criterion.** HOLD-1: on the holdout candidate's 304 holdout daily returns,
@@ -649,13 +650,15 @@ percentiles, the 5th and 95th percentiles of the daily Sharpe ratio, annualised 
 square root of 365.
 
 **Calibration.** The gate as registered here, with these windows, a family N of up to 30,
-V across both hypotheses with no floor and per-hypothesis PBO matrices of 8 and 6 columns,
-is what G1.7 must calibrate: no strategy is judged until it passes at most 5% of 1,000
-simulated no-skill ledgers at N = 30 and detects a planted Sharpe of 1.5. Because V has no
-floor, the no-skill ledgers must include families correlated within each hypothesis and
-across the two (the only case where the two forms of V differ, and the one that brings the
-paper's form closest to 5%), and power must be reported for a family whose configurations share one
-edge as well as for a single planted column.
+V the null variance of the candidate's window and per-hypothesis PBO matrices of 8 and 6
+columns, is what G1.7 must calibrate. No strategy is judged until the gate, as registered
+here, passes at most 5% of 1,000 simulated no-skill ledgers at N = 30 in every no-skill
+family, and a single planted configuration with an annualised Sharpe ratio of 2.0 passes
+development in more than 500 of 1,000 ledgers in every single-planted family. Power at
+1.5, at N = 14 and for an edge shared within one hypothesis is reported with the same
+families. The no-skill families include configurations correlated within each hypothesis
+and across the two, where the null variance's charge for independent trials is furthest
+from the trials' own dispersion.
 
 ## 11. The holdout candidate, the single holdout run and the verdict
 
@@ -729,11 +732,11 @@ the true Sharpe ratio with even odds of passing. The scripts that produced it re
 market data.
 
 **Base assumptions.** Daily net returns independent and normal (γ3 = 0, γ4 = 3); the
-windows of section 3 (H1 2,802 days, H2 2,185); V equal to 1/T, the dispersion of Sharpe
-estimates among independent skill-less trials (the reading behind NEXT_ITERATION.md's
-earlier figures); 365 days a year. Because V pools runs over both windows, its expectation
-for independent skill-less trials is the mean of 1/(T − 1) over the 14 runs, about 1.12/T
-for H1 and 0.87/T for H2; the sensitivity table shows the marks that implies.
+windows of section 3 (H1 2,802 days, H2 2,185); V equal to 1/(T − 1), the gate's V
+(section 10, decision D22), so the DEV-1 marks below are the gate's actual marks under
+these assumptions; 365 days a year. Until `prereg-v2` these rows were computed with
+V = 1/T, the reading behind NEXT_ITERATION.md's earlier figures; with 1/(T − 1) every
+figure in this section is the same to two decimals (the largest change is 0.0002).
 
 | Criterion | H1, N = 10 | N = 20 | N = 30 | H2, N = 10 | N = 20 | N = 30 |
 |---|---|---|---|---|---|---|
@@ -752,7 +755,7 @@ assumed about 5.6 years for every hypothesis.
 
 **How the rows were computed.**
 
-* DEV-1 solves PSR(SR0) = 0.95 for SR, with SR0 = √(1/T) × E[max Z_N], where E[max Z_N] is
+* DEV-1 solves PSR(SR0) = 0.95 for SR, with SR0 = √(1/(T − 1)) × E[max Z_N], where E[max Z_N] is
   1.5746, 1.9007 and 2.0734 at N = 10, 20 and 30. In power terms, the true Sharpe ratio that
   passes DEV-1 four times in five is 1.47, 1.58 and 1.65 for H1 and 1.66, 1.79 and 1.86 for H2.
 * DEV-2 needs the same figure from the excess series. For H1, a volatility-matched
@@ -785,30 +788,34 @@ assumed about 5.6 years for every hypothesis.
 
 | Assumption | H1, N = 10 | N = 20 | N = 30 | H2, N = 10 | N = 20 | N = 30 |
 |---|---|---|---|---|---|---|
-| Base: normal, V = 1/T | 1.16 | 1.28 | 1.34 | 1.32 | 1.45 | 1.52 |
-| Pooled null V: the mean of 1/(T − 1) over 8 H1 and 6 H2 runs, as registered | 1.20 | 1.32 | 1.39 | 1.28 | 1.40 | 1.47 |
+| Base: normal, V = 1/(T − 1), as registered | 1.16 | 1.28 | 1.34 | 1.32 | 1.45 | 1.52 |
 | Fat tails: γ3 = −1, γ4 = 10 | 1.18 | 1.30 | 1.37 | 1.34 | 1.48 | 1.55 |
-| Correlated trials: V = 0.25/T (pairwise correlation 0.75) | 0.88 | 0.94 | 0.97 | 0.99 | 1.06 | 1.10 |
-| Dispersed trials: V = 2/T | 1.40 | 1.56 | 1.65 | 1.58 | 1.77 | 1.87 |
-| Correlated and fat-tailed | 0.89 | 0.95 | 0.98 | 1.01 | 1.08 | 1.12 |
+| prereg-v1, superseded: pooled null V, the mean of 1/(T − 1) over 8 H1 and 6 H2 runs | 1.20 | 1.32 | 1.39 | 1.28 | 1.40 | 1.47 |
+| prereg-v1, superseded: correlated trials, V = 0.25/T (pairwise correlation 0.75) | 0.88 | 0.94 | 0.97 | 0.99 | 1.06 | 1.10 |
+| prereg-v1, superseded: dispersed trials, V = 2/T | 1.40 | 1.56 | 1.65 | 1.58 | 1.77 | 1.87 |
+| prereg-v1, superseded: correlated and fat-tailed | 0.89 | 0.95 | 0.98 | 1.01 | 1.08 | 1.12 |
 
 For DEV-5 under fat tails (a Student t with γ4 = 10), the figures rise to 0.52 (H1) and 0.62
-(H2). V is the one input the data sets: trials of one hypothesis are correlated, which
-lowers V and with it the bar, while a family in which H1 and H2 differ sharply raises it.
-Using the empirical V with the raw count N follows the paper: for equally correlated
-trials it reproduces the correct expected maximum, whereas a floor at 1/T would give
+(H2). Under `prereg-v1`, V was the one input the data set, as the rows marked prereg-v1
+show: trials of one hypothesis are correlated, which lowered V and with it the bar, while a
+family in which H1 and H2 differ sharply, or a real edge in one configuration, raised it.
+Since `prereg-v2` (D22) V is the null variance, which no run's result moves. It gives
 correlated trials no credit for their correlation, charging for them as if they were
-independent.
+independent; that is the power the gate gives up to stay safe whatever the correlation
+(section 10).
 
-**Is the gate still safe without the floor?** Yes, on DEV-1 alone. The CTPO simulated
+**Was prereg-v1's gate safe without the floor?** Yes, on DEV-1 alone. The CTPO simulated
 no-skill families shaped like the registered grid (8 columns over 2,802 days and 6 over
 2,185, N of 14 or 30, 20,000 runs each) on 2026-11-13. With H1 and H2 independent and
 correlation within a hypothesis from 0 to 0.95, DEV-1 passed 0.01% to 0.56% of families
 without the floor and 0.01% to 0.09% with it. With the trials also correlated across the
 two hypotheses (within 0.5 to 0.999, across up to the within value), it passed up to 3.5%
 at N = 30 and 4.0% at N = 14 without the floor: below 5% in every case simulated, but not
-by a wide margin. G1.7 calibrates the whole gate on families correlated within and across
-hypotheses (section 10).
+by a wide margin. G1.7 then calibrated that whole gate and found it safe but unable to
+detect a planted Sharpe ratio of 1.5 (section 15, item 24). Under the null variance, the
+quant's reduced check of G1.7's families found false passes in at most 0.14% of no-skill
+ledgers; G1.7's full rerun calibrates the gate as now registered, on families correlated
+within and across hypotheses (section 10).
 
 ## 13. What the gate cannot detect
 
@@ -816,8 +823,11 @@ hypotheses (section 10).
   time in six (1.34 needed, standard error 0.36 a year) and for H2 about one time in ten
   (1.52 needed, standard error 0.41). A strategy worth trading at a Sharpe of 0.7 to 1.0
   would most likely be reported as a fail.
-  A fail is therefore "no edge large enough to detect in 6 to 8 years of daily data", not
-  "no edge".
+  A FAIL therefore means that no single configuration with a true Sharpe ratio of about 2
+  or more was found, not that there is no edge: G1.7's reduced check under the null
+  variance passed a single planted configuration at 2.0 in 88% to 94% of ledgers and one at
+  1.5 in 46% to 51%. An edge shared across a hypothesis's configurations passes at most
+  about half the time, because of DEV-3 (below).
 * **The holdout catches only a gross failure.** Over 304 days, a strategy with a true
   Sharpe of 1.0 shows a positive holdout Sharpe 82% of the time, and one with 1.5, 91%;
   HOLD-1 can reject a strategy that has stopped working, not confirm one that works.
@@ -851,7 +861,7 @@ All are in [DECISIONS.md](DECISIONS.md). D11 to D15 were decided by the owner on
 2026-11-11, on the quant's recommendation; each entry keeps the options that were rejected
 and why. D16 and D17 are the owner's decisions of the same day on the ledger's and the
 seal's protections; D21 is the owner's decision of 2026-11-21 that removes the ledger
-freeze.
+freeze, and D22 the owner's decision of 2026-11-22 that revises V after G1.7.
 
 | Decision | What it fixes here |
 |---|---|
@@ -865,6 +875,7 @@ freeze.
 | D16 | rulesets: main cannot be force pushed or deleted and needs the `research` and `validate` checks; `prereg-*` and `ledger-*` tags cannot be moved or deleted |
 | D17 | the holdout files stay off the local mirror until the single unseal, then are fetched again and verified against the frozen holdout manifest |
 | D21 | there is no ledger freeze: the unseal entry closes development, N, V and the holdout candidate are computed on the entries before it, and a hypothesis without a selectable run of every configuration by then is NOT RUN |
+| D22 | V in SR0 is the null variance 1/(T − 1) of the candidate's window, for DEV-1 and DEV-2; the calibration's detection condition is a single planted configuration at an annualised Sharpe ratio of 2.0 passing development in more than 500 of 1,000 ledgers in every single-planted family; the three section 11 clarifications of `prereg-v2` confirmed unchanged |
 
 ## 15. Where NEXT_ITERATION.md, the register and merged code disagree with this
 
@@ -876,15 +887,16 @@ its JSON file and DECISIONS.md.
 
 **Decisions of the merged G1.3 code and page that this supersedes.**
 
-1. **Medium, confirmed.** The variance V in SR0. G1.3 floors V at the null variance
-   1/(T − 1), and `sharpe.deflated_sharpe` requires one Sharpe ratio per trial counted in
-   N. Here V is the paper's cross-trial variance over the selectable runs, with no floor,
-   computed through `deflated_sharpe_ratio` (section 10). gate-statistics.md's sentence that
-   correlated trials "make it strict rather than lenient" no longer holds: correlated trials
-   lower V, and with it the bar, as the paper intends. Follow-ups: G1.5 calls
-   `deflated_sharpe_ratio` directly with V from the selectable runs, or G1.3's
-   `deflated_sharpe` is changed to take V separately from N; G1.7 calibrates on correlated
-   no-skill families.
+1. **Medium, confirmed; reversed in `prereg-v2` (item 24).** The variance V in SR0. G1.3
+   floors V at the null variance 1/(T − 1), and `sharpe.deflated_sharpe` requires one
+   Sharpe ratio per trial counted in N. `prereg-v1` replaced the floor with the paper's
+   cross-trial variance over the selectable runs, with no floor, and said gate-statistics.md's
+   sentence that correlated trials "make it strict rather than lenient" no longer held.
+   `prereg-v2` removes both the cross-trial V and G1.3's floor (decision D22): V is the null
+   variance alone, which no run's result moves, so correlated trials again make the gate
+   strict rather than lenient (section 10). The gate calls `deflated_sharpe_ratio` directly
+   with `null_sharpe_variance` (G1.5, as revised for D22); G1.3's `deflated_sharpe` is still
+   not the gate's function.
 2. **Medium, confirmed.** PBO columns. G1.3's `cscv` docstring and page say the columns are
    "the N ledger trials"; here they are the hypothesis's selectable runs (section 10). The
    block rule is G1.3's as merged: no row is dropped.
@@ -917,7 +929,8 @@ its JSON file and DECISIONS.md.
    no-skill families correlated within and across hypotheses among the 1,000 ledgers and
    power reported for a family that shares one edge as well as for a single planted column
    (sections 10 and 13). A calibration of a simpler gate would not support the 5%
-   false-pass claim for this one.
+   false-pass claim for this one. Since `prereg-v2`, V is the null variance instead (item
+   24), and G1.7 calibrates that gate on the same families.
 10. **Medium, confirmed.** NEXT_ITERATION.md's kill criteria call an exhausted budget a fail;
     the verdict table says so (section 11), and NOT RUN applies only while budget remains.
 11. **Low, likely.** Sensitivity runs sit outside N, so they must be enforced: follow-up for
@@ -957,6 +970,36 @@ its JSON file and DECISIONS.md.
 23. **Informational.** The pre-registration was due on 2026-11-07 and is drafted on
     2026-11-11; G2.2 and G2.3 cannot start before it is tagged and G1.7 has passed.
 
+**G1.7's calibration (added in `prereg-v2`).**
+
+24. **Medium, confirmed; changed after the synthetic calibration (decision D22).** G1.7
+    ([#66](https://github.com/lgreene03/norse-stack/pull/66)) calibrated the gate as
+    `prereg-v1` registered it and found it safe but underpowered: no no-skill family passed
+    more than 1.3% of 1,000 ledgers at N = 30, but a single planted configuration at an
+    annualised Sharpe ratio of 1.5 passed development in only 144 to 335 of 1,000, so the
+    detection half of section 10's condition failed, and an edge shared within one
+    hypothesis, beside one without skill, passed at most 8% of the time at Sharpe ratios of
+    1 to 2. The cause is the pooled cross-trial V, which a real edge inflates: SR0 is 0.554
+    times a single planted edge and 1.065 times an edge shared within one hypothesis.
+    `prereg-v2` makes two changes. V is the null variance 1/(T − 1) of the candidate's
+    window, for DEV-1 and DEV-2 (section 10, "V, the null variance"). The detection clause
+    is restated: a single planted configuration at an annualised Sharpe ratio of 2.0 must
+    pass development in more than 500 of 1,000 ledgers in every single-planted family, with
+    power at 1.5, at N = 14 and for a shared edge reported (section 10, "Calibration"). Both
+    were chosen after the synthetic calibration's results were seen and before any trial or
+    genesis entry; no strategy has run, so neither can favour one. The old clause, "detects
+    a planted Sharpe of 1.5" in every family at N = 30, was inconsistent with this document
+    from the start, not merely missed: by section 12's own arithmetic H2's even-odds DEV-1
+    mark at N = 30 is 1.52 even under the null variance, before DEV-2 is applied, so only a V
+    below the null variance could have met it, and that is the unsafe direction. The quant
+    role's reduced check of the revision (normal returns only, DEV-4 and DEV-5 taken as met)
+    found false passes in at most 0.14% of no-skill ledgers, a single 1.5 passing in 46% to
+    51%, a single 2.0 in 88% to 94% and a shared 1.5 in 35% to 48%. The full rerun of every
+    family at 1,000 ledgers under the revised gate is G1.7's, in #66, after the `prereg-v2`
+    tag and before the genesis entry, so the detection clause is fixed before its full
+    results exist. The register row "V in SR0 can be lowered by disqualifying a hypothesis"
+    (security review L7) is closed by the same change.
+
 ## 16. Change control and signatures
 
 Until the first ledger entry that follows the genesis entry, a change to this document or
@@ -994,7 +1037,7 @@ once the pull request merges.
 | Tag | Date | Reason |
 |---|---|---|
 | `prereg-v1` | 2026-11-14 | first version |
-| `prereg-v2` | 2026-11-21 | the ledger freeze removed; the unseal closes development (D21); section 1 discloses huginn's fixture `data/btc_test.jsonl`, BTC data from 2026-05-18 inside the holdout, found by the G2.5 audit; section 11, from the G3.1 drafting (#64): the unseal waits until each hypothesis's grid is complete or its budget exhausted (no early stopping across hypotheses), what closes development with no holdout candidate (minimal, in prose; no ledger entry marks it), and the verdicts VOID and NOT JUDGED |
+| `prereg-v2` | 2026-11-21 and 2026-11-22 | the ledger freeze removed; the unseal closes development (D21); section 1 discloses huginn's fixture `data/btc_test.jsonl`, BTC data from 2026-05-18 inside the holdout, found by the G2.5 audit; section 11, from the G3.1 drafting (#64): the unseal waits until each hypothesis's grid is complete or its budget exhausted (no early stopping across hypotheses), what closes development with no holdout candidate (minimal, in prose; no ledger entry marks it), and the verdicts VOID and NOT JUDGED, which the owner confirmed unchanged on 2026-11-22 (D22); section 10, after G1.7's calibration (#66) and before any trial or genesis entry: V is the null variance 1/(T − 1) of the candidate's window for DEV-1 and DEV-2, and the calibration's detection condition is a single planted configuration at an annualised Sharpe ratio of 2.0 passing development in more than 500 of 1,000 ledgers in every single-planted family (D22), with the consequential edits to sections 12, 13 and 14 and section 15, items 1, 9 and 24 |
 
 **Signatures.**
 

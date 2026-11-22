@@ -6,11 +6,11 @@ docs/PREREGISTRATION.md; threat model principle 3 and T19). The statistics are
 G1.3's, applied as section 10 registers them:
 
 * the deflated Sharpe ratio (DEV-1) calls ``sharpe.deflated_sharpe_ratio`` directly,
-  with N from the ledger and V the sample variance of the daily Sharpe ratios of
-  every selectable run, both hypotheses together, with no floor; with fewer than two
-  selectable runs, V is 1/(T - 1) of the run's window. ``sharpe.deflated_sharpe``,
-  which floors V and wants one Sharpe ratio per trial in N, is not used (section 15,
-  item 1);
+  with N from the ledger and V the null variance 1/(T - 1) of the run's window, the
+  variance of a Sharpe ratio estimate when the true Sharpe ratio is zero (decision
+  D22, ``prereg-v2``; section 15, items 1 and 24). No run's result enters V, so a real
+  edge cannot raise its own bar and neither hypothesis's bar depends on whether the
+  other has selectable runs;
 * a run whose daily returns have no variance has a Sharpe ratio of 0 and a DSR of 0,
   decided here before G1.3's functions are called, since ``sharpe.moments`` raises
   (section 15, item 4);
@@ -40,9 +40,8 @@ section 10 and section 11, items 1 to 3):
 * DEV-1, the candidate's DSR, above 0.95;
 * DEV-2, the DSR of its returns in excess of its benchmark, above 0.95: for H1
   ``excess_returns(r, volatility_matched(r_B, r))``, for H2 ``excess_returns(r,
-  beta_matched(r_B, r))`` (D15), with the same N and V the sample variance of every
-  selectable run's excess-return Sharpe ratio, each against its own hypothesis's
-  benchmark, with no floor. r_B is the hypothesis's benchmark run chosen as a
+  beta_matched(r_B, r))`` (D15), with the same N and the same V, the null variance of
+  the excess series' window. r_B is the hypothesis's benchmark run chosen as a
   selectable run is: its last completed entry whose returns cover the window. Without
   one, DEV-2 cannot be computed and the gate refuses rather than call it a fail;
 * DEV-3, the PBO of the candidate's hypothesis, below 0.5;
@@ -89,7 +88,6 @@ from .registration import BENCHMARK, HYPOTHESES, SENSITIVITY, TRIAL, Registratio
 from .rules import budget_exhausted
 from .sharpe import (
     DeflatedSharpe,
-    cross_trial_sharpe_variance,
     deflated_sharpe_ratio,
     expected_max_sharpe,
     min_track_record_length,
@@ -224,12 +222,12 @@ def _selectable_runs(ledger: RegisteredLedger) -> dict[str, tuple[SelectableRun,
 
 
 def trial_sharpe_variance(ledger: RegisteredLedger, n_obs: int) -> tuple[float, str]:
-    """V and where it came from: the selectable runs' Sharpe ratios, or the null
-    variance of an ``n_obs`` window when fewer than two exist."""
-    sharpes = [daily_sharpe(r.returns) for runs in selectable_runs(ledger).values() for r in runs]
-    if len(sharpes) >= 2:
-        return cross_trial_sharpe_variance(sharpes), "selectable runs"
-    return null_sharpe_variance(n_obs), "null (fewer than two selectable runs)"
+    """V and where it came from: always the null variance 1/(n_obs - 1) of an ``n_obs``
+    window, for DEV-1 and DEV-2 alike (section 10; decision D22). It reads no run, so
+    it cannot depend on any Sharpe ratio in the ledger; the ledger is taken only so the
+    gate refuses one it did not issue."""
+    _require(ledger)
+    return null_sharpe_variance(n_obs), "null"
 
 
 def _deflated(
@@ -380,8 +378,9 @@ def benchmark_returns(ledger: RegisteredLedger, hypothesis: str) -> tuple[float,
 def missing_benchmarks(ledger: RegisteredLedger) -> list[str]:
     """Benchmarks DEV-2 could not use: with no completed run covering their window, or,
     for a hypothesis with selectable runs, none on those runs' harness code (quant
-    review M3). DEV-2, and with it the unseal, is refused while any is missing; no
-    benchmark may run after the unseal (decision D21)."""
+    review M3). A hypothesis's DEV-2, and with it any unseal that judges its candidate,
+    is refused while its own is missing (since decision D22 no other hypothesis's DEV-2
+    reads it); no benchmark may run after the unseal (decision D21)."""
     family = selectable_runs(_require(ledger))
     missing = []
     for h in HYPOTHESES:
@@ -402,18 +401,12 @@ def excess_series(ledger: RegisteredLedger, run: SelectableRun) -> list[float]:
 
 def excess_deflated_sharpe_of(ledger: RegisteredLedger, run: SelectableRun) -> DeflatedSharpe:
     """DEV-2: the deflated Sharpe ratio of a selectable run's excess returns, with N
-    from the ledger and V over every selectable run's excess-return Sharpe ratio."""
-    family = selectable_runs(ledger)
-    if run not in family.get(run.hypothesis, ()):
+    from the ledger and V the null variance of the excess series' window, as DEV-1's."""
+    if run not in selectable_runs(ledger).get(run.hypothesis, ()):
         raise GateRefused(f"{run.configuration_id}'s run is not a selectable run of this ledger")
-    n_trials = trial_count(ledger)
     excess = excess_series(ledger, run)
-    sharpes = [daily_sharpe(excess_series(ledger, r)) for runs in family.values() for r in runs]
-    if len(sharpes) >= 2:
-        variance, source = cross_trial_sharpe_variance(sharpes), "selectable runs' excess returns"
-    else:
-        variance, source = null_sharpe_variance(len(excess)), "null (fewer than two selectable runs)"
-    return _deflated(excess, n_trials, variance, source)[0]
+    variance, source = trial_sharpe_variance(ledger, len(excess))
+    return _deflated(excess, trial_count(ledger), variance, source)[0]
 
 
 def sharpe_without_each_year(ledger: RegisteredLedger, run: SelectableRun) -> dict[int, float]:

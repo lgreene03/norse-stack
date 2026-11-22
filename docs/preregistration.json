@@ -3,7 +3,7 @@
   "title": "Pre-registration of H1 (dated-universe trend) and H2 (funding carry), G0.7",
   "prose": "docs/PREREGISTRATION.md",
   "precedence": "This file governs wherever it and docs/PREREGISTRATION.md disagree.",
-  "status": "Signed by the owner on 2026-11-14; drafted on 2026-11-11 and revised on 2026-11-13 after the CTPO role's review (PR 52); revised on 2026-11-21 on the owner's instruction to remove the ledger freeze (D21), as prereg-v2. Binding only once the merged commit on main is tagged (prereg-v1, and for this revision prereg-v2; change_control).",
+  "status": "Signed by the owner on 2026-11-14; drafted on 2026-11-11 and revised on 2026-11-13 after the CTPO role's review (PR 52); revised on 2026-11-21 on the owner's instruction to remove the ledger freeze (D21), and on 2026-11-22 on the owner's decision to revise V after G1.7's calibration (D22), as prereg-v2. Binding only once the merged commit on main is tagged (prereg-v1, and for this revision prereg-v2; change_control).",
   "decisions": {
     "D3": "paper short perpetual positions approved for H2",
     "D4": "the owner alone holds the holdout key",
@@ -14,7 +14,8 @@
     "D15": "H2's second criterion is in excess of a beta-matched buy-and-hold; H1's stays volatility-matched",
     "D16": "rulesets: main cannot be force pushed or deleted and needs the research and validate checks; prereg-* and ledger-* tags cannot be updated or deleted",
     "D17": "the holdout files stay off the local mirror until the single unseal, then are fetched again and verified against the frozen holdout manifest",
-    "D21": "there is no ledger freeze: the unseal entry closes development; N, V and the holdout candidate are computed on the entries before it, and no trial, benchmark or control entry may follow it"
+    "D21": "there is no ledger freeze: the unseal entry closes development; N, V and the holdout candidate are computed on the entries before it, and no trial, benchmark or control entry may follow it",
+    "D22": "V in SR_0 is the null variance 1/(T - 1) of the candidate's window, for DEV-1 and DEV-2, since G1.7's calibration showed the cross-trial V charges a real edge as selection noise; the calibration's detection condition is a single planted configuration at an annualised Sharpe ratio of 2.0 passing development in more than 500 of 1,000 ledgers in every single-planted family, with power at 1.5, at N = 14 and for an edge shared within one hypothesis reported; the unseal's wait for both grids, the close of development with no holdout candidate and the VOID and NOT JUDGED verdicts are confirmed unchanged"
   },
   "data": {
     "source": "data.binance.vision",
@@ -300,7 +301,7 @@
     "expected_max_z": "(1 - gamma) * Phi^-1(1 - 1/N) + gamma * Phi^-1(1 - 1/(N e)), gamma = 0.5772156649015329; 0 when N = 1",
     "psr_z": "(SR - SR*) * sqrt(T - 1) / sqrt(1 - skewness * SR + (kurtosis - 1) / 4 * SR^2)",
     "dsr": "Phi(psr_z with SR* = SR_0), SR_0 = sqrt(V) * expected_max_z(N)",
-    "V": "sample variance (denominator: the number of selectable runs minus one) of the per-day Sharpe ratios of every selectable run in the ledger, both hypotheses, each over its own window, with no floor (this supersedes the null-variance floor in docs/research/gate-statistics.md, Decisions made here); for DEV-2 the same over their excess-return Sharpe ratios; 1/(T - 1) of the candidate's window if fewer than two selectable runs exist; computed with norse_research.sharpe.deflated_sharpe_ratio(SR, T, skewness, kurtosis, N, V), V from norse_research.sharpe.cross_trial_sharpe_variance over the selectable runs and N from the ledger; norse_research.sharpe.deflated_sharpe is not used",
+    "V": "the null variance 1/(T - 1), with T the number of daily returns of the candidate's window: the variance of a Sharpe ratio estimate when the true Sharpe ratio is zero; for DEV-2 the same, of the excess series, whose window is the same; no run's result enters it, so a real edge does not raise its own bar and neither hypothesis's bar depends on whether the other has selectable runs; computed with norse_research.sharpe.deflated_sharpe_ratio(SR, T, skewness, kurtosis, N, 1/(T - 1)), V from norse_research.sharpe.null_sharpe_variance(T) as norse_research.gate.trial_sharpe_variance returns it, and N from the ledger; this supersedes prereg-v1's sample variance of every selectable run's per-day Sharpe ratio across both hypotheses with no floor (D22); norse_research.sharpe.deflated_sharpe is not used",
     "pbo": {
       "matrix": "columns: the hypothesis's selectable runs in registered order (not one per trial counted in N); rows: daily net returns over its window",
       "blocks": 16,

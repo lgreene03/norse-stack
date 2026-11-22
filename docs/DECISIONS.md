@@ -257,3 +257,38 @@ its calibration). It also discloses huginn's fixture `data/btc_test.jsonl`, whic
 BTC data from 2026-05-18 inside the holdout, as the G2.5 audit
 ([#63](https://github.com/lgreene03/norse-stack/pull/63)) found. These are the
 coordinator's clarifications, not further owner decisions.
+
+## 2026-11-22
+
+**D22. V is the null variance; the calibration's detection clause is restated.** Decided
+by the owner on 2026-11-22: "Revise V". G1.7's calibration
+([#66](https://github.com/lgreene03/norse-stack/pull/66), docs/research/gate-calibration.md
+there) found the gate registered in `prereg-v1` safe but underpowered. No no-skill family
+passed more than 1.3% of 1,000 ledgers at N = 30, but a single planted configuration at an
+annualised Sharpe ratio of 1.5 passed development in only 144 to 335 of 1,000, so the
+detection half of section 10's condition failed. The cause is V, the cross-trial variance
+of the selectable runs' Sharpe ratios pooled over both hypotheses with no floor, which a
+real edge inflates: SR0 is 0.554 times a single planted edge and 1.065 times an edge shared
+within one hypothesis. Section 10 now sets V = 1/(T − 1), the null variance of the
+candidate's window, for DEV-1 and DEV-2, with N still from the ledger before the unseal, so
+no run's result moves the bar, and restates the detection clause: a single planted
+configuration at an annualised Sharpe ratio of 2.0 must pass development in more than 500
+of 1,000 ledgers in every single-planted family, with power at 1.5, at N = 14 and for an
+edge shared within one hypothesis reported. The old clause asked for 1.5 in every family,
+which section 12's own arithmetic ruled out (H2's even-odds mark at N = 30 is 1.52 even
+under the null variance). Both changes were chosen after the synthetic calibration and
+before any trial or genesis entry, and section 15, item 24 of the pre-registration
+discloses that. The quant role's review of #66 recommended the change, with figures from a
+reduced check of the revision on normal returns only: false passes in at most 0.14% of
+no-skill ledgers, a single 1.5 passing in 46% to 51% of ledgers, a single 2.0 in 88% to 94%
+and a shared 1.5 in 35% to 48%. The quant is an AI agent role the owner runs, not an
+independent person; its review is advice, not an approval or a signature, and the decision
+is the owner's alone. The full calibration rerun under the revised gate, every family at
+1,000 ledgers, is G1.7's in #66, after the `prereg-v2` tag and before the genesis entry, so
+the detection clause is fixed before its full results exist. The owner also confirmed,
+unchanged, the three clarifications D21 recorded as the coordinator's: the unseal waits
+until each hypothesis's grid is complete or its own entries and the reserve are exhausted;
+with no holdout candidate, development closes at that same point and the verdict records
+the ledger entry it was computed at; and the verdict table's VOID and NOT JUDGED rows. They
+are now owner decisions. The change is part of `prereg-v2`
+([#65](https://github.com/lgreene03/norse-stack/pull/65)).
