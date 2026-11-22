@@ -228,7 +228,150 @@ criterion anyway, so whether a ledger passes is exact for every ledger.
 ## Results of the rerun (`prereg-v2`)
 
 <!-- results: begin. Generated from the results file by `python -m norse_research.calibration --report`; not edited by hand. -->
-The full rerun has not been run at this commit.
+**The gate meets the restated clause** of section 10 ("Calibration") of [PREREGISTRATION.md](../PREREGISTRATION.md), as `gate.calibration` in [preregistration.json](../preregistration.json) pins it.
+
+**No-skill half: met.** In the 17 no-skill families judged, the gate produced a holdout candidate at N = 30 in at most 2 of 1,000 ledgers, in `null-w0.5-a0` (95% interval 0.02 to 0.72%); the limit is 5% of the ledgers in every family.
+
+**Detection half: met.** The planted hypothesis passed development at N = 30 in 917 (`single-H1-s2-low`), 940 (`single-H1-s2-high`), 880 (`single-H2-s2-low`) and 883 (`single-H2-s2-high`) of 1,000 ledgers. The minimum, 880 in `single-H2-s2-low`, decides, and the clause needs more than 50% of the ledgers in each.
+
+Both halves hold, so section 10's calibration condition does not stop the gate judging a strategy.
+
+Every figure in this section was generated from [gate-calibration-results.json](../../research/calibration/gate-calibration-results.json) by `calibration.results_markdown` and written here by the run itself; `test_the_committed_full_run_is_the_one_the_report_cites` regenerates it from the committed file and requires it to be identical. The file's SHA-256 is `26efe37f0964a95141034f5fab20eed38fcb126ebe7d79df849fffb8faeaea40`. It holds seed 20261121, 1,000 ledgers in each of 54 families, a SHA-256 of every family's per-ledger records and the SHA-256 of the registration the study read, `736d51810d666bffaa79bf4bf4e4ee6bede23ea6487feac6552df955d0cc5079`. Counts are of 1,000 ledgers; intervals are Clopper-Pearson at 95%. "Pooled V" is prereg-v1's V at N = 30, a counterfactual that is not the gate and that no verdict reads.
+
+### No-skill families
+
+"Passes" is the gate producing a holdout candidate. "Judged" marks the `no_skill_families` of `gate.calibration`; the others are reported only.
+
+| Family | Judged | Within / across | Other | N = 30: passes | 95% interval | N = 14 | With HOLD-1 (N = 30) | Pooled V (N = 30) |
+|---|---|---|---|---|---|---|---|---|
+| `null-w0-a0` | yes | 0 / 0 | none | 0 | 0.00 to 0.37% | 2 | 0 | 0 |
+| `null-w0.5-a0` | yes | 0.5 / 0 | none | 2 | 0.02 to 0.72% | 4 | 0 | 0 |
+| `null-w0.5-a0.5` | yes | 0.5 / 0.5 | none | 0 | 0.00 to 0.37% | 1 | 0 | 2 |
+| `null-w0.9-a0` | yes | 0.9 / 0 | none | 0 | 0.00 to 0.37% | 2 | 0 | 3 |
+| `null-w0.9-a0.5` | yes | 0.9 / 0.5 | none | 0 | 0.00 to 0.37% | 1 | 0 | 2 |
+| `null-w0.9-a0.9` | yes | 0.9 / 0.9 | none | 0 | 0.00 to 0.37% | 1 | 0 | 5 |
+| `null-w0.99-a0.9` | yes | 0.99 / 0.9 | none | 0 | 0.00 to 0.37% | 0 | 0 | 8 |
+| `null-w0.99-a0.99` | yes | 0.99 / 0.99 | none | 0 | 0.00 to 0.37% | 0 | 0 | 6 |
+| `null-w0.999-a0.999` | yes | 0.999 / 0.999 | none | 0 | 0.00 to 0.37% | 0 | 0 | 6 |
+| `exposure-sb0.5` | yes | 0.9 / 0.5 | benchmark correlation 0.7 (H1), 0.2 (H2); benchmark Sharpe 0.5 | 0 | 0.00 to 0.37% | 1 | 0 | 1 |
+| `exposure-sb1` | yes | 0.9 / 0.5 | benchmark correlation 0.7 (H1), 0.2 (H2); benchmark Sharpe 1 | 0 | 0.00 to 0.37% | 0 | 0 | 1 |
+| `exposure-sb1-h2beta0.5` | yes | 0.9 / 0.5 | benchmark correlation 0.7 (H1), 0.5 (H2); benchmark Sharpe 1 | 0 | 0.00 to 0.37% | 1 | 0 | 0 |
+| `null-power-layout-low` | yes | 0.5 / 0 | benchmark correlation 0.5 (H1), 0 (H2) | 0 | 0.00 to 0.37% | 1 | 0 | 0 |
+| `null-power-layout-high` | yes | 0.9 / 0.5 | benchmark correlation 0.5 (H1), 0 (H2) | 0 | 0.00 to 0.37% | 0 | 0 | 2 |
+| `fat-w0-a0` | yes | 0 / 0 | Student t(5) shocks; volatility regime | 1 | 0.00 to 0.56% | 1 | 0 | 0 |
+| `fat-w0.9-a0.9` | yes | 0.9 / 0.9 | Student t(5) shocks; volatility regime | 0 | 0.00 to 0.37% | 1 | 0 | 9 |
+| `fat-w0.99-a0.99` | yes | 0.99 / 0.99 | Student t(5) shocks; volatility regime | 0 | 0.00 to 0.37% | 1 | 0 | 13 |
+| `ar0.1-w0-a0` | reported only | 0 / 0 | autocorrelation 0.1 | 1 | 0.00 to 0.56% | 9 | 0 | 0 |
+| `ar0.1-w0.9-a0.9` | reported only | 0.9 / 0.9 | autocorrelation 0.1 | 0 | 0.00 to 0.37% | 3 | 0 | 8 |
+
+Each criterion's no-skill pass rate at N = 30: the share of ledgers in which each hypothesis's candidate meets it (DEV-3 over the first 200 ledgers of each family, where the PBO is always computed; every other column over all of them), and the count passing all five.
+
+| Family | H1: DEV-1 | DEV-2 | DEV-3 | DEV-4 | DEV-5 | all | H2: DEV-1 | DEV-2 | DEV-3 | DEV-4 | DEV-5 | all |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `null-w0-a0` | 0.0% | 0.1% | 54.0% | 91.6% | 70.3% | 0 | 0.0% | 0.0% | 50.5% | 82.5% | 55.5% | 0 |
+| `null-w0.5-a0` | 0.1% | 0.0% | 57.5% | 69.7% | 47.3% | 0 | 0.2% | 0.2% | 50.5% | 62.7% | 36.7% | 2 |
+| `null-w0.5-a0.5` | 0.0% | 0.0% | 52.0% | 68.3% | 46.9% | 0 | 0.0% | 0.0% | 46.0% | 61.6% | 37.8% | 0 |
+| `null-w0.9-a0` | 0.0% | 0.0% | 53.5% | 46.6% | 27.9% | 0 | 0.0% | 0.0% | 43.0% | 42.9% | 21.7% | 0 |
+| `null-w0.9-a0.5` | 0.1% | 0.0% | 47.5% | 43.4% | 25.3% | 0 | 0.0% | 0.0% | 41.5% | 41.1% | 20.9% | 0 |
+| `null-w0.9-a0.9` | 0.0% | 0.0% | 54.0% | 44.2% | 24.9% | 0 | 0.0% | 0.0% | 45.5% | 40.3% | 19.7% | 0 |
+| `null-w0.99-a0.9` | 0.1% | 0.0% | 48.5% | 33.1% | 17.3% | 0 | 0.0% | 0.0% | 46.5% | 31.5% | 15.8% | 0 |
+| `null-w0.99-a0.99` | 0.0% | 0.0% | 56.5% | 35.9% | 17.6% | 0 | 0.0% | 0.0% | 54.0% | 32.0% | 13.1% | 0 |
+| `null-w0.999-a0.999` | 0.0% | 0.1% | 47.5% | 30.2% | 15.8% | 0 | 0.0% | 0.0% | 48.5% | 30.5% | 13.6% | 0 |
+| `exposure-sb0.5` | 1.0% | 0.0% | 50.0% | 81.6% | 62.8% | 0 | 0.0% | 0.0% | 46.5% | 52.9% | 29.5% | 0 |
+| `exposure-sb1` | 8.5% | 0.0% | 51.0% | 97.4% | 92.4% | 0 | 0.3% | 0.0% | 56.0% | 61.2% | 39.4% | 0 |
+| `exposure-sb1-h2beta0.5` | 10.5% | 0.0% | 53.0% | 97.3% | 92.6% | 0 | 1.4% | 0.0% | 50.0% | 86.2% | 70.0% | 0 |
+| `null-power-layout-low` | 0.0% | 0.0% | 56.5% | 69.0% | 47.8% | 0 | 0.0% | 0.0% | 47.5% | 62.9% | 38.2% | 0 |
+| `null-power-layout-high` | 0.0% | 0.1% | 44.0% | 46.4% | 26.6% | 0 | 0.0% | 0.0% | 49.0% | 41.8% | 21.5% | 0 |
+| `fat-w0-a0` | 0.3% | 0.1% | 50.0% | 89.8% | 33.1% | 0 | 0.1% | 0.1% | 50.0% | 82.5% | 21.6% | 1 |
+| `fat-w0.9-a0.9` | 0.0% | 0.0% | 48.5% | 46.9% | 11.4% | 0 | 0.0% | 0.0% | 51.5% | 41.7% | 10.7% | 0 |
+| `fat-w0.99-a0.99` | 0.1% | 0.1% | 54.0% | 35.3% | 6.5% | 0 | 0.0% | 0.0% | 53.0% | 32.8% | 5.9% | 0 |
+| `ar0.1-w0-a0` | 0.6% | 0.3% | 56.5% | 90.5% | 77.6% | 1 | 0.1% | 0.0% | 45.5% | 82.9% | 62.1% | 0 |
+| `ar0.1-w0.9-a0.9` | 0.1% | 0.0% | 52.0% | 43.4% | 29.3% | 0 | 0.0% | 0.0% | 48.5% | 39.2% | 22.6% | 0 |
+
+### Power
+
+The planted hypothesis passing development. "Judged" marks the four `detection_families` of `gate.calibration`; every other row is reported only. "Planted column" counts the passes whose candidate was the planted configuration (single-column families only). "With HOLD-1" also requires the holdout candidate to be in the planted hypothesis and HOLD-1 to hold on its 304 further days.
+
+| Hypothesis | Form | Sharpe | Within / across | Judged | N = 30: passes | 95% interval | Planted column | N = 14 | Pooled V (N = 30) | With HOLD-1 (N = 30) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| H1 | single | 1 | 0.5 / 0 | reported only | 63 | 4.87 to 7.99% | 63 | 141 | 10 | 53 |
+| H1 | single | 1.5 | 0.5 / 0 | reported only | 499 | 46.76 to 53.05% | 499 | 657 | 144 | 445 |
+| H1 | single | 2 | 0.5 / 0 | yes | 917 | 89.81 to 93.34% | 917 | 967 | 512 | 862 |
+| H1 | single | 2.5 | 0.5 / 0 | reported only | 1,000 | 99.63 to 100.00% | 1,000 | 1,000 | 870 | 949 |
+| H1 | single | 3 | 0.5 / 0 | reported only | 1,000 | 99.63 to 100.00% | 1,000 | 1,000 | 979 | 935 |
+| H1 | single | 1 | 0.9 / 0.5 | reported only | 78 | 6.21 to 9.64% | 78 | 154 | 128 | 62 |
+| H1 | single | 1.5 | 0.9 / 0.5 | reported only | 524 | 49.25 to 55.53% | 524 | 661 | 335 | 468 |
+| H1 | single | 2 | 0.9 / 0.5 | yes | 940 | 92.34 to 95.39% | 940 | 971 | 640 | 882 |
+| H1 | single | 2.5 | 0.9 / 0.5 | reported only | 1,000 | 99.63 to 100.00% | 1,000 | 1,000 | 840 | 931 |
+| H1 | single | 3 | 0.9 / 0.5 | reported only | 1,000 | 99.63 to 100.00% | 1,000 | 1,000 | 962 | 950 |
+| H2 | single | 1 | 0.5 / 0 | reported only | 91 | 7.39 to 11.06% | 91 | 163 | 15 | 75 |
+| H2 | single | 1.5 | 0.5 / 0 | reported only | 468 | 43.67 to 49.95% | 468 | 609 | 171 | 414 |
+| H2 | single | 2 | 0.5 / 0 | yes | 880 | 85.82 to 89.95% | 880 | 930 | 501 | 815 |
+| H2 | single | 2.5 | 0.5 / 0 | reported only | 993 | 98.56 to 99.72% | 993 | 999 | 850 | 934 |
+| H2 | single | 3 | 0.5 / 0 | reported only | 1,000 | 99.63 to 100.00% | 1,000 | 1,000 | 971 | 947 |
+| H2 | single | 1 | 0.9 / 0.5 | reported only | 94 | 7.66 to 11.38% | 94 | 164 | 91 | 75 |
+| H2 | single | 1.5 | 0.9 / 0.5 | reported only | 466 | 43.47 to 49.75% | 466 | 618 | 315 | 420 |
+| H2 | single | 2 | 0.9 / 0.5 | yes | 883 | 86.14 to 90.23% | 883 | 947 | 626 | 825 |
+| H2 | single | 2.5 | 0.9 / 0.5 | reported only | 990 | 98.17 to 99.52% | 990 | 997 | 843 | 916 |
+| H2 | single | 3 | 0.9 / 0.5 | reported only | 1,000 | 99.63 to 100.00% | 1,000 | 1,000 | 948 | 931 |
+| H1 | shared | 1 | 0.5 / 0 | reported only | 226 | 20.04 to 25.32% | n/a | 327 | 46 | 182 |
+| H1 | shared | 1.5 | 0.5 / 0 | reported only | 476 | 44.47 to 50.75% | n/a | 486 | 79 | 419 |
+| H1 | shared | 2 | 0.5 / 0 | reported only | 510 | 47.85 to 54.14% | n/a | 510 | 80 | 450 |
+| H1 | shared | 1 | 0.9 / 0.5 | reported only | 84 | 6.76 to 10.29% | n/a | 130 | 46 | 68 |
+| H1 | shared | 1.5 | 0.9 / 0.5 | reported only | 382 | 35.18 to 41.29% | n/a | 436 | 44 | 347 |
+| H1 | shared | 2 | 0.9 / 0.5 | reported only | 499 | 46.76 to 53.05% | n/a | 501 | 50 | 454 |
+| H2 | shared | 1 | 0.5 / 0 | reported only | 218 | 19.28 to 24.49% | n/a | 296 | 6 | 173 |
+| H2 | shared | 1.5 | 0.5 / 0 | reported only | 483 | 45.16 to 51.45% | n/a | 504 | 8 | 407 |
+| H2 | shared | 2 | 0.5 / 0 | reported only | 525 | 49.35 to 55.63% | n/a | 526 | 7 | 464 |
+| H2 | shared | 1 | 0.9 / 0.5 | reported only | 92 | 7.48 to 11.16% | n/a | 150 | 4 | 79 |
+| H2 | shared | 1.5 | 0.9 / 0.5 | reported only | 325 | 29.60 to 35.50% | n/a | 371 | 5 | 284 |
+| H2 | shared | 2 | 0.9 / 0.5 | reported only | 478 | 44.66 to 50.95% | n/a | 488 | 0 | 423 |
+| H1 and H2 | shared | 1 | 0.9 / 0.5 | reported only | 191 | 16.71 to 21.68% | n/a | 291 | 506 | 158 |
+| H1 and H2 | shared | 1.5 | 0.9 / 0.5 | reported only | 592 | 56.08 to 62.27% | n/a | 650 | 690 | 519 |
+| H1 and H2 | shared | 2 | 0.9 / 0.5 | reported only | 744 | 71.58 to 77.08% | n/a | 751 | 747 | 673 |
+
+Which criterion binds, for each planted hypothesis at N = 30 (DEV-3 over the first 200 ledgers of each family):
+
+| Family | Hypothesis | DEV-1 | DEV-2 | DEV-3 | DEV-4 | DEV-5 | all |
+|---|---|---|---|---|---|---|---|
+| `single-H1-s1-low` | H1 | 16.3% | 17.4% | 99.5% | 98.7% | 97.1% | 6.3% |
+| `single-H1-s1.5-low` | H1 | 64.8% | 66.2% | 100.0% | 100.0% | 99.9% | 49.9% |
+| `single-H1-s2-low` | H1 | 95.9% | 94.9% | 100.0% | 100.0% | 100.0% | 91.7% |
+| `single-H1-s2.5-low` | H1 | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% |
+| `single-H1-s3-low` | H1 | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% |
+| `single-H1-s1-high` | H1 | 16.9% | 19.5% | 100.0% | 98.1% | 95.7% | 7.8% |
+| `single-H1-s1.5-high` | H1 | 66.8% | 66.2% | 100.0% | 100.0% | 99.9% | 52.4% |
+| `single-H1-s2-high` | H1 | 96.7% | 96.3% | 100.0% | 100.0% | 100.0% | 94.0% |
+| `single-H1-s2.5-high` | H1 | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% |
+| `single-H1-s3-high` | H1 | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% |
+| `single-H2-s1-low` | H2 | 9.4% | 9.3% | 98.0% | 96.7% | 90.7% | 9.1% |
+| `single-H2-s1.5-low` | H2 | 47.1% | 46.9% | 100.0% | 99.7% | 99.1% | 46.8% |
+| `single-H2-s2-low` | H2 | 88.0% | 88.0% | 100.0% | 100.0% | 100.0% | 88.0% |
+| `single-H2-s2.5-low` | H2 | 99.4% | 99.3% | 100.0% | 100.0% | 100.0% | 99.3% |
+| `single-H2-s3-low` | H2 | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% |
+| `single-H2-s1-high` | H2 | 9.4% | 9.5% | 100.0% | 96.0% | 89.8% | 9.4% |
+| `single-H2-s1.5-high` | H2 | 47.0% | 47.1% | 100.0% | 99.7% | 99.3% | 46.6% |
+| `single-H2-s2-high` | H2 | 88.3% | 88.3% | 100.0% | 100.0% | 99.9% | 88.3% |
+| `single-H2-s2.5-high` | H2 | 99.0% | 99.0% | 100.0% | 100.0% | 100.0% | 99.0% |
+| `single-H2-s3-high` | H2 | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% | 100.0% |
+| `shared-H1-s1-low` | H1 | 52.1% | 53.6% | 52.0% | 100.0% | 100.0% | 22.6% |
+| `shared-H1-s1.5-low` | H1 | 96.5% | 95.9% | 52.0% | 100.0% | 100.0% | 47.6% |
+| `shared-H1-s2-low` | H1 | 100.0% | 100.0% | 52.5% | 100.0% | 100.0% | 51.0% |
+| `shared-H1-s1-high` | H1 | 30.6% | 29.4% | 50.0% | 99.7% | 98.9% | 8.4% |
+| `shared-H1-s1.5-high` | H1 | 81.8% | 79.8% | 51.0% | 100.0% | 99.9% | 38.2% |
+| `shared-H1-s2-high` | H1 | 99.3% | 99.2% | 54.5% | 100.0% | 100.0% | 49.9% |
+| `shared-H2-s1-low` | H2 | 32.8% | 32.7% | 49.5% | 100.0% | 99.5% | 21.8% |
+| `shared-H2-s1.5-low` | H2 | 85.2% | 85.6% | 49.0% | 100.0% | 100.0% | 48.3% |
+| `shared-H2-s2-low` | H2 | 99.5% | 99.5% | 51.5% | 100.0% | 100.0% | 52.5% |
+| `shared-H2-s1-high` | H2 | 17.8% | 18.1% | 51.5% | 98.0% | 95.2% | 9.2% |
+| `shared-H2-s1.5-high` | H2 | 65.4% | 65.4% | 46.0% | 100.0% | 100.0% | 32.5% |
+| `shared-H2-s2-high` | H2 | 94.1% | 94.1% | 56.0% | 100.0% | 100.0% | 47.8% |
+| `shared-both-s1-high` | H1 | 31.1% | 30.5% | 47.0% | 99.7% | 99.0% | 10.4% |
+| `shared-both-s1-high` | H2 | 19.0% | 18.9% | 52.5% | 99.3% | 96.1% | 11.6% |
+| `shared-both-s1.5-high` | H1 | 83.2% | 83.5% | 51.5% | 100.0% | 100.0% | 39.6% |
+| `shared-both-s1.5-high` | H2 | 66.6% | 67.1% | 49.0% | 99.9% | 99.8% | 34.6% |
+| `shared-both-s2-high` | H1 | 99.4% | 99.2% | 49.0% | 100.0% | 100.0% | 48.7% |
+| `shared-both-s2-high` | H2 | 94.6% | 94.6% | 53.5% | 100.0% | 100.0% | 49.0% |
 <!-- results: end -->
 
 ## History: the `prereg-v1` run (2026-11-21)
@@ -609,8 +752,33 @@ platform; the per-ledger digests reproduce on the same platform, but may differ 
 which can differ in the last bit between systems. Plan for hours in pure Python, and keep to
 `nice -n 15` and at most six workers on this Mac, which also records live market data.
 
-**The rerun's record.** Added when the run ends: the commit it ran at, when it started and
-finished, and on what.
+**The rerun's record.** Everything ran on an Apple M4 (10 cores, 24 GB) under macOS 26.5.2 and
+Python 3.13.11, with 6 worker processes at `nice -n 15`, from a clean tree at a commit pushed to
+#66 with green CI before the run started. Each run read a `docs/preregistration.json` whose
+SHA-256, `736d51810d666bffaa79bf4bf4e4ee6bede23ea6487feac6552df955d0cc5079`, was that of the file
+on main (b656d5f) when it started. In order:
+
+1. **A stopped attempt.** At edd9286838191b6a6f90f7ed23d9b43f6ca5fbe7 (CI run 45033694917), the
+   run was started at 14:43:08 UTC on 2026-11-22 and stopped (SIGTERM) after about 17 minutes,
+   when the coordinating agent asked to wait for a pending ruling on #70 that might have changed
+   the registration. The study writes nothing until every family is finished, so the attempt
+   wrote no file, printed only its start time and showed no figure. The ruling changed nothing
+   in the registration.
+2. **The first complete run.** At the same commit, from scratch, from 15:11:34 to 15:41:14 UTC
+   (1,780 seconds; one-minute load average 4.02 at the start). Its results file had the SHA-256
+   `26efe37f0964a95141034f5fab20eed38fcb126ebe7d79df849fffb8faeaea40`, and its results and
+   verdict were seen before the renderer fix described under "The first complete run, seen
+   before the rerun". It was not committed, because the report's section it wrote listed the
+   four detection families in a different order from a rendering of its file.
+3. **The rerun, committed here.** At c75fb8eeafa346799b8dbbc08bdec55ead96fcc4 (CI run
+   45040366789), which changes only that order and adds its test, from scratch, from 15:56:49 to
+   16:27:39 UTC (1,851 seconds; one-minute load average 7.93 at the start). It reproduced the
+   first complete run's results file byte for byte (SHA-256 `26efe37f…`, compared with `cmp`) and
+   wrote the same results section. The results file and that section are committed as the rerun
+   produced them.
+
+In both complete runs, the `prereg-v1` pooled-V counterfactual at N = 30 equals the `prereg-v1`
+run's N = 30 summary exactly in all 54 families, so the simulation did not change.
 
 CI runs a smoke version only (`test_smoke_run_reproduces_and_summarises`: two families, two ledgers
 each), with the equivalence test, the model's checks, the pin of the families and the check on the
