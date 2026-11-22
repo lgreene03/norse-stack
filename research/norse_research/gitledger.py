@@ -19,16 +19,18 @@ owner's global nor the system configuration reaches it; hooks and the file syste
 monitor turned off on the command line (``core.hooksPath=/dev/null``,
 ``core.fsmonitor=false``; H-1); on the commands that reach the remote, the credential
 helper reset and set to the owner's (``CREDENTIALS``); and an environment built from a
-short allowlist (``PASSED_ENVIRONMENT``), never inherited, with ``PATH`` the directory of
-the git found on the caller's ``PATH`` followed by the system's default. So no setting
-or variable an agent writes outside the clone runs a program inside a ledger command or
-redirects one (L-5, L-6). Inside the clone, a configuration that sets either hook key in
-any scope is refused, and so is one whose own scopes (local and worktree, and anything
-they include) set something that runs a program or redirects a read or a push, such as a
-credential helper, an askpass or editor program, a text conversion or filter, an include
-or a transport override (``REPOSITORY_SCOPE_REFUSED``): belt and braces now, since the
-command line overrides each. What is left is the binaries themselves, git and its
-credential helper, which the owner's user owns, as it owns the interpreter (T15).
+short allowlist (``environment.PASSED_ENVIRONMENT``), never inherited. The git itself is
+always ``/usr/bin/git``, never one found on ``PATH``, and only while it, its exec path and
+its osxkeychain helper belong to root (``environment.git_program``; review of #70, L-6).
+So no configuration file, variable or ``PATH`` entry an agent writes outside the clone
+runs a program inside a ledger command or redirects one. Inside the clone, a configuration
+that sets either hook key in any scope is refused, and so is any key in the clone's own
+scopes (local and worktree, and anything they include) outside a short allowlist of what
+``git init`` and ``git clone`` write, remotes, branch tracking, a local identity and the
+worktree switch (``REPOSITORY_SCOPE_ALLOWED``; review of #70, L-5): belt and braces now,
+since the command line overrides what could run. What is left is the interpreter, which the
+owner's user owns (T15), and the Python files the seal imports, which a process of that
+user can rewrite on disk.
 
 **Appending.** An append never touches the working tree, so it cannot dirty it. It
 takes a lock in the repository's git directory, fetches the remote ledger ref, checks
@@ -83,7 +85,12 @@ from pathlib import Path
 
 from . import ledger as _ledger
 from .canonical import CanonicalError, loads_strict, sha256_hex
-from .environment import check_environment
+from .environment import (
+    HARDENED,
+    PINNED_CONFIGURATION,
+    check_environment,
+    git_environment,
+)
 from .lamport import signature_error
 from .ledger import (
     ATTEMPT,
@@ -140,49 +147,34 @@ RESERVED = ("ledger-genesis",)
 # can read as a freeze that no longer exists (security review of #65, L-4), in any case,
 # since the tag ruleset makes ledger-Freeze-* as permanent as ledger-freeze-* (I-6).
 WITHDRAWN = ("ledger-freeze",)
-# Every git command runs with these first: hooks and the file system monitor would run a
-# program the clone chooses inside a ledger command (security review of #65, H-1).
-HARDENED = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
 # The owner's credential helper, the only program a ledger command may run for a
 # credential. Only the commands that reach the remote carry it: the empty value first
 # clears every helper a configuration file names, so only this one runs (review of #65,
-# M-3). On the owner's Mac it is osxkeychain, which Homebrew's git keeps in its exec path.
+# M-3). On the owner's Mac it is osxkeychain, which the pinned git, Apple's, keeps in its
+# own exec path (environment.git_program checks it).
 CREDENTIAL_HELPER = "osxkeychain"
 CREDENTIALS = ("-c", "credential.helper=", "-c", f"credential.helper={CREDENTIAL_HELPER}")
 REMOTE_COMMANDS = frozenset({"push", "fetch", "ls-remote"})
-# The configuration every ledger git command runs with, whatever the caller's environment
-# says: no global or system configuration file (review of #65, M-3) and no replacement
-# objects (M5). Nothing a caller passes can override these.
-PINNED_CONFIGURATION = {
-    "GIT_CONFIG_GLOBAL": os.devnull,
-    "GIT_CONFIG_NOSYSTEM": "1",
-    "GIT_NO_REPLACE_OBJECTS": "1",
-}
-# The only variables a ledger git command inherits, besides PATH, which is rebuilt
-# (git_environment): the home folder (for ssh and the keychain), the locale, the temporary
-# folder, an ssh agent's socket and the switch that turns git's own prompt off. Nothing
-# that moves the configuration (XDG_CONFIG_HOME), routes the network (HTTPS_PROXY,
-# ALL_PROXY), changes trust (SSL_CERT_FILE, CURL_CA_BUNDLE) or loads code
-# (DYLD_INSERT_LIBRARIES) reaches git (review of #65, L-6).
-PASSED_ENVIRONMENT = (
-    "HOME", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TMPDIR", "SSH_AUTH_SOCK",
-    "GIT_TERMINAL_PROMPT",
-)
 _FALSE = frozenset({"false", "no", "off", "0"})
-# H-1's class, refused in the clone itself (the local and worktree scopes, and any file
-# they include): configuration that runs a program, or redirects what the ledger and the
-# seal read or where they push. The global and system scopes never reach a ledger command
+# The clone's own configuration (the local and worktree scopes, and any file they include)
+# may hold these keys and no others: what `git init` and `git clone` write, the remotes'
+# URLs and refspecs, branch tracking, a local identity, and the worktree switch. Any other
+# key is refused, so a key a later git adds, or one that redirects a read without running
+# a program (http.curloptResolve, fetch.bundleURI, a promisor remote, core.attributesFile),
+# is refused too, not accepted silently (security review of #65, H-1's class and L-5;
+# review of #70, L-5). The global and system scopes never reach a ledger command
 # (PINNED_CONFIGURATION), and the command line resets the credential helper and the hooks,
-# so this refusal is belt and braces (review of #65, M-3).
+# so this is belt and braces. ``core.fsmonitor`` is allowed here only because the check
+# before it refuses any value but false; a push URL must equal the pinned one
+# (``check_remote``).
 REPOSITORY_SCOPES = frozenset({"local", "worktree"})
-REPOSITORY_SCOPE_REFUSED = re.compile(
-    r"credential\..*"
-    r"|core\.(sshcommand|askpass|editor|pager|gitproxy|alternaterefscommand|worktree)"
-    r"|sequence\.editor|gpg\.(.+\.)?program|include\.path|includeif\..*"
-    r"|url\..+\.(insteadof|pushinsteadof)|remote\..+\.(receivepack|uploadpack|proxy|vcs)"
-    r"|protocol\.(.+\.)?allow|http\..*(proxy|ssl).*|ssh\.variant"
-    r"|diff\.external|diff\..+\.(textconv|command)|merge\..+\.driver|filter\..*"
-    r"|uploadpack\.packobjectshook"
+REPOSITORY_SCOPE_ALLOWED = re.compile(
+    r"core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase"
+    r"|precomposeunicode|symlinks|fsmonitor)"
+    r"|extensions\.(worktreeconfig|objectformat|refstorage)"
+    r"|remote\.[^.]+\.(url|fetch|pushurl)"
+    r"|branch\..+\.(remote|merge)"
+    r"|user\.(name|email)"
 )
 MILESTONE_TAG = re.compile(r"ledger-[a-z0-9][a-z0-9.-]*")
 SCRYPT_MAXMEM = 256 * 1024 * 1024
@@ -227,9 +219,16 @@ KEY_RECORD_KEYS = frozenset(
 _RETURNS_FILE = re.compile(r"ledger/returns/[0-9a-f]{64}\.csv")
 # Section 11, item 6: a holdout run may be retried "at the commit of its selectable run
 # plus only commits that touch data loading or the seal". These are the files of data
-# loading and of the seal; any other change to the code a run executes (the harness
-# paths and the hypothesis's paths) between the candidate's commit and the holdout
-# run's refuses the run and fails verification.
+# loading and of the seal's reading side and owner's client; any other change to the code
+# a run executes (the harness paths and the hypothesis's paths) between the candidate's
+# commit and the holdout run's refuses the run and fails verification. The verification of
+# the unseal's signature is outside this set on purpose: ``lamport.py``, and the checks in
+# this module (``unseal_signature_error``, ``pinned_key_record``, ``check_key_record``) and
+# in ``ledger.py`` (``signed_bytes``), so the code that decides at the holdout run whether
+# the owner signed is the code the trials ran under (the quant role's ruling on #70; its
+# price is in holdout-seal.md, "Choices made here"). So is the seal's launcher
+# (``relaunch.py``, ``environment.py`` and the package's ``__init__.py``), which runs
+# before the candidate's code is loaded (review of #70, H-3).
 SEAL_AND_DATA_LOADING = frozenset(
     f"research/norse_research/{name}.py"
     for name in ("seal", "loader", "store", "manifest", "formats", "binance_archive", "periods")
@@ -271,20 +270,6 @@ class RemoteNotPinned(LedgerError, PermissionError):
 def normal_url(url: str) -> str:
     url = url.strip().rstrip("/")
     return url[: -len(".git")] if url.endswith(".git") else url
-
-
-def git_environment(environ: Mapping[str, str] | None = None) -> tuple[str, dict[str, str]]:
-    """The git every ledger command runs, found on the caller's ``PATH``, and the
-    environment it runs with: ``PASSED_ENVIRONMENT`` from the caller, ``PATH`` rebuilt as
-    that git's directory followed by the system's default, and ``PINNED_CONFIGURATION``
-    (security review of #65, M-3 and L-6)."""
-    environ = os.environ if environ is None else environ
-    program = shutil.which("git", path=environ.get("PATH"))
-    if program is None:
-        raise GitError("no git on PATH")
-    passed = {name: environ[name] for name in PASSED_ENVIRONMENT if name in environ}
-    path = os.pathsep.join([str(Path(program).parent), os.defpath])
-    return program, {**passed, "PATH": path, **PINNED_CONFIGURATION}
 
 
 def _subcommand(args: Sequence[str]) -> str | None:
@@ -436,21 +421,23 @@ class GitLedger:
             if found:
                 kind = "URL rewriting" if "insteadof" in pattern else "a transport override"
                 raise RemoteNotPinned(f"{kind} is configured, which is refused: {found}")
-        # Then the rest of H-1's class in the clone's own configuration; the transport
+        # Then the clone's own configuration, against an allowlist; the transport
         # overrides above are refused in every scope, so they keep their own message.
         listed = self.git.text("config", "--show-scope", "--name-only", "--list")
         refused = sorted({
             f"{name} ({scope})"
             for scope, _, name in (line.partition("\t") for line in listed.splitlines())
-            if scope in REPOSITORY_SCOPES and REPOSITORY_SCOPE_REFUSED.fullmatch(name)
+            if scope in REPOSITORY_SCOPES and not REPOSITORY_SCOPE_ALLOWED.fullmatch(name)
         })
         if refused:
             raise RemoteNotPinned(
                 f"the clone's own configuration sets {', '.join(refused)}, which is refused: "
-                "each runs a program inside the ledger's git commands, or redirects what they "
-                "read or where they push, where it could read the unseal (security review of "
-                "#65, H-1's class). Remove it with git config --local --unset, or --worktree "
-                "--unset"
+                "the clone may hold only what git init and git clone write, remotes, branch "
+                "tracking, a local identity and the worktree switch "
+                "(gitledger.REPOSITORY_SCOPE_ALLOWED), since any other key could run a program "
+                "inside the ledger's git commands, or redirect what they read or where they "
+                "push (security review of #65, H-1's class; review of #70, L-5). Remove it "
+                "with git config --local --unset, or --worktree --unset"
             )
 
     def check_remote(self, pinned: str) -> None:
@@ -570,6 +557,7 @@ class GitLedger:
         expected_head: str | None = None,
         attempts: int = 1,
         sign: Callable[[bytes], Mapping] | None = None,
+        registration_sha256: Mapping[str, str] | None = None,
     ) -> Entry:
         """Append one entry, commit it, push it and read it back from the remote.
 
@@ -578,13 +566,17 @@ class GitLedger:
         ledger is first fast-forwarded to the remote's. ``expected_head`` refuses
         unless the ledger head is still the one the caller decided on (M2). ``sign``,
         for the unseal alone, is given the entry's ``signed_bytes`` once its ``seq``,
-        ``prev`` and ``time`` are fixed, and returns its signature (decision D27).
+        ``prev`` and ``time`` are fixed, and returns its signature (decision D27). A
+        genesis entry must pin a registration whose files are, by SHA-256,
+        ``registration_sha256``: by default ``PREREGISTRATION_SHA256``; only the tests'
+        synthetic registrations pass another (review of #70, L-11).
         """
         if sign is not None and (body.get("type") != UNSEAL or "signature" in body):
             raise ValueError("only an unseal entry without a signature is signed here")
         for attempt in range(attempts):
             try:
-                return self._append_once(body, files or {}, require_in_step, expected_head, sign)
+                return self._append_once(body, files or {}, require_in_step, expected_head, sign,
+                                         registration_sha256)
             except LedgerWriteError:
                 if attempt == attempts - 1:
                     raise
@@ -593,6 +585,7 @@ class GitLedger:
     def _append_once(
         self, body: Mapping, files: Mapping[str, bytes], in_step: bool, expected: str | None,
         sign: Callable[[bytes], Mapping] | None = None,
+        registration: Mapping[str, str] | None = None,
     ) -> Entry:
         with self._lock():
             remote = self.fetch()
@@ -634,8 +627,11 @@ class GitLedger:
                 raise VerificationError("no entry may precede the genesis entry")
             self.check_remote(written[0].body["remote"]["url"])  # the first genesis's (N5)
             if body.get("type") == GENESIS:
-                problem = preregistration_tag_error(
-                    self, (body.get("preregistration") or {}).get("tag")
+                prereg = body.get("preregistration") or {}
+                problem = preregistration_tag_error(self, prereg.get("tag")) or (
+                    preregistration_content_error(
+                        prereg.get("tag"), prereg.get("files") or {}, registration
+                    )
                 )
                 if problem:
                     raise VerificationError(f"the entry is refused: {problem}")
@@ -749,10 +745,14 @@ class GitLedger:
                              env=objects)
             except GitError as exc:
                 raise LedgerWriteError(
-                    f"the unseal could not be pushed ({exc}); nothing of it is left in this "
-                    "clone. Treat it as an incident: check the remote's ledger for an unseal "
-                    "entry, change nothing, and run the unseal again at once, from the same "
-                    "terminal, so it signs the same bytes (D27)"
+                    f"the unseal entry {entry.hash} could not be pushed ({exc}); nothing of it "
+                    "is left in this clone. If the remote's ledger now holds an unseal entry "
+                    "with exactly that hash, it is yours, byte for byte, pushed from another "
+                    "clone: the unseal is done, so run seal fetch-holdout. If it holds another "
+                    "unseal entry, that is an incident. If it holds none, run the identical "
+                    "command again: it signs the very same bytes, or refuses if the ledger or "
+                    "HEAD has moved, and a refusal is the incident; never change a pin to get "
+                    "past it (D27; review of #70, M-4 and I-10)"
                 ) from None
             # Pushed, so public: the loose objects join the clone's own store, which the
             # remote-tracking ref the push may have moved already points into.
@@ -1104,14 +1104,40 @@ def seal_changes(git: Git, candidate: str, commit: str) -> tuple[list[str], str,
 
 
 def _shown(text: str) -> str:
-    """A line as the owner reads it: every character that is not printable (a tab, a
-    control character such as a carriage return or an escape, a format character such as
-    a bidirectional override, a line or paragraph separator) is written as its Python
-    escape, so nothing in a file can hide or rewrite a line on the terminal, and a line's
-    length in characters is its width on the screen for ASCII (L-10)."""
+    """A line as the owner reads it: every character that is not printable ASCII (a tab,
+    a control character such as a carriage return or an escape, a format character such as
+    a bidirectional override, a line or paragraph separator, and any non-ASCII character,
+    a homoglyph such as a Cyrillic letter or a wide character included) is written as its
+    Python escape, so nothing in a file can hide or rewrite a line on the terminal or pass
+    for another letter, and a line's length in characters is its width on the screen
+    (L-10; review of #70, L-10)."""
     return "".join(
-        c if c.isprintable() else c.encode("unicode_escape").decode("ascii") for c in text
+        c if c.isascii() and c.isprintable() else c.encode("unicode_escape").decode("ascii")
+        for c in text
     )
+
+
+ESCAPE_FLAG = (
+    "! the next line holds characters written as escapes: non-ASCII, unprintable, or bytes "
+    "that are not UTF-8 (review of #70, L-10)"
+)
+
+
+def _blob_lines(blob: bytes, escaped: set[str]) -> list[str]:
+    """``blob``'s lines as ``_shown`` writes them, adding to ``escaped`` each one that
+    holds an escape the file did not (a character ``_shown`` escapes, or a byte that is not
+    UTF-8), so the diff can flag it apart from a literal backslash in the source."""
+    out = []
+    for raw in blob.split(b"\n"):
+        try:
+            text, undecodable = raw.decode("utf-8"), False
+        except UnicodeDecodeError:
+            text, undecodable = raw.decode("utf-8", "backslashreplace"), True
+        line = _shown(text)
+        if undecodable or line != text:
+            escaped.add(line)
+        out.append(line)
+    return out
 
 
 def _fitted(line: str) -> list[str]:
@@ -1136,12 +1162,13 @@ def render_diff(git: Git, raw: bytes) -> str:
     which applies no attribute, filter or text conversion. Lines split on newlines only,
     bytes that are not UTF-8 show as escapes, and so does any character ``_shown``
     escapes, so what the owner reads is the content the record's hash binds (M-1); a line
-    wider than ``DIFF_WIDTH`` is wrapped and flagged (``_fitted``; L-10)."""
+    holding such an escape is flagged by ``ESCAPE_FLAG`` before it, and a line wider than
+    ``DIFF_WIDTH`` is wrapped and flagged (``_fitted``; L-10)."""
     shown = []
     for line in raw.decode().splitlines():
         meta, _, path = line.partition("\t")
         old_mode, new_mode, old, new, status = meta.lstrip(":").split()
-        sides = []
+        sides, escaped = [], set()
         for oid in (old, new):
             if set(oid) == {"0"}:  # an added or a deleted file has no blob on one side
                 sides.append([])
@@ -1149,10 +1176,14 @@ def render_diff(git: Git, raw: bytes) -> str:
             (blob,) = git.objects([oid])
             if blob is None:
                 raise GitError(f"blob {oid} of {path} is missing")
-            sides.append([_shown(x) for x in blob.decode("utf-8", "backslashreplace").split("\n")])
+            sides.append(_blob_lines(blob, escaped))
         name = _shown(path)
         shown.append(f"{name}: {status}, mode {old_mode} -> {new_mode}, blob {old} -> {new}")
         for diff_line in difflib.unified_diff(*sides, f"a/{name}", f"b/{name}", lineterm=""):
+            if diff_line[:1] in ("+", "-", " ") and diff_line[1:] in escaped and not (
+                diff_line.startswith(("+++ ", "--- "))
+            ):
+                shown.append(ESCAPE_FLAG)
             shown.extend(_fitted(diff_line))
     return "\n".join(shown)
 
@@ -1350,11 +1381,13 @@ def preregistration_tag_error(ledger: GitLedger, tag: object) -> str | None:
 
 
 def preregistration_content_error(
-    tag: str, files: Mapping[str, str], expected: Mapping[str, str]
+    tag: object, files: Mapping[str, str], expected: Mapping[str, str] | None = None
 ) -> str | None:
     """Why the pre-registration files at ``tag``, by SHA-256, are not the registration
-    this code implements (``expected``, ``PREREGISTRATION_SHA256``), or None (security
-    review of #65, L-9)."""
+    this code implements (``expected``, by default ``PREREGISTRATION_SHA256`` as it is when
+    called), or None. The genesis step, the append and ``seal check-key`` all apply it
+    (security review of #65, L-9; review of #70, L-11)."""
+    expected = PREREGISTRATION_SHA256 if expected is None else expected
     differ = sorted(path for path in PREREGISTRATION_FILES if files.get(path) != expected.get(path))
     if not differ:
         return None
@@ -1362,8 +1395,11 @@ def preregistration_content_error(
         f"the pre-registration at {tag} is not the registration this code implements: "
         f"gitledger.PREREGISTRATION_SHA256 pins other content for {', '.join(differ)}. That "
         "is an incident, not a reason to change the code: find out who created or moved "
-        f"{tag} and why before anything else; the pinned hashes change only in a reviewed "
-        "pull request that changes the registration itself (security review of #65, L-9)"
+        f"{tag} and why before anything else. The one innocent cause is a tag made before the "
+        "last change to either file, which the runbook forbids: the tag goes on the commit "
+        "whose files the code pins, and both files are frozen from it (review of #70, L-12). "
+        "The pinned hashes change only in a reviewed pull request that changes the "
+        "registration itself (security review of #65, L-9)"
     )
 
 
@@ -1415,8 +1451,7 @@ def write_genesis(
         if data is None:
             raise LedgerError(f"{path} is not in {tag} ({found})")
         files[path] = sha256_hex(data)
-    expected = PREREGISTRATION_SHA256 if registration_sha256 is None else registration_sha256
-    problem = preregistration_content_error(tag, files, expected)
+    problem = preregistration_content_error(tag, files, registration_sha256)
     if problem:
         raise LedgerError(problem)
     registration = Registration.from_bytes(git.blob(found, PREREGISTRATION_JSON))
@@ -1509,7 +1544,7 @@ def write_genesis(
         "remote": {"url": pinned, "branch": LEDGER_BRANCH, "code_branch": CODE_BRANCH},
         "strategies": dict(sorted(pins.items())),
     }
-    entry = ledger.append(body)
+    entry = ledger.append(body, registration_sha256=registration_sha256)
     first = ledger.snapshot(ledger.local_head()).entries[0]
     anchor = f"{GENESIS_ANCHOR}{first.hash}"
     if anchor not in ledger.milestone_tags():

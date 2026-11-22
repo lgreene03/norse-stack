@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from conftest import clear_overrides
 from ledger_fixtures import KEY_RECORD, KEY_RECORD_DOC, REPO, TREE_PATHS, World, git
-from norse_research import gate, gitledger, harness
+from norse_research import environment, gate, gitledger, harness
 from norse_research.canonical import sha256_hex
 from norse_research.gitledger import (
     GENESIS_ANCHOR,
@@ -110,7 +110,8 @@ def test_genesis_is_anchored_by_the_ledger_genesis_tag(world):
                       registration_sha256=world.registration_sha256)
     # Written by hand instead, the new genesis fails verification in every clone.
     genesis = world.ledger.snapshot(head).genesis.body
-    fresh.append({k: v for k, v in genesis.items() if k not in ("seq", "prev", "time")})
+    fresh.append({k: v for k, v in genesis.items() if k not in ("seq", "prev", "time")},
+                 registration_sha256=world.registration_sha256)
     with pytest.raises(VerificationError, match=f"milestone tag {GENESIS_ANCHOR}.* not an ancestor"):
         fresh.verify()
     # A ledger without the tag at all is refused.
@@ -123,7 +124,10 @@ def test_genesis_is_anchored_by_the_ledger_genesis_tag(world):
         body["preregistration"] = {**body["preregistration"], "commit": untagged.prereg_commit}
         body["key_record"] = {**body["key_record"], "commit": untagged.prereg_commit}
         body["strategies"] = untagged.pins
-        untagged.ledger.append({k: v for k, v in body.items() if k not in ("seq", "prev", "time")})
+        # The body names the first world's registration files, so those are the hashes the
+        # append is told to expect; this test is about the anchor, not the content pin.
+        untagged.ledger.append({k: v for k, v in body.items() if k not in ("seq", "prev", "time")},
+                               registration_sha256=world.registration_sha256)
         with pytest.raises(VerificationError, match=f"no {GENESIS_ANCHOR}[0-9a-f]+ tag"):
             untagged.ledger.verify()
     finally:
@@ -367,10 +371,18 @@ def test_a_hooks_path_or_a_file_system_monitor_is_refused(world):
 def test_repository_configuration_that_runs_a_program_is_refused(world):
     # Security review of #65, H-1's class: a credential helper in the clone's own
     # configuration runs inside the unseal's push, with the unseal's objects in reach, and
-    # so does any key that runs a program or redirects a read or a push. They are refused
-    # as a class in the local and worktree scopes, and through an include, by the ledger
-    # and the harness alike.
+    # so does any key that runs a program or redirects a read or a push. Since review of
+    # #70, L-5, the local and worktree scopes, and what they include, may hold only the keys
+    # REPOSITORY_SCOPE_ALLOWED lists, by the ledger and the harness alike. What git clone
+    # writes, a local identity and the worktree switch still pass.
+    for name, value in (("user.name", "the owner"), ("user.email", "owner@norse.invalid"),
+                        ("core.fsmonitor", "false"), ("extensions.worktreeConfig", "true")):
+        git(world.repo, "config", name, value)
+    listed = git(world.repo, "config", "--local", "--name-only", "--list").splitlines()
+    assert all(gitledger.REPOSITORY_SCOPE_ALLOWED.fullmatch(name) for name in listed), listed
     world.ledger.check_repository()
+    for name in ("user.name", "user.email", "core.fsmonitor", "extensions.worktreeConfig"):
+        git(world.repo, "config", "--unset", name)
     for name, value in (("credential.helper", "!f() { cat > /dev/null; }; f"),
                         ("credential.https://github.com.helper", "store"),
                         ("core.askPass", "/bin/echo"),
@@ -380,7 +392,17 @@ def test_repository_configuration_that_runs_a_program_is_refused(world):
                         ("protocol.file.allow", "always"),
                         ("uploadpack.packObjectsHook", "/bin/echo"),
                         ("includeIf.gitdir:/nowhere/.path", "/nowhere"),
-                        ("sequence.editor", "/bin/echo")):
+                        ("sequence.editor", "/bin/echo"),
+                        # Review of #70, L-5 (probe): keys a denylist let through, refused
+                        # now that the clone's own scopes are an allowlist.
+                        ("http.curloptResolve", "github.com:443:127.0.0.1"),
+                        ("fetch.bundleURI", "file:///nowhere"),
+                        ("core.attributesFile", "/nowhere/attrs"),
+                        ("gpg.ssh.defaultKeyCommand", "/bin/echo"),
+                        ("submodule.x.update", "!/bin/echo"),
+                        ("alias.status", "!/bin/echo"),
+                        ("extensions.partialClone", "elsewhere"),
+                        ("remote.elsewhere.promisor", "true")):
         git(world.repo, "config", name, value)
         with pytest.raises(gitledger.RemoteNotPinned, match=rf"(?i){re.escape(name)} \(local\)"):
             world.ledger.check_repository()
@@ -439,7 +461,7 @@ def test_every_ledger_git_command_runs_with_pinned_configuration_and_the_push_st
         seen[command[-1]] = (command, kwargs["env"])
         return subprocess.CompletedProcess(command, 0, b"", b"")
 
-    program_path = shutil.which("git")
+    program_path = environment.GIT_PROGRAM  # never one found on PATH (review of #70, L-6)
     steering = {"HTTPS_PROXY": "http://127.0.0.1:9", "ALL_PROXY": "socks5://127.0.0.1:9",
                 "XDG_CONFIG_HOME": str(world.tmp), "SSL_CERT_FILE": str(owner),
                 "CURL_CA_BUNDLE": str(owner), "DYLD_INSERT_LIBRARIES": str(program),
@@ -456,7 +478,7 @@ def test_every_ledger_git_command_runs_with_pinned_configuration_and_the_push_st
         gitledger.Git(world.repo).call(
             "-c", "core.untrackedCache=false", "fetch",
             env={"GIT_CONFIG_GLOBAL": str(owner), "GIT_INDEX_FILE": "index"})
-    allowed = {*gitledger.PASSED_ENVIRONMENT, "PATH", *gitledger.PINNED_CONFIGURATION}
+    allowed = {*environment.PASSED_ENVIRONMENT, "PATH", *environment.PINNED_CONFIGURATION}
     for subcommand, (command, env) in seen.items():
         assert command[0] == program_path and command[1:5] == list(gitledger.HARDENED)
         credentials = command[5:9] == list(gitledger.CREDENTIALS)
@@ -468,6 +490,49 @@ def test_every_ledger_git_command_runs_with_pinned_configuration_and_the_push_st
         assert env["HOME"] == os.environ["HOME"]
     assert gitledger.CREDENTIALS == ("-c", "credential.helper=", "-c",
                                      "credential.helper=osxkeychain")
+
+
+def test_the_ledger_never_runs_a_git_found_on_path(world, monkeypatch):
+    # Review of #70, L-6 (probe): a wrapper git put first on PATH, as an edit to the owner's
+    # shell profile could, ran as every ledger git command of the unseal. The ledger now
+    # runs /usr/bin/git alone, checked to belong to root with its exec path and its
+    # osxkeychain helper, so the wrapper never runs; the ordinary append and push still do.
+    bindir = world.tmp / "agent-bin"
+    bindir.mkdir()
+    marker = world.tmp / "wrapper-ran"
+    real = shutil.which("git")
+    # It logs only calls carrying the ledger's own first settings, as the reviewer's did;
+    # the fixtures' own git (remote_ledger, for one) runs from PATH on purpose.
+    (bindir / "git").write_text(
+        '#!/bin/sh\nif [ "$2" = core.hooksPath=/dev/null ]; then\n'
+        f'  echo "$@" >> {marker}\nfi\nexec {real} "$@"\n'
+    )
+    (bindir / "git").chmod(0o755)
+    before = len(parse_ledger(world.remote_ledger()))
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    assert shutil.which("git") == str(bindir / "git")
+    assert trial(world, "B-H1").status == "completed"
+    world.ledger.verify()
+    assert not marker.exists()
+    assert len(parse_ledger(world.remote_ledger())) == before + 2
+    assert environment.git_program() == environment.GIT_PROGRAM == "/usr/bin/git"
+    assert environment.git_version().startswith("git version")
+
+
+def test_a_git_the_owners_user_can_replace_is_refused(tmp_path):
+    # Review of #70, L-6: a git binary, or a folder above it, that belongs to the owner's
+    # user is refused, whatever it is called; so is one that does not exist.
+    fake = tmp_path / "bin" / "git"
+    fake.parent.mkdir()
+    fake.write_text("#!/bin/sh\nexit 0\n")
+    fake.chmod(0o755)
+    with pytest.raises(environment.EnvironmentRefused, match="is not root's alone"):
+        environment.git_program(str(fake))
+    with pytest.raises(environment.EnvironmentRefused, match="does not exist"):
+        environment.git_program(str(tmp_path / "nowhere" / "git"))
+    with pytest.raises(environment.EnvironmentRefused, match="does not exist"):
+        environment.git_program("git")  # never a name to look up on PATH
+    environment.git_program()  # /usr/bin/git, and everything it runs, is root's
 
 
 def test_genesis_pins_only_the_newest_preregistration_tag(tmp_path, monkeypatch):
@@ -526,10 +591,24 @@ def test_genesis_pins_the_registration_by_content_as_well_as_by_tag(tmp_path, mo
             world.write_genesis(registration_sha256=other)
         assert world.ledger.local_head() is None  # nothing was written
         world.write_genesis()  # its own content
-        assert world.ledger.verify().snapshot.genesis.body["preregistration"]["files"] == (
-            world.registration_sha256)
+        genesis = world.ledger.verify().snapshot.genesis.body
+        assert genesis["preregistration"]["files"] == world.registration_sha256
     finally:
         world.close()
+    # Review of #70, L-11: the public append applies the pin too, so a genesis written past
+    # the genesis step is refused as well.
+    other = World(tmp_path / "other", genesis=False)
+    try:
+        body = {k: v for k, v in genesis.items() if k not in ("seq", "prev", "time")}
+        body.update(remote={**body["remote"], "url": str(other.remote)},
+                    preregistration={**body["preregistration"], "commit": other.prereg_commit},
+                    key_record={**body["key_record"], "commit": other.prereg_commit},
+                    strategies=other.pins)
+        with pytest.raises(VerificationError, match="is not the registration this code implements"):
+            other.ledger.append(body)
+        assert other.ledger.local_head() is None
+    finally:
+        other.close()
 
 
 def test_a_superseding_genesis_cannot_move_the_pinned_remote(world, monkeypatch):

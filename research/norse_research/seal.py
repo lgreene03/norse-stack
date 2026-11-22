@@ -28,13 +28,15 @@ D21): the unseal closes development, so no trial, benchmark or control run may b
 opened after it (a result of one opened before it is accepted and ignored). It is
 refused, before the passphrase is asked for, unless: the environment carries no override,
 nor ``GIT_ASKPASS`` or ``SSH_ASKPASS`` (which no ledger git command inherits any more;
-``gitledger.PASSED_ENVIRONMENT``); the clone's own configuration sets nothing that runs a
-program or redirects a read or a push (``gitledger.REPOSITORY_SCOPE_REFUSED``); the local
-ledger head is the remote's (T23) and the ledger verifies; each
+``environment.PASSED_ENVIRONMENT``); the clone's own configuration holds only the keys
+``gitledger.REPOSITORY_SCOPE_ALLOWED`` lists; the local ledger head is the remote's (T23),
+is the ``ledger_head`` the request pins, and the ledger verifies; each
 hypothesis has a selectable run of every registered configuration or has exhausted its
 own entries and the reserve, since an unseal while the other grid can still run would
-stop it early ("early" means before that, T20); no unseal entry exists yet (T23); the tree is clean, HEAD is on main
-and the code running is the code at HEAD; the period constants are the genesis entry's
+stop it early ("early" means before that, T20); no unseal entry exists yet (T23); the tree
+is clean, HEAD is the ``unseal_commit`` the request pins and is on main, and the code
+running is the code of the candidate's commit, not HEAD's (``relaunch`` runs the command
+line so; review of #70, H-3 and M-4); the period constants are the genesis entry's
 (T20); the request names exactly the pre-registration the genesis entry names (T24); a
 holdout candidate exists on the ledger and the request names its configuration hash
 (section 11, items 1 to 3; T22); item 6's rule holds between the candidate's commit and
@@ -48,17 +50,19 @@ reviews the change before anything is unsealed (security review round 3, T1; rev
 records, and the entry records the accepted hash, which replay recomputes. Then the
 passphrase is read and checked against both of the key record's commitments, in constant
 time (T25). Only then is the unseal entry appended, signed, pushed and read back from the
-remote, and only after that are the holdout files fetched again. The entry carries a
+remote; the holdout files are fetched again afterwards, at HEAD, by ``fetch-holdout``,
+whose data loading item 6 lets differ from the candidate's. The entry carries a
 one-time signature (``lamport``) over its own bytes, everything but the signature, by the
 key the scrypt output derives; the scrypt output itself is never revealed. The ledger
 refuses an unseal whose signature does not verify against the pinned record's
 ``signer_sha256``, when it is written and on every replay, so no code path opens the
 holdout without the owner's key (security review H1), and a copy of the entry, taken
 while it is pushed, authorises nothing but that same entry (decision D27; review of #65,
-H-2). The unseal's timestamp is its predecessor's, so running it again after a failed
-push, at once and with nothing changed, signs the same bytes and reveals nothing new.
+H-2). The unseal's timestamp is its predecessor's and the request pins the ledger head and
+HEAD, so running the identical command again after a failed push signs the same bytes,
+or refuses if either has moved; it never signs other bytes (review of #70, M-4).
 
-**The re-fetch** (D17; ``fetch-holdout`` repeats it). Every file the frozen holdout
+**The re-fetch** (D17; ``fetch-holdout``, after the unseal, at HEAD). Every file the frozen holdout
 manifest pins is fetched again through the given fetcher and checked against its
 published CHECKSUM and against the manifest's SHA-256 and size before it is written;
 then the whole manifest is verified, hashes, sizes and rows. Any failure stops there,
@@ -87,7 +91,7 @@ import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
-from . import lamport
+from . import lamport, relaunch
 from .binance_archive import (
     CHECKSUM_MAX_BYTES,
     DOWNLOAD_URL,
@@ -97,7 +101,7 @@ from .binance_archive import (
     parse_checksum,
     sha256_hex,
 )
-from .environment import check_environment
+from .environment import check_environment, git_program
 from .formats import DatasetSpec
 from .gate import development, gate_ledger, holdout_candidate, unseal_early_error
 from .gitledger import (
@@ -109,6 +113,7 @@ from .gitledger import (
     holdout_commit_error,
     period_constants,
     pinned_key_record,
+    preregistration_content_error,
     render_diff,
     seal_digest,
     seal_record,
@@ -119,6 +124,7 @@ from .ledger import (
     UNSEAL,
     Entry,
     LedgerError,
+    make_entry,
     parse_ledger,
     unseal_of,
 )
@@ -137,7 +143,9 @@ SALT_BYTES = 16
 MIN_PASSPHRASE_CHARACTERS = 20
 MIN_PASSPHRASE_WORDS = 6
 _WORD = re.compile(r"[^\W\d_]+")
-UNSEAL_REQUEST_KEYS = frozenset({"preregistration", "configuration_sha256", "accepted_diff"})
+UNSEAL_REQUEST_KEYS = frozenset({
+    "preregistration", "configuration_sha256", "accepted_diff", "unseal_commit", "ledger_head",
+})
 # Programs git runs to ask for a credential when no helper supplies one (security review
 # of #65, H-1's class). No ledger git command inherits either since M-3's fix
 # (gitledger.PASSED_ENVIRONMENT), so refusing them here is belt and braces. GIT_SSH,
@@ -308,6 +316,12 @@ def check_genesis_key(repo: Path, read_key: ReadKey | None = None, remote: str =
     genesis = ledger.verify(head).snapshot.genesis
     record = key_record_of(ledger.git, genesis)
     check_key(record, (read_key or read_passphrase)("Holdout passphrase: "))
+    # Whoever wrote genesis chose the registration too: it must be the content this code
+    # pins, whatever route wrote it (review of #70, L-11).
+    prereg = genesis.body["preregistration"]
+    problem = preregistration_content_error(prereg["tag"], prereg["files"])
+    if problem:
+        raise SealRefused(f"the genesis entry is not one to build on: {problem}")
     return genesis.body["key_record"]["sha256"]
 
 
@@ -406,19 +420,22 @@ def unseal(
     request: Mapping,
     *,
     read_key: ReadKey | None = None,
-    store: ArchiveStore | None = None,
-    fetch: Fetch | None = None,
     remote: str = "origin",
 ) -> Entry:
     """Write the single unseal entry; see the module docstring for what it refuses.
 
     ``request`` holds exactly ``preregistration`` ({tag, commit, files}, as the genesis
-    entry names it), ``configuration_sha256`` (the holdout candidate's) and
+    entry names it), ``configuration_sha256`` (the holdout candidate's),
     ``accepted_diff`` (the hash of the data loading and seal diff from the candidate's
-    commit to HEAD, which the refusal without it prints; T1). With a ``store`` and a
-    ``fetch``, the holdout files are fetched again after the entry is on the remote;
-    otherwise ``fetch_holdout`` does that."""
+    commit to HEAD, which the refusal without it prints; T1), and the two pins ``seal
+    candidate`` prints: ``unseal_commit``, the HEAD the owner reviewed, and
+    ``ledger_head``, the ledger commit the owner reviewed. If either has moved, the unseal
+    refuses rather than sign different bytes, so a retry with the identical request signs
+    the same bytes or nothing (review of #70, M-4). This process must be the candidate's
+    code (``relaunch`` makes the command line so; review of #70, H-3). The holdout files
+    are fetched again afterwards, at HEAD, by ``fetch_holdout``."""
     from .harness import (  # the harness imports this module
+        RunRefused,
         check_clean_tree,
         check_head_on_main,
         check_loaded_modules,
@@ -437,6 +454,13 @@ def unseal(
     ledger = GitLedger(repo, remote)
     git = ledger.git
     admitted_on = ledger.require_in_step()
+    if admitted_on != request["ledger_head"]:
+        raise SealRefused(
+            f"the ledger's head is {admitted_on}, not {request['ledger_head']}, the one seal "
+            "candidate printed and you reviewed. Something was appended since, so the unseal "
+            "would sign other bytes; it refuses instead. Stop: this is the incident a failed "
+            "unseal warns of. Do not change the pin to get past it (review of #70, M-4)"
+        )
     verified = ledger.verify(admitted_on)
     genesis = verified.snapshot.genesis
     if genesis is None or verified.registration is None:
@@ -450,8 +474,14 @@ def unseal(
         )
     check_clean_tree(git)
     head = git.text("rev-parse", "HEAD")
+    if head != request["unseal_commit"]:
+        raise SealRefused(
+            f"HEAD is {head}, not {request['unseal_commit']}, the commit seal candidate "
+            "printed and you reviewed, so the unseal would sign other bytes; it refuses "
+            "instead. Stop: this is the incident a failed unseal warns of. Do not change the "
+            "pin to get past it (review of #70, M-4)"
+        )
     check_head_on_main(git, remote, head)
-    check_loaded_modules(git, repo, head)
     if request["preregistration"] != genesis.body["preregistration"]:
         raise SealRefused(
             "the unseal names a pre-registration other than the one the genesis entry names "
@@ -475,16 +505,26 @@ def unseal(
             f"registered rule selects {candidate.configuration_id} ({chosen}) on the ledger; "
             "the harness refuses any other (section 11, item 4; T22)"
         )
+    candidate_commit = candidate.open_entry.body["commit"]
+    # The code that renders the review, reads the passphrase and signs is the candidate's,
+    # never HEAD's, which item 6 lets differ in the seal itself (review of #70, H-3).
+    try:
+        check_loaded_modules(git, repo, candidate_commit)
+    except RunRefused as exc:
+        raise SealRefused(
+            f"this process does not run the code of the candidate's commit {candidate_commit} "
+            f"({exc}); run the unseal as python -m norse_research.seal, which runs that "
+            "commit's code itself, never HEAD's (review of #70, H-3)"
+        ) from None
     # Item 6's rule, applied once and here: from the candidate's commit to this one only
     # data loading or the seal may change, and every holdout run is then at exactly this
     # commit, which the entry records (security review round 2, N1).
     paths = genesis.body["tree_paths"]
     problem = holdout_commit_error(
-        git, candidate.open_entry.body["commit"], head, [*paths["harness"], *paths[candidate.hypothesis]]
+        git, candidate_commit, head, [*paths["harness"], *paths[candidate.hypothesis]]
     )
     if problem:
         raise SealRefused(f"the unseal is refused at this commit: {problem}")
-    candidate_commit = candidate.open_entry.body["commit"]
     files, digest = seal_digest(git, candidate_commit, head)
     if request["accepted_diff"] != digest:
         diff = render_diff(git, seal_record(git, candidate_commit, head))  # for the refusal only
@@ -492,6 +532,18 @@ def unseal(
                                          show_hash=terminal_attached()))
     record = key_record_of(git, genesis)
     seed = signing_seed(check_key(record, (read_key or read_passphrase)("Holdout passphrase: ")))
+
+    def sign(message: bytes) -> dict:
+        signature = lamport.sign(seed, message)
+        signed = make_entry({**json.loads(message), "signature": signature})
+        print(
+            f"seal: signed the unseal entry {signed.hash}; pushing it now. If this run stops "
+            "before it says the entry is written, an unseal entry with exactly this hash on "
+            "the remote's ledger is yours (review of #70, I-10)",
+            file=sys.stderr, flush=True,
+        )
+        return signature
+
     entry = ledger.append(
         {
             "type": UNSEAL,
@@ -506,12 +558,11 @@ def unseal(
             "commit": head,
         },
         expected_head=admitted_on,
-        # The append fixes seq, prev and time, then has this sign the entry's bytes (D27).
-        sign=lambda message: lamport.sign(seed, message),
+        # The append fixes seq, prev and time under its lock, after checking the ledger is
+        # still the pinned head, then has this sign the entry's bytes (D27; M-4).
+        sign=sign,
     )
     require_unseal_on_remote(ledger, entry.hash)
-    if store is not None and fetch is not None:
-        refetch_holdout(committed_holdout_manifest(git, genesis), store, fetch)
     return entry
 
 
@@ -587,42 +638,124 @@ def preregistration_at(git: Git, commit: str, tag: str) -> dict:
     return {"tag": tag, "commit": full, "files": files}
 
 
+def _full_commit(git: Git, name: str, what: str) -> str:
+    found = git.try_text("rev-parse", "--verify", "--quiet", f"{name}^{{commit}}")
+    if found is None:
+        raise SealRefused(f"{what} {name} is not a commit in this clone")
+    return found
+
+
+def _candidate(repo: Path, remote: str, at_candidate: str | None) -> int:
+    """``seal candidate``: what the unseal must name, from the ledger as it stands, with
+    the code of the candidate's commit (review of #70, H-3)."""
+    from .harness import RunRefused, check_loaded_modules  # the harness imports this module
+
+    ledger = GitLedger(repo, remote)
+    verified = ledger.verify()
+    issued = gate_ledger(ledger, verified.snapshot)
+    chosen = holdout_candidate(issued)
+    if chosen is not None:
+        commit = chosen.open_entry.body["commit"]
+        if not relaunch.package_matches(repo, commit):
+            if at_candidate is not None:
+                raise SealRefused(
+                    f"this process runs the code of {at_candidate}, but the code there selects "
+                    f"the candidate run at {commit}; nothing is printed (review of #70, H-3)"
+                )
+            return relaunch.run_at(repo, commit, [
+                "--repo", str(repo), "--remote", remote, "candidate",
+            ], extra=[relaunch.AT_CANDIDATE, commit])
+        try:
+            check_loaded_modules(ledger.git, repo, commit)
+        except RunRefused as exc:
+            raise SealRefused(f"this process is not the candidate's code: {exc}") from None
+    for h in HYPOTHESES:
+        judged = development(issued, h)
+        print(f"{h}: " + ("no candidate (not every registered configuration has a "
+                          "selectable run)" if judged is None else
+                          f"candidate {judged.candidate.configuration_id}, "
+                          f"{judged.criteria}"))
+    genesis = verified.snapshot.genesis
+    named = {
+        "preregistration": genesis.body["preregistration"],
+        "holdout_candidate": None,
+        "closed": issued.closed,
+        "git": git_program(),
+    }
+    if chosen is not None:
+        # The file list only: the hash to accept is printed by the unseal's refusal,
+        # after the full diff it covers, never on its own (review of #65, L-2). The two
+        # pins fix what the unseal signs (review of #70, M-4).
+        head = ledger.git.text("rev-parse", "HEAD")
+        commit = chosen.open_entry.body["commit"]
+        files, _ = seal_digest(ledger.git, commit, head)
+        sha = chosen.open_entry.body["configuration_sha256"]
+        prereg = genesis.body["preregistration"]
+        named["holdout_candidate"] = {
+            "configuration_id": chosen.configuration_id,
+            "configuration_sha256": sha,
+            "candidate_commit": commit,
+            "seal_files_changed_since": files,
+            "unseal_commit": head,
+            "ledger_head": verified.head,
+            "unseal_command": (
+                f"python -m norse_research.seal unseal --commit {prereg['commit']} "
+                f"--configuration-sha256 {sha} --unseal-commit {head} --ledger-head "
+                f"{verified.head}"
+            ),
+            "diff_to_accept": "run that command, without --accept-diff, in a terminal of "
+                              "your own: it shows the full diff, then the hash that accepts "
+                              "it; then run it again with --accept-diff and that hash",
+        }
+    print(json.dumps(named, indent=2, sort_keys=True))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """``python -m norse_research.seal key-record|check-key|rehearse|candidate|unseal|fetch-holdout``.
 
     ``key-record --out PATH`` writes the owner's key record (run once, by the owner, in
     a terminal of their own). ``check-key`` checks the typed passphrase against the key
-    record the genesis entry on the remote pins and writes nothing; the owner runs it
-    straight after genesis. ``rehearse [--boundary YYYY-MM]`` runs the holdout path at
-    HEAD on development data only and writes nothing; the owner runs it before the
-    unseal. ``candidate`` prints what the unseal must name, from the ledger as it
-    stands, without any key, and the data loading and seal files changed since the
-    candidate's run, but neither their diff nor the hash that accepts it (L-2).
-    ``unseal --commit C --configuration-sha256 H --accept-diff D`` writes the single
-    unseal entry, signed, after the passphrase verifies, then fetches the holdout files
-    again; without the right ``D`` it prints the full diff to review, then, at an
-    interactive terminal only, the hash, and refuses (T1; M-1, I-7). ``--tag``
-    defaults to the tag the genesis entry names. ``fetch-holdout`` repeats only the
-    re-fetch. No option takes the passphrase: it is typed at the terminal.
+    record the genesis entry on the remote pins, and the registration genesis pins against
+    the one this code implements, and writes nothing; the owner runs it straight after
+    genesis. ``rehearse [--boundary YYYY-MM]`` runs the holdout path at HEAD on development
+    data only and writes nothing; the owner runs it before the unseal. ``candidate`` prints
+    what the unseal must name, from the ledger as it stands, without any key: the
+    candidate, the data loading and seal files changed since its run, but neither their
+    diff nor the hash that accepts it (L-2), and the two pins the unseal needs. ``unseal
+    --commit C --configuration-sha256 H --unseal-commit U --ledger-head L --accept-diff D``
+    writes the single unseal entry, signed, after the passphrase verifies, and refuses if
+    HEAD is not ``U`` or the ledger's head is not ``L`` (M-4); without the right ``D`` it
+    prints the full diff to review, then, at an interactive terminal only, the hash, and
+    refuses (T1; M-1, I-7). ``candidate`` and ``unseal`` run with the code of the
+    candidate's commit, never HEAD's (``relaunch``; H-3). ``--tag`` defaults to the tag the
+    genesis entry names. ``fetch-holdout`` fetches the holdout files again after the
+    unseal, at HEAD. No option takes the passphrase: it is typed at the terminal.
     """
-    parser = argparse.ArgumentParser(description=main.__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(description=main.__doc__.split("\n\n")[0],
+                                     allow_abbrev=False)
     parser.add_argument("--repo", type=Path, default=REPO_ROOT)
     parser.add_argument("--remote", default="origin")
+    parser.add_argument(relaunch.AT_CANDIDATE, default=None, help=argparse.SUPPRESS)
     commands = parser.add_subparsers(dest="command", required=True)
-    record = commands.add_parser("key-record")
+    record = commands.add_parser("key-record", allow_abbrev=False)
     record.add_argument("--out", type=Path, required=True)
-    commands.add_parser("check-key")
-    commands.add_parser("candidate")
-    rehearsal = commands.add_parser("rehearse")
+    commands.add_parser("check-key", allow_abbrev=False)
+    commands.add_parser("candidate", allow_abbrev=False)
+    rehearsal = commands.add_parser("rehearse", allow_abbrev=False)
     rehearsal.add_argument("--boundary", default=None,
                            help="the development month that stands in for the holdout's start")
-    opening = commands.add_parser("unseal")
+    opening = commands.add_parser("unseal", allow_abbrev=False)
     opening.add_argument("--commit", required=True, help="the pre-registration tag's commit")
     opening.add_argument("--tag", default=None, help="defaults to the genesis entry's tag")
     opening.add_argument("--configuration-sha256", required=True)
+    opening.add_argument("--unseal-commit", required=True,
+                         help="the HEAD seal candidate printed; the unseal refuses any other")
+    opening.add_argument("--ledger-head", required=True,
+                         help="the ledger head seal candidate printed; the unseal refuses any other")
     opening.add_argument("--accept-diff", default=None,
                          help="the hash of the data loading and seal diff, once reviewed")
-    commands.add_parser("fetch-holdout")
+    commands.add_parser("fetch-holdout", allow_abbrev=False)
     args = parser.parse_args(argv)
     if args.command == "key-record":
         digest = write_key_record(args.out)
@@ -637,7 +770,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         digest = check_genesis_key(args.repo, remote=args.remote)
         print(
             f"the passphrase verifies against the key record the genesis entry pins (sha256 "
-            f"{digest}); compare that SHA-256 with the one kept beside the passphrase"
+            f"{digest}); compare that SHA-256 with the one kept beside the passphrase. The "
+            "registration genesis pins is the one this code implements: "
+            + ", ".join(f"{path} {digest}" for path, digest in
+                        sorted(gitledger_pins().items()))
         )
         return 0
     if args.command == "rehearse":
@@ -652,61 +788,45 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
     check_environment(os.environ, args.repo)
-    ledger = GitLedger(args.repo, args.remote)
     if args.command == "candidate":
-        verified = ledger.verify()
-        issued = gate_ledger(ledger, verified.snapshot)
-        for h in HYPOTHESES:
-            judged = development(issued, h)
-            print(f"{h}: " + ("no candidate (not every registered configuration has a "
-                              "selectable run)" if judged is None else
-                              f"candidate {judged.candidate.configuration_id}, "
-                              f"{judged.criteria}"))
-        chosen = holdout_candidate(issued)
-        genesis = verified.snapshot.genesis
-        named = {
-            "preregistration": genesis.body["preregistration"],
-            "holdout_candidate": None,
-            "closed": issued.closed,
+        return _candidate(Path(args.repo), args.remote, getattr(args, "at_candidate", None))
+    ledger = GitLedger(args.repo, args.remote)
+    if args.command == "unseal":
+        tag = args.tag
+        if tag is None:
+            genesis = ledger.snapshot(ledger.local_head()).genesis
+            if genesis is None:
+                raise SealRefused("the ledger has no genesis entry, so nothing can be unsealed")
+            tag = genesis.body["preregistration"]["tag"]
+        request = {
+            "preregistration": preregistration_at(ledger.git, args.commit, tag),
+            "configuration_sha256": args.configuration_sha256,
+            "accepted_diff": args.accept_diff,
+            "unseal_commit": _full_commit(ledger.git, args.unseal_commit, "--unseal-commit"),
+            "ledger_head": _full_commit(ledger.git, args.ledger_head, "--ledger-head"),
         }
-        if chosen is not None:
-            # The file list only: the hash to accept is printed by the unseal's refusal,
-            # after the full diff it covers, never on its own (review of #65, L-2).
-            head = ledger.git.text("rev-parse", "HEAD")
-            files, _ = seal_digest(ledger.git, chosen.open_entry.body["commit"], head)
-            named["holdout_candidate"] = {
-                "configuration_id": chosen.configuration_id,
-                "configuration_sha256": chosen.open_entry.body["configuration_sha256"],
-                "seal_files_changed_since": files,
-                "diff_to_accept": "run seal unseal without --accept-diff in a terminal of "
-                                  "your own: it shows the full diff, then the hash that "
-                                  "accepts it",
-            }
-        print(json.dumps(named, indent=2, sort_keys=True))
+        entry = unseal(args.repo, request, remote=args.remote)
+        print(
+            f"unseal entry {entry.seq} written and on the remote: {entry.hash}, at commit "
+            f"{entry.body['commit']}, with git {git_program()}. Now, in your clone at HEAD, "
+            "fetch the holdout files: python -m norse_research.seal fetch-holdout"
+        )
         return 0
-    store = ArchiveStore(datasets_root())
     fetch = HttpFetcher()
     try:
-        if args.command == "unseal":
-            tag = args.tag
-            if tag is None:
-                genesis = ledger.snapshot(ledger.local_head()).genesis
-                if genesis is None:
-                    raise SealRefused("the ledger has no genesis entry, so nothing can be unsealed")
-                tag = genesis.body["preregistration"]["tag"]
-            request = {
-                "preregistration": preregistration_at(ledger.git, args.commit, tag),
-                "configuration_sha256": args.configuration_sha256,
-                "accepted_diff": args.accept_diff,
-            }
-            entry = unseal(args.repo, request, store=store, fetch=fetch, remote=args.remote)
-            print(f"unseal entry {entry.seq} written: {entry.hash}; holdout files verified")
-        else:
-            count = fetch_holdout(args.repo, store=store, fetch=fetch, remote=args.remote)
-            print(f"{count} holdout files fetched again and verified against the manifest")
+        count = fetch_holdout(args.repo, store=ArchiveStore(datasets_root()), fetch=fetch,
+                              remote=args.remote)
+        print(f"{count} holdout files fetched again and verified against the manifest")
     finally:
         fetch.close()
     return 0
+
+
+def gitledger_pins() -> dict[str, str]:
+    """The registration content this code pins, as ``gitledger`` holds it when called."""
+    from . import gitledger
+
+    return dict(gitledger.PREREGISTRATION_SHA256)
 
 
 if __name__ == "__main__":

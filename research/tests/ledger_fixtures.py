@@ -528,10 +528,10 @@ def grid_world(tmp: Path, *, skilled: str | None = "H1-03", benchmark: bool = Tr
 
     ``h2=False`` leaves H2 unrun, so an unseal would stop its grid early.
     ``incomplete`` also leaves the last H1 configuration unrun, so no hypothesis has a
-    candidate. ``loader_changed`` runs the grids at a commit whose loader.py differs
-    from HEAD's, so the unseal has a data loading diff to accept (security review round
-    3, T1), the runs' loader.py carrying ``loader_line`` at its end; HEAD's package is
-    still the code under test."""
+    candidate. ``loader_changed`` adds a data loading change after the runs, so the unseal
+    has a data loading diff to accept (security review round 3, T1): HEAD's loader.py
+    carries ``loader_line`` at its end. The runs' commit holds the code under test, since
+    the unseal runs the candidate's code, never HEAD's (review of #70, H-3)."""
     registration = Registration.from_bytes(REAL_PREREG_JSON.read_bytes())
     pinned = {cid: "noise" for h in ("H1", "H2") for cid in registration.order[h]}
     pinned["B-H1"] = "market"
@@ -539,17 +539,13 @@ def grid_world(tmp: Path, *, skilled: str | None = "H1-03", benchmark: bool = Tr
         pinned[skilled] = "skilled"
     world = World(tmp, behaviours={**pinned, **(behaviours or {})})
     loader = "research/norse_research/loader.py"
-    if loader_changed:
-        world.write(loader, (PACKAGE / "loader.py").read_text() + f"\n{loader_line}\n")
-        world.commit("loader: the data loading the runs used")
-        world.push()
     order = list(registration.order["H1"][:-1] if incomplete else registration.order["H1"])
     if h2 and not incomplete:
         order += registration.order["H2"]
     world.runs_by_hand([*order, *(["B-H1", "B-H2"] if benchmark else [])])
     if loader_changed:
-        world.write(loader, (PACKAGE / "loader.py").read_bytes())
-        world.commit("loader: a data loading fix after the runs")
+        world.write(loader, (PACKAGE / "loader.py").read_text() + f"\n{loader_line}\n")
+        world.commit("loader: a data loading change after the runs")
         world.push()
     return world
 

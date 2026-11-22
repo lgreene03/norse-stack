@@ -98,10 +98,13 @@ Before it writes anything the harness refuses on any of these:
 * a remote that is not the pinned one: its resolved fetch and push URLs must equal the URL
   genesis pins, and no URL rewrite, `receivepack`, `uploadpack`, proxy or SSH command may
   be configured in any scope git reads; `refs/replace/` refs are refused and git runs with
-  `GIT_NO_REPLACE_OBJECTS`. Every ledger git command reads no global or system
-  configuration (`GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`), gets an
-  environment built from a short allowlist rather than the shell's, and, if it reaches the
-  remote, the owner's credential helper alone (security review of #65, M-3;
+  `GIT_NO_REPLACE_OBJECTS`. Every ledger git command is `/usr/bin/git`, never one found
+  on `PATH`, and only while it, its exec path and its credential helper belong to root; it
+  reads no global or system configuration (`GIT_CONFIG_GLOBAL=/dev/null`,
+  `GIT_CONFIG_NOSYSTEM=1`), gets an environment built from a short allowlist rather than the
+  shell's, and, if it reaches the remote, the owner's credential helper alone; and the clone's
+  own configuration may hold only the keys `gitledger.REPOSITORY_SCOPE_ALLOWED` lists
+  (security review of #65, M-3; review of #70, L-5 and L-6;
   [holdout-seal.md](holdout-seal.md));
 * a local ledger head that is not the remote's, or a ledger that fails anchored
   verification, which includes the replay of the run rules and of every entry against its
@@ -200,7 +203,12 @@ The genesis step also refuses a tag whose pre-registration files are not, by SHA
 registration this code implements (`gitledger.PREREGISTRATION_SHA256`, which a test holds to
 `docs/` in the checkout), and a tag while a newer `prereg-v<N>` is on the remote. Either is an
 incident, not a reason to change the code: find out who created or moved the tag before anything
-else (security review of #65, L-9).
+else (security review of #65, L-9). The ledger's append refuses such a genesis entry too, however
+it is written, and `seal check-key` refuses a genesis that pins one (review of #70, L-11). So the
+tag must go on a commit whose two files are exactly the pinned ones, and both are frozen from the
+tag: the lead tags `prereg-v2` on main after #66's calibration results, with the files unchanged.
+A tag made before a later edit to either file could never pass genesis again (review of #70,
+L-12).
 
 Straight after the genesis step the owner runs, in a terminal of their own,
 `python -m norse_research.seal check-key`. It checks the typed passphrase against the key
@@ -249,8 +257,9 @@ included. Bit `i` of that digest (byte `i // 8`, most significant bit first) is 
 secret `preimages[i]` reveals, and `complements[i]` is the public half of the other secret of
 pair `i`. The append, `verify()` and replay rebuild the public key from the two lists and compare
 its SHA-256 with the pinned record's `signer_sha256`, in constant time. The unseal's `time` is
-its predecessor's, so its bytes are fixed by the ledger it follows and a retry signs the same
-bytes. `research/tests/fixtures/key-record-test-passphrase-only.json` is a sample record in this
+its predecessor's, and the owner's command line pins the ledger head and HEAD it reviewed, so its
+bytes are fixed: a retry with the identical command signs the same bytes, or refuses if either
+has moved (review of #70, M-4). `research/tests/fixtures/key-record-test-passphrase-only.json` is a sample record in this
 format for a passphrase that exists only in the tests, and a test recomputes its two hashes from
 the passphrase with `hashlib` and `hmac` alone.
 
