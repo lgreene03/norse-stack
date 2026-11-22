@@ -25,6 +25,7 @@ from datetime import UTC, datetime
 from itertools import pairwise
 
 from ..formats import (
+    _ENGINE_TOKEN,
     INTERVAL_MS,
     DatasetSpec,
     EngineABCMeta,
@@ -62,7 +63,7 @@ def vwap(bar: Kline) -> float:
     return bar.quote_volume / bar.volume
 
 
-class SeriesView(Sequence, Frozen, metaclass=EngineABCMeta):
+class SeriesView(Sequence, Frozen, metaclass=EngineABCMeta, engine=_ENGINE_TOKEN):
     """The first ``count`` rows of a series: what is known at the moment it is taken.
 
     The batch and streaming drivers both hand strategies this class over the rows known
@@ -143,7 +144,7 @@ class Segments(metaclass=EngineClass):
         return FixedSegments(self._starts, self._start_index)
 
 
-class FixedSegments(Frozen):
+class FixedSegments(Frozen, engine=_ENGINE_TOKEN):
     """``Segments`` that can never change: held in tuples, built once."""
 
     __slots__ = ("_start_index", "_starts")
@@ -157,7 +158,7 @@ class FixedSegments(Frozen):
         return self._starts[k], self._start_index[k]
 
 
-class Series(Frozen):
+class Series(Frozen, engine=_ENGINE_TOKEN):
     """A whole series held in memory, with each row's availability instant.
 
     ``horizon`` is where the data was read up to: a daily series whose rows stop
@@ -247,7 +248,7 @@ def _instrument_end(name: str, times: Sequence[int], horizon: int | None,
 # --- fill bars: 15-minute series, read lazily -------------------------------------------
 
 
-class FillSource(Frozen):
+class FillSource(Frozen, engine=_ENGINE_TOKEN):
     """Where the backtest reads 15-minute bars: only to find fills (section 5, Fills)
     and funding marks (section 5, Funding). They are never shown to a strategy, and each
     call returns a list of its own."""
@@ -260,7 +261,7 @@ class FillSource(Frozen):
         return {}
 
 
-class RowsSource(FillSource):
+class RowsSource(FillSource, engine=_ENGINE_TOKEN):
     """15-minute bars already in memory (synthetic data and small runs)."""
 
     def __init__(self, series: Mapping[str, Iterable[Kline]]) -> None:
@@ -336,7 +337,7 @@ def _load_runs(load: Callable, name: str, runs: Sequence[Span], lo: int, hi: int
     return rows
 
 
-class ViewSource(FillSource):
+class ViewSource(FillSource, engine=_ENGINE_TOKEN):
     """15-minute bars read through the runner's ``DataView`` a calendar month at a
     time, as a fill search reaches them, keeping only the months in use: the
     candidates' 15-minute bars would not fit in memory at once. The cache and the gaps
@@ -397,7 +398,7 @@ def _next_month(month_start: int) -> int:
 # --- the backtest's market --------------------------------------------------------------
 
 
-class Market(Frozen):
+class Market(Frozen, engine=_ENGINE_TOKEN):
     """Everything a backtest reads: the series a strategy may see (daily and four-hour
     bars, funding), held whole, and a ``FillSource`` for 15-minute bars. A strategy that
     builds one keeps it, so it is read-only once built, its series in a read-only

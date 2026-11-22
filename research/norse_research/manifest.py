@@ -29,6 +29,7 @@ from pathlib import Path
 
 from .binance_archive import DOWNLOAD_URL, sha256_hex
 from .formats import (
+    _ENGINE_TOKEN,
     LICENCE,
     DataIntegrityError,
     DatasetSpec,
@@ -64,7 +65,7 @@ MANIFEST_FILES = {
 HOLDOUT_MANIFEST_SHA256 = "806e1d6acdd90c5454297b78c42c37cfb6f522ebcb81f01b773ba66b9308ea77"
 
 
-class ManifestError(DataIntegrityError):
+class ManifestError(DataIntegrityError, engine=_ENGINE_TOKEN):
     """A manifest is malformed, or data disagrees with the manifest that pins it."""
 
 

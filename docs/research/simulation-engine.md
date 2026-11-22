@@ -361,9 +361,16 @@ forbidden builtin, a frame or code object, a sensitive module, or a helper named
 list. The check refuses
 the frame names, and the runner's audit hook refuses the four ways in to a frame and
 every use of the garbage collector. The metaclass refuses a subclass of an engine class
-made outside the engine, or made at all once the engine is sealed, under any name and
-by any route (`type`, `__build_class__`, a class statement). The loader's zip reader is
-held under private names.
+unless the engine makes it with its private token, and refuses any once the engine is
+sealed, under any name and by any route (`type`, `__build_class__`, a class statement,
+a three-argument call of the metaclass). It decided this by the namespace's
+`__module__` until the round 5 re-check (R5-L1) showed that a caller writes that string:
+in an unsealed process, a test or a development backtest, a three-argument
+`EngineClass(...)` naming an engine module built a `Costs` whose fee was 0.0. The token
+is an object no strategy can reach, so the rule now holds sealed or not; and the source
+check refuses the names `EngineClass`, `EngineABCMeta` and `ABCMeta` and any
+`metaclass=` keyword in a strategy's class (B-I1), which no strategy needs. The
+loader's zip reader is held under private names.
 
 Round 5 of the review found that the walk, as round 4 stated it, missed a function by
 what it does: `formats.dataclass` and `sim.<module>.dataclass` were the standard

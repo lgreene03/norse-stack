@@ -841,3 +841,71 @@ def test_the_golden_run_compiles_only_files_once_sealed(code_root, tmp_path):
     for (_, got), want in zip(result["returns"], golden["weights"]["expected"]["returns"],
                               strict=True):
         assert got == pytest.approx(want, rel=1e-12)
+
+
+# --- security review round 5 re-check, R5-L1: the subclass rule without module names ---
+
+
+def test_an_engine_class_is_not_subclassed_by_naming_an_engine_module_unsealed():
+    """R5-L1: ``EngineClass`` trusted the namespace's ``__module__``, a string the caller
+    writes, so in an unsealed process (a test, a development backtest, an audit script)
+    a three-argument call built a ``Costs`` whose fee is 0.0. The rule now asks for the
+    engine's private token, so this process, unsealed, refuses it however it is spelt."""
+    from norse_research.formats import EngineClass
+    from norse_research.sim import Costs
+
+    free = {"__module__": "norse_research.sim.model", "fee": lambda me, quantity, price: 0.0}
+    with pytest.raises(TypeError, match="subclassed only by the engine"):
+        EngineClass("Free", (Costs,), dict(free))
+    with pytest.raises(TypeError, match="subclassed only by the engine"):
+        EngineClass("Free", (Costs,), dict(free), engine=object())
+    alias = Costs
+    with pytest.raises(TypeError, match="subclassed only by the engine"):
+        class Free(alias):
+            def fee(self, quantity, price):
+                return 0.0
+    assert Costs(10, 2).fee(1.0, 100.0) == pytest.approx(0.1)
+
+
+ROUND_5_RECHECK = {
+    "N1 EngineClass with three arguments": (
+        "from norse_research.formats import EngineClass\nK = EngineClass('K', (), {'x': 1})\n"),
+    "N2 EngineClass with a forged __module__": (
+        "from norse_research.formats import EngineClass\nfrom norse_research.sim import Costs\n"
+        "Free = EngineClass('Free', (Costs,), {'__module__': 'norse_research.sim.model'})\n"),
+    "N3 collections.abc.ABCMeta with an engine base": (
+        "from collections.abc import ABCMeta\nfrom norse_research.sim import Costs\n"
+        "Free = ABCMeta('Free', (Costs,), {})\n"),
+    "N4 a function metaclass feeding EngineClass": (
+        "from norse_research.formats import EngineClass\nfrom norse_research.sim import Costs\n\n\n"
+        "def grab(name, bases, ns):\n    return EngineClass(name, bases, ns)\n\n\nK = Costs\n\n\n"
+        "class Free(K, metaclass=grab):\n    pass\n"),
+    "N5 a function metaclass alone": (
+        "def grab(name, bases, ns):\n    return ns\n\n\nclass N(metaclass=grab):\n    k = 1\n"),
+    "N6 a metaclass on ABCMeta": (
+        "from collections.abc import ABCMeta\n\n\nclass Meta(ABCMeta):\n    pass\n\n\n"
+        "class Odd(metaclass=Meta):\n    pass\n"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(ROUND_5_RECHECK))
+def test_a_strategy_names_no_class_factory_and_sets_no_metaclass(name):
+    """R5-L1 and B-I1: ``EngineClass``, ``EngineABCMeta`` and ``ABCMeta`` build a class
+    from three arguments, and a ``metaclass=`` keyword hands back the class namespace;
+    the source check refuses all of them, as no strategy needs one."""
+    problems = disallowed_imports(ROUND_5_RECHECK[name], "strategies.h1.probe", False,
+                                  ["strategies/h1"])
+    assert problems, f"{name}: the source check accepted it"
+
+
+def test_the_strategies_on_main_pass_the_class_rules():
+    """The registered strategies use neither a class factory nor a metaclass."""
+    from norse_research.sources import module_name_for
+
+    research = PACKAGE.parent
+    for path in sorted((PACKAGE / "strategies").rglob("*.py")):
+        rel = path.relative_to(research.parent).as_posix()
+        parts = rel.split("/")
+        paths = ["/".join(parts[:4])] if len(parts) > 4 else ["research/norse_research/strategies"]
+        assert disallowed_imports(path.read_text(), module_name_for(rel),
+                                  path.name == "__init__.py", paths) == [], rel

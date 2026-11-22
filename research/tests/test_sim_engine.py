@@ -220,6 +220,14 @@ def test_the_engine_imports_nothing_a_strategy_may_not():
         problems = [p for p in problems
                     if not p.endswith((": name __all__", ": name __slots__",
                                        ": import of dataclass", ": import of field"))]
+        # The engine makes its classes with its own metaclasses and subclasses its own
+        # classes with its private token; strategies may name neither (security review
+        # round 5, R5-L1 and B-I1).
+        problems = [p for p in problems
+                    if not p.endswith((" sets a metaclass", ": import of EngineClass",
+                                       ": import of EngineABCMeta", ": name EngineClass",
+                                       ": name EngineABCMeta",
+                                       ": import of private name _ENGINE_TOKEN"))]
         assert problems == [], path.name
     universe_imports = disallowed_imports((PACKAGE / "universe.py").read_text(),
                                           "norse_research.universe")
