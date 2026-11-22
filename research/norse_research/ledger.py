@@ -48,12 +48,13 @@ configuration hash, the open and result entries of its selectable run, the commi
 code is frozen at, the SHA-256 of the data loading and seal diff the owner accepted
 since the candidate's run, and the hashes of the holdout manifest and the key record
 genesis pins (section 11, item 4),
-and its ``proof``: the scrypt output of the owner's passphrase, whose SHA-256 the key
-record holds (a commit-reveal; security review H1). Only someone who knows the
-passphrase can produce it, and ``gitledger`` checks it against the pinned record when
-the entry is written and on every replay. A second unseal entry fails verification
-here; its proof, its accepted diff and its candidate are checked by ``gitledger`` and
-``gate``.
+and its ``signature``: a one-time signature (``lamport``) over ``signed_bytes`` of the
+entry, everything but the signature itself, by the key the owner's passphrase derives,
+whose public key's hash the key record holds (decision D27; security review of #65,
+H-2). Only someone who knows the passphrase can produce it, it covers this entry and no
+other, and ``gitledger`` checks it against the pinned record when the entry is written and
+on every replay. A second unseal entry fails verification here; its signature, its
+accepted diff and its candidate are checked by ``gitledger`` and ``gate``.
 
 **Attempt** and **attempt close** (G1.6; security review H2, M1) bracket every unsealed
 run of the holdout: the attempt is written before the strategy is first given the
@@ -88,6 +89,7 @@ from .canonical import (
     value_hash,
 )
 from .formats import DatasetSpec
+from .lamport import signature_shape_error
 from .registration import (
     HOLDOUT,
     HYPOTHESES,
@@ -140,8 +142,8 @@ _KEYS = {
        "cost_basis", "result", "result_sha256", "returns_path", "crossed_gaps"},
     UNSEAL: _COMMON
     | {"preregistration", "configuration_id", "hypothesis", "configuration_sha256",
-       "candidate", "accepted_diff", "holdout_manifest_sha256", "key_record_sha256", "proof",
-       "commit"},
+       "candidate", "accepted_diff", "holdout_manifest_sha256", "key_record_sha256",
+       "signature", "commit"},
     ATTEMPT: _COMMON | {"opens", "open_seq", "commit"},
     ATTEMPT_CLOSE: _COMMON | {"attempt", "attempt_seq", "outcome"},
 }
@@ -187,6 +189,12 @@ def entry_line(body: Mapping) -> str:
 def make_entry(body: Mapping) -> Entry:
     line = entry_line(body)
     return Entry(line, sha256_hex(line.encode("ascii")), loads_canonical(line))
+
+
+def signed_bytes(body: Mapping) -> bytes:
+    """What the unseal's signature covers: the entry's canonical line without the
+    signature, so every other field, ``seq``, ``prev`` and ``time`` included (D27)."""
+    return entry_line({k: v for k, v in body.items() if k != "signature"}).encode("ascii")
 
 
 # --- schema ----------------------------------------------------------------------------
@@ -350,9 +358,9 @@ def _check_unseal(seq: int, body: dict) -> None:
     _sha(seq, "accepted_diff", body["accepted_diff"])
     _sha(seq, "holdout_manifest_sha256", body["holdout_manifest_sha256"])
     _sha(seq, "key_record_sha256", body["key_record_sha256"])
-    proof = body["proof"]
-    if not isinstance(proof, str) or not re.fullmatch(r"(?:[0-9a-f]{2}){32,}", proof):
-        raise _fail(seq, "the unseal's proof is not a scrypt output (lower-case hex, 32 bytes or more)")
+    problem = signature_shape_error(body["signature"])
+    if problem:
+        raise _fail(seq, problem)
     _git_id(seq, "commit", body["commit"])
 
 

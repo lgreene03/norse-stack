@@ -380,9 +380,13 @@ def check_manifest(
 
 def check_clean_tree(git: Git) -> None:
     """Refuse a changed or untracked file, read without the filesystem monitor, and
-    any file git is told not to look at (review M1)."""
+    any file git is told not to look at (review M1). The ignore and attributes files git
+    would read under the home folder (``~/.config/git/ignore`` and ``attributes``) are not
+    read here, so nothing outside the clone can hide an untracked file from this check
+    (review of #70, I-8)."""
     status = git.run(
         "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+        "-c", f"core.excludesFile={os.devnull}", "-c", f"core.attributesFile={os.devnull}",
         "status", "--porcelain=v1", "-z", "--untracked-files=all",
     )
     changed = [item[3:].decode(errors="replace") for item in status.split(b"\0") if item]

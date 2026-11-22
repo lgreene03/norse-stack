@@ -11,7 +11,7 @@ import math
 import statistics
 
 import pytest
-from ledger_fixtures import Book, issued, lcg_returns
+from ledger_fixtures import SHAPED_SIGNATURE, Book, issued, lcg_returns
 from norse_research import gate, harness
 from norse_research.cscv import cscv
 from norse_research.gate import GateRefused, RegisteredLedger
@@ -501,8 +501,8 @@ def unseal_body_for(book: Book, cid: str = "H1-03") -> dict:
             "candidate": {"open": opened.hash, "result": snapshot.result_of(opened).hash},
             "accepted_diff": hashlib.sha256(b"").hexdigest(),
             "holdout_manifest_sha256": genesis.body["manifests"]["holdout"],
-            "key_record_sha256": genesis.body["key_record"]["sha256"], "proof": "ab" * 32,
-            "commit": "1" * 40}
+            "key_record_sha256": genesis.body["key_record"]["sha256"],
+            "signature": SHAPED_SIGNATURE, "commit": "1" * 40}
 
 
 def test_the_gate_computes_on_the_entries_before_the_unseal():

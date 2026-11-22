@@ -59,8 +59,9 @@ informative only: no trust decision reads the clock, and a test fails if code ou
   it; replay accepts it and the gate ignores it (security review of #65, L-1). It names the pre-registration genesis names, the holdout candidate
   the registered rule selects on those entries, the commit the holdout runs at, the hash
   of the data loading and seal diff the owner accepted since the candidate's run, and the
-  hashes of the holdout manifest and the key record, and reveals the scrypt output the key
-  record commits to; the holdout run follows it. See [holdout-seal.md](holdout-seal.md).
+  hashes of the holdout manifest and the key record, and carries a one-time signature over
+  all of it by the key the key record commits to (decision D27; format below); the holdout
+  run follows it. See [holdout-seal.md](holdout-seal.md).
 
 N is the number of open entries of kind `trial`: reruns, failures and runs that never
 finished all count, and nothing is deduplicated by configuration hash (section 9).
@@ -96,8 +97,17 @@ Before it writes anything the harness refuses on any of these:
   path inside the repository. The genesis, tag and seal commands refuse them too;
 * a remote that is not the pinned one: its resolved fetch and push URLs must equal the URL
   genesis pins, and no URL rewrite, `receivepack`, `uploadpack`, proxy or SSH command may
-  be configured in any scope; `refs/replace/` refs are refused and git runs with
-  `GIT_NO_REPLACE_OBJECTS`;
+  be configured in any scope git reads; `refs/replace/` refs are refused and git runs with
+  `GIT_NO_REPLACE_OBJECTS`. Every ledger git command is the Command Line Tools' git named
+  in full (`/Library/Developer/CommandLineTools/usr/bin/git` on macOS, not the
+  `/usr/bin/git` shim; `/usr/bin/git` on Linux), never one found on `PATH`, and only while
+  it, its exec path and its credential helper belong to root; it
+  reads no global or system configuration (`GIT_CONFIG_GLOBAL=/dev/null`,
+  `GIT_CONFIG_NOSYSTEM=1`), gets an environment built from a short allowlist rather than the
+  shell's, and, if it reaches the remote, the owner's credential helper alone; and the clone's
+  own configuration may hold only the keys `gitledger.REPOSITORY_SCOPE_ALLOWED` lists
+  (security review of #65, M-3; review of #70, L-5 and L-6;
+  [holdout-seal.md](holdout-seal.md));
 * a local ledger head that is not the remote's, or a ledger that fails anchored
   verification, which includes the replay of the run rules and of every entry against its
   registration;
@@ -149,12 +159,14 @@ version of the file along the branch's first-parent history only appended, that 
 committed return series still matches its hash, that `prereg-v1` still points where
 genesis says, that the run rules hold over the whole ledger, that every open entry is
 exactly what the registration resolves it to with the strategy genesis pins, that no
-trial, benchmark or control follows the unseal, that every sensitivity run re-costs its
+trial, benchmark or control run is opened after the unseal (the result of one opened before
+it is accepted and ignored; security review of #65, I-5), that every sensitivity run re-costs its
 hypothesis's candidate on the entries before it (or before the unseal), that the unseal
-comes only once each hypothesis's grid is complete or its own entries and the reserve are
-spent, names the candidate the registered rule selects on the entries before it and records the
-data loading and seal diff from the candidate's commit to its own, and that every rerun's
-fix commit is new since the run it repeats.
+carries the owner's signature over its own bytes, comes only once each hypothesis's grid is
+complete or its own entries and the reserve are spent, names the candidate the registered rule
+selects on the entries before it and records the hash of the data loading and seal diff from
+the candidate's commit to its own (recomputed, not rendered; L-7), and that every rerun's fix
+commit is new since the run it repeats.
 
 The genesis anchor is named for its content: `ledger-genesis-<hash of the first genesis
 entry>`. A tag on a commit holding no ledger, or the reserved name (`ledger-genesis` with
@@ -189,6 +201,17 @@ cover all of `research/norse_research`, which would leave part of the package, t
 simulation engine included, out of the harness digest; and a key record that breaks its
 contract.
 
+The genesis step also refuses a tag whose pre-registration files are not, by SHA-256, the
+registration this code implements (`gitledger.PREREGISTRATION_SHA256`, which a test holds to
+`docs/` in the checkout), and a tag while a newer `prereg-v<N>` is on the remote. Either is an
+incident, not a reason to change the code: find out who created or moved the tag before anything
+else (security review of #65, L-9). The ledger's append refuses such a genesis entry too, however
+it is written, and `seal check-key` refuses a genesis that pins one (review of #70, L-11). So the
+tag must go on a commit whose two files are exactly the pinned ones, and both are frozen from the
+tag: the lead tags `prereg-v2` on main after #66's calibration results, with the files unchanged.
+A tag made before a later edit to either file could never pass genesis again (review of #70,
+L-12).
+
 Straight after the genesis step the owner runs, in a terminal of their own,
 `python -m norse_research.seal check-key`. It checks the typed passphrase against the key
 record the genesis entry on the remote pins and writes nothing. Whoever runs the genesis step
@@ -210,15 +233,37 @@ the genesis step):
 | `dklen` | an integer, at least 32 |
 | `salt` | lower-case hex, an even number of characters, at least 32 (16 bytes) |
 | `verifier_sha256` | lower-case hex SHA-256 of the scrypt output (64 characters) |
+| `signer_sha256` | lower-case hex SHA-256 of the one-time public key the scrypt output derives (64 characters; decision D27) |
 
 The parameters must also be ones `hashlib.scrypt` accepts within `maxmem` of 256 MiB; the
 genesis step makes one trial call to check. The record must be committed on the remote's
 main. Nothing else may be in it: in particular no other hash of the passphrase, and never the
-scrypt output itself. The record is the commitment of a commit-reveal (security review H1):
-the unseal entry reveals the scrypt output as its `proof`, and the ledger refuses an unseal
-whose proof does not hash to `verifier_sha256`, when it is written and on every replay.
-`research/tests/fixtures/key-record-test-passphrase-only.json` is a sample in this format for
-a passphrase that exists only in the tests.
+scrypt output itself, which nothing reveals. The seal checks a typed passphrase against both
+hashes before it signs, and `check-key` does the same straight after genesis. The contract
+alone cannot tell whether `signer_sha256` came from the same passphrase as the verifier; those
+two checks can.
+
+`signer_sha256` is computed with the standard library only (`research/norse_research/lamport.py`
+states it exactly): with `D` the ASCII bytes `norse-stack/holdout-unseal/lamport-sha256/v1/`, the
+seed is HMAC-SHA256 keyed with the scrypt output, of `D` + `seed`; secret `(i, b)`, for `i` from
+0 to 255 and `b` 0 or 1, is HMAC-SHA256 keyed with the seed, of `D` + `secret` + `i` as two
+bytes, big-endian, + `b` as one byte; its public half is SHA-256 of `D` + `leaf` + the secret; and
+`signer_sha256` is SHA-256 of `D` + `public` + the 512 public halves, `i` ascending and `b` 0
+before 1.
+
+The unseal entry carries `signature` in place of round 1's `proof` (security review of #65, H-2;
+decision D27). It is an object holding exactly `preimages` and `complements`, each a list of 256
+lower-case hex strings of 64 characters. It signs the SHA-256 of `D` + `message` + the entry's
+canonical line without the `signature` key, so every other field, `seq`, `prev` and `time`
+included. Bit `i` of that digest (byte `i // 8`, most significant bit first) is the `b` whose
+secret `preimages[i]` reveals, and `complements[i]` is the public half of the other secret of
+pair `i`. The append, `verify()` and replay rebuild the public key from the two lists and compare
+its SHA-256 with the pinned record's `signer_sha256`, in constant time. The unseal's `time` is
+its predecessor's, and the owner's command line pins the ledger head and HEAD it reviewed, so its
+bytes are fixed: a retry with the identical command signs the same bytes, or refuses if either
+has moved (review of #70, M-4). `research/tests/fixtures/key-record-test-passphrase-only.json` is a sample record in this
+format for a passphrase that exists only in the tests, and a test recomputes its two hashes from
+the passphrase with `hashlib` and `hmac` alone.
 
 ## The ledger branch ruleset
 
