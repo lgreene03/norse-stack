@@ -1068,8 +1068,12 @@ def test_the_clean_tree_check_reads_no_ignore_file_under_home(ready, monkeypatch
     (home / ".config" / "git").mkdir(parents=True)
     (home / ".config" / "git" / "ignore").write_text("stray_module.py\n")
     monkeypatch.setenv("HOME", str(home))
+    # The ledger's git gets HOME but never XDG_CONFIG_HOME, so this is the file it reads
+    # by default (GitHub's runners set XDG_CONFIG_HOME, which moves the fixtures' own).
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     (ready.repo / "research" / "stray_module.py").write_text("X = 1\n")
-    assert "stray_module.py" not in git(ready.repo, "status", "--porcelain")  # hidden there
+    plain = ready.ledger.git.text("status", "--porcelain", "--untracked-files=all")
+    assert "stray_module.py" not in plain  # the ledger's own git, unqualified, hides it
     with pytest.raises(harness.RunRefused, match=r"dirty.*stray_module\.py"):
         harness.check_clean_tree(ready.ledger.git)
 
