@@ -408,6 +408,24 @@ def test_smoke_run_reproduces_and_summarises():
     assert "`single-H2-s2-high`" in text and "`null-w0.99-a0.99`" in text
 
 
+def test_the_results_section_survives_saving_and_reloading_the_results_file():
+    # The run renders the section from its results in memory; the committed-results test
+    # renders it from the file, which dumps writes with sorted keys. Two detection families
+    # whose registered order (H1-low, then H1-high) is not alphabetical: the section must
+    # list them in registered order either way (the first full run under prereg-v2 failed
+    # here, its renderer listing them in dict order).
+    families = [calibration.BY_ID[i] for i in ("single-H1-s2-high", "single-H1-s2-low")]
+    results = calibration.run(families, 1, workers=1, chunk=1)
+    reloaded = json.loads(calibration.dumps(results))
+    order = list(results["verdict"]["detection_planted_passes"])
+    assert order == ["single-H1-s2-low", "single-H1-s2-high"]
+    assert list(reloaded["verdict"]["detection_planted_passes"]) == order[::-1]
+    text = calibration.results_markdown(results)
+    assert calibration.results_markdown(reloaded) == text
+    (sentence,) = [line for line in text.splitlines() if line.startswith("**Detection half")]
+    assert sentence.index("`single-H1-s2-low`") < sentence.index("`single-H1-s2-high`")
+
+
 def test_the_report_s_results_section_is_replaced_between_its_markers():
     text = f"# Report\n\n{calibration.REPORT_BEGIN}\nold\n{calibration.REPORT_END}\n\nafter\n"
     new = calibration.with_report_section(text, "\nnew\n")

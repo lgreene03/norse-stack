@@ -780,9 +780,13 @@ def results_markdown(results: dict) -> str:
     if v["detection_families"]:
         rates = v["detection_planted_passes"]
         weakest = v["weakest_detection_family"]
+        # In registered order, never the dict's: the results file is written with sorted
+        # keys, so its order differs from the order in memory.
+        registered = layout().detection
+        listed = [i for i in registered if i in rates] + sorted(set(rates) - set(registered))
         out += ["", f"**Detection half: {met[v['detection_met']]}.** The planted hypothesis "
                 "passed development at N = 30 in "
-                + _listed([f"{_count(r)} (`{i}`)" for i, r in rates.items()])
+                + _listed([f"{_count(rates[i])} (`{i}`)" for i in listed])
                 + f" of {n:,} ledgers. The minimum, {_count(rates[weakest])} in `{weakest}`, "
                 f"decides, and the clause needs more than {DETECTION_POWER:.0%} of the "
                 "ledgers in each."]

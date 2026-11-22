@@ -35,8 +35,11 @@ The rerun is decisive. The lead tags `prereg-v2` once it is recorded, whatever i
 16); if the gate does not meet the clause, `prereg-v2` is tagged as it stands, the gate is not
 revised again in this iteration, and the iteration closes NOT JUDGED (D24). So the study was
 fixed, committed and pushed before the run started, and nothing in it, in the results or in the
-thresholds was changed after it. Its verdict is the first paragraph of "Results of the rerun",
-which the run itself wrote.
+thresholds was changed after it. The one exception is disclosed under "What had been seen before
+the rerun": after the first complete run, the order in which the results section lists the four
+detection families was fixed, and the study was run again from scratch, which had to reproduce
+the first complete run's results file byte for byte. Its verdict is the first paragraph of
+"Results of the rerun", which the run itself wrote.
 
 ## The clause the rerun is judged by
 
@@ -86,7 +89,8 @@ and `detection_met`) and it adds `complete`, `no_skill_gate_passes` and
 `weakest_detection_family`; the unregistered counterfactual with V over each hypothesis's own
 runs is dropped, and `prereg-v1`'s pooled V is kept as a labelled counterfactual; and the results
 section of this report is written by the run (`--report`) and checked by a test against the
-committed file. Not changed: the 54 families, the seed 20261121, the 1,000 ledgers per family,
+committed file, listing the detection families in registered order whether rendered from the
+results in memory or from the file. Not changed: the 54 families, the seed 20261121, the 1,000 ledgers per family,
 the simulation and its constants, `PLANTED_COLUMN` and `PBO_ALWAYS`.
 `test_the_families_are_c2365ee_s_under_the_ids_gate_calibration_lists` pins them: every family's
 spec to their SHA-256 at c2365ee, each of the 23 registered families parameter by parameter, and
@@ -99,12 +103,26 @@ without changing a byte of the study; the pin is to c2365ee's content.
 pooled V; section 12's analytic figures under the null V; and the quant role's reduced check of
 the revision (normal returns only, DEV-4 and DEV-5 taken as met), which found false passes in at
 most 0.14% of no-skill ledgers and a single planted 2.0 passing in 88% to 94% (section 15, item
-24). The rerun is the first full run of the study under the null V. Before it, the null-V code
-ran on the study's own ledgers only in tests: ledger 0 of `null-w0.9-a0.9` and ledger 500 of
+24). Before the first complete run of the study under the null V, the null-V code ran on the
+study's own ledgers only in tests: ledger 0 of `null-w0.9-a0.9` and ledger 500 of
 `single-H1-s1.5-high` in the equivalence test (neither hypothesis passes, and H1 passes, as under
 the pooled V), and two ledgers each of `null-w0.99-a0.99` and `single-H2-s2-high` in the smoke
 test, whose outcomes no test asserts or prints. The ledger on which the two forms of V disagree
 was found in a test-only family, whose id seeds ledgers outside the study.
+
+**The first complete run, seen before the rerun.** The study as committed in edd9286 ran in full
+once, from 15:11:34 to 15:41:14 UTC on 2026-11-22, and its results and verdict were seen. Its
+results file, SHA-256 `26efe37f0964a95141034f5fab20eed38fcb126ebe7d79df849fffb8faeaea40`, failed
+one check before it could be committed: `test_the_committed_full_run_is_the_one_the_report_cites`
+requires the report's results section to equal a rendering of the file, and the two listed the
+four detection families in different orders. The run rendered the section from its results in
+memory, in registered order, but the file is written with sorted keys, and the renderer listed the
+families in the order of the dict it was given. Every figure was the same. The only change since
+is that the renderer lists them in registered order, with
+`test_the_results_section_survives_saving_and_reloading_the_results_file`; no family, seed,
+threshold, simulation or line of the gate changed. The study is deterministic, so the rerun from
+scratch at the commit holding this paragraph must reproduce that results file byte for byte; if it
+did not, nothing would be committed. The run record under "Reproduce" says whether it did.
 
 ## What was calibrated
 
