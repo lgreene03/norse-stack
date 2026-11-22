@@ -284,8 +284,10 @@ no-skill ledgers, a single 1.5 passing in 46% to 51% of ledgers, a single 2.0 in
 and a shared 1.5 in 35% to 48%. The quant is an AI agent role the owner runs, not an
 independent person; its review is advice, not an approval or a signature, and the decision
 is the owner's alone. The full calibration rerun under the revised gate, every family at
-1,000 ledgers, is G1.7's in #66, after the `prereg-v2` tag and before the genesis entry, so
-the detection clause is fixed before its full results exist. The owner also confirmed,
+1,000 ledgers, is G1.7's in #66. It runs after this revision merges to main, so the
+detection clause is committed, with its date, before its full results exist, and before
+the `prereg-v2` tag, as the option the owner chose said ("The full calibration is rerun
+before tagging"); the tag and then the genesis entry follow it. The owner also confirmed,
 unchanged, the three clarifications D21 recorded as the coordinator's: the unseal waits
 until each hypothesis's grid is complete or its own entries and the reserve are exhausted;
 with no holdout candidate, development closes at that same point and the verdict records

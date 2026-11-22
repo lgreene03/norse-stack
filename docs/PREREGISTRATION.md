@@ -995,9 +995,10 @@ its JSON file and DECISIONS.md.
     role's reduced check of the revision (normal returns only, DEV-4 and DEV-5 taken as met)
     found false passes in at most 0.14% of no-skill ledgers, a single 1.5 passing in 46% to
     51%, a single 2.0 in 88% to 94% and a shared 1.5 in 35% to 48%. The full rerun of every
-    family at 1,000 ledgers under the revised gate is G1.7's, in #66, after the `prereg-v2`
-    tag and before the genesis entry, so the detection clause is fixed before its full
-    results exist. The register row "V in SR0 can be lowered by disqualifying a hypothesis"
+    family at 1,000 ledgers under the revised gate is G1.7's, in #66. It runs after this
+    revision merges to main, so the detection clause is committed, with its date, before
+    its full results exist, and before the `prereg-v2` tag, as the owner chose (D22); the
+    tag and then the genesis entry follow it. The register row "V in SR0 can be lowered by disqualifying a hypothesis"
     (security review L7) is closed by the same change.
 
 ## 16. Change control and signatures
@@ -1029,8 +1030,10 @@ the owner and every agent, so neither the signature row nor the tag proves who a
 records the owner's instruction, and what the tag does prove is that these rules were
 fixed before the ledger's genesis entry. The owner instructed in conversation on
 2026-11-21 that the change removing the ledger freeze be tagged `prereg-v2` (D21), as D18
-did for `prereg-v1`; the lead creates that annotated tag on the resulting commit on main
-once the pull request merges.
+did for `prereg-v1`. On 2026-11-22 the owner chose the gate revision (D22) on the stated
+terms that the full calibration is rerun before tagging, which extends that instruction to
+the same tag with D22 in it. The lead creates that annotated tag on the commit on main that
+holds this revision, once G1.7's full rerun under it has completed and been recorded.
 
 **Change log.**
 
