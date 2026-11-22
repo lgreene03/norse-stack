@@ -27,3 +27,7 @@ __pycache__/
 coverage.xml
 coverage.json
 coverage-badge.svg
+
+# The specialist agents keep their notes here; they are not part of the repository,
+# and an untracked file would stop every ledgered run (harness check_clean_tree).
+.claude/agent-memory/
