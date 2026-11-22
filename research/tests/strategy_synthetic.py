@@ -126,28 +126,28 @@ def settlements(first, rates, jitter=None):
 # --- a seeded market for H1 -----------------------------------------------------------
 
 # symbol: (first day index, last day index or None, base quote volume, drift, sigma).
-# USDC is removed before ranking and ETHBULL is a leveraged token (D14); GGG is too young
-# for D13 until its 121st day; HHH stops trading mid-window (D12); III misses one daily
-# bar mid-window and returns as a new instrument with no history (section 4); KKK's
+# USDC is removed before ranking and ETHBULL is a leveraged token (D14); GMT is too young
+# for D13 until its 121st day; HOOK stops trading mid-window (D12); IO misses one daily
+# bar mid-window and returns as a new instrument with no history (section 4); PEPE's
 # perpetual is quoted per thousand coins (section 4) and funds hot at times (H1-07).
 H1_SPEC = {
-    "AAAUSDT": (0, None, 9e6, 0.004, 0.03),
-    "BBBUSDT": (0, None, 8e6, -0.003, 0.04),
-    "CCCUSDT": (0, None, 7e6, 0.002, 0.05),
-    "DDDUSDT": (0, None, 6e6, 0.001, 0.02),
-    "EEEUSDT": (0, None, 5e6, -0.001, 0.06),
-    "FFFUSDT": (0, None, 2e6, 0.003, 0.03),
-    "GGGUSDT": (110, None, 2e7, 0.005, 0.05),
-    "HHHUSDT": (0, 165, 1.2e7, 0.002, 0.04),
-    "IIIUSDT": (0, None, 4e6, 0.002, 0.03),
-    "KKKUSDT": (0, None, 6.5e6, 0.003, 0.04),
+    "ADAUSDT": (0, None, 9e6, 0.004, 0.03),
+    "BNBUSDT": (0, None, 8e6, -0.003, 0.04),
+    "CHZUSDT": (0, None, 7e6, 0.002, 0.05),
+    "DOTUSDT": (0, None, 6e6, 0.001, 0.02),
+    "EOSUSDT": (0, None, 5e6, -0.001, 0.06),
+    "FILUSDT": (0, None, 2e6, 0.003, 0.03),
+    "GMTUSDT": (110, None, 2e7, 0.005, 0.05),
+    "HOOKUSDT": (0, 165, 1.2e7, 0.002, 0.04),
+    "IOUSDT": (0, None, 4e6, 0.002, 0.03),
+    "PEPEUSDT": (0, None, 6.5e6, 0.003, 0.04),
     "USDCUSDT": (0, None, 5e8, 0.0, 0.0001),
     "ETHBULLUSDT": (0, None, 3e8, 0.0, 0.05),
 }
 H1_FIRST = ms(2021, 1, 1)
 H1_DAYS = 230  # to 2021-08-18
-III_MISSING_DAY = 170  # 2021-06-20: III's daily bar is missing, so a new instrument starts
-H1_FUNDED = {"AAAUSDT": "AAAUSDT", "KKKUSDT": "1000KKKUSDT", "CCCUSDT": "CCCUSDT"}
+IO_MISSING_DAY = 170  # 2021-06-20: IO's daily bar is missing, so a new instrument starts
+H1_FUNDED = {"ADAUSDT": "ADAUSDT", "PEPEUSDT": "1000PEPEUSDT", "CHZUSDT": "CHZUSDT"}
 
 
 def h1_market(seed: int = 11, fill_from: int = ms(2021, 5, 25)) -> dict:
@@ -163,7 +163,7 @@ def h1_market(seed: int = 11, fill_from: int = ms(2021, 5, 25)) -> dict:
         day_rows, four_rows, fill_rows = [], [], []
         for k, close in enumerate(closes):
             i = start + k
-            if symbol == "IIIUSDT" and i == III_MISSING_DAY:
+            if symbol == "IOUSDT" and i == IO_MISSING_DAY:
                 continue
             t = H1_FIRST + i * DAY
             prev = closes[k - 1] if k else close
@@ -171,7 +171,7 @@ def h1_market(seed: int = 11, fill_from: int = ms(2021, 5, 25)) -> dict:
             day_rows.append(bar(t, DAY, close, prev, volume=quote / close, quote=quote,
                                 low=min(close, prev) * rng.uniform(0.9, 0.99)))
             for j in range(6):
-                if symbol == "AAAUSDT" and i == 185 and j == 2:
+                if symbol == "ADAUSDT" and i == 185 and j == 2:
                     continue  # a missing four-hour bar: the decision at its close is skipped
                 c4 = prev + (close - prev) * (j + 1) / 6 * rng.uniform(0.98, 1.02)
                 four_rows.append(bar(t + j * H4, H4, c4, volume=1.0))
@@ -181,8 +181,8 @@ def h1_market(seed: int = 11, fill_from: int = ms(2021, 5, 25)) -> dict:
                     if roll < 0.03:
                         continue  # a missing 15-minute bar delays a fill
                     volume = 0.0 if roll < 0.08 else rng.uniform(5, 15)
-                    if symbol == "BBBUSDT" and i in (180, 181):
-                        volume = 0.0  # two days without volume: BBB's orders then lapse
+                    if symbol == "BNBUSDT" and i in (180, 181):
+                        volume = 0.0  # two days without volume: BNB's orders then lapse
                     price = prev + (close - prev) * (q + 1) / 96
                     fill_rows.append(bar(t + q * M15, M15, price, volume=volume))
         rows[f"spot/klines/{symbol}/1d"] = day_rows
@@ -192,7 +192,7 @@ def h1_market(seed: int = 11, fill_from: int = ms(2021, 5, 25)) -> dict:
     for symbol, perp in H1_FUNDED.items():
         rate, out = 0.0001, []
         for i in range(H1_DAYS * 3):
-            if symbol == "CCCUSDT" and i == 500:
+            if symbol == "CHZUSDT" and i == 500:
                 continue  # a missing settlement: the filter does not apply across it
             rate = max(-0.0005, min(0.0009, rate + rng.gauss(0, 0.00015)))
             out.append(Funding(H1_FIRST + i * 8 * HOUR + rng.randint(0, 9), 8, rate))
@@ -309,29 +309,29 @@ def last_day(first_day: str, days: int) -> str:
 # --- synthetic manifests for H1's listing ---------------------------------------------
 
 # symbol: (first day archived, last day archived or None for 2026-02-28, daily quote
-# volume, from 2025-10-01 on, daily drift). Every pair but NEW is in the development
+# volume, from 2025-10-01 on, daily drift). Every pair but ZAMA is in the development
 # manifest; every pair still trading in 2026 is in the holdout manifest too. USDC is
-# removed before ranking and ETHBULL is a leveraged token (D14); DELTA's volume rises on
-# 2025-10-01; ECHO stops trading on 2025-11-15 (D12); LATE is first archived on
-# 2025-09-01, so it has no close 120 days back (D13) until 2026-01-01; NEW is first
-# archived on 2026-01-01, in the holdout alone; ALPHABTC is not a USDT pair (section 6).
+# removed before ranking and ETHBULL is a leveraged token (D14); DOT's volume rises on
+# 2025-10-01; EOS stops trading on 2025-11-15 (D12); LUNC is first archived on
+# 2025-09-01, so it has no close 120 days back (D13) until 2026-01-01; ZAMA is first
+# archived on 2026-01-01, in the holdout alone; ADABTC is not a USDT pair (section 6).
 LISTING_SPEC = {
-    "ALPHAUSDT": ("2025-03-01", None, 9e6, 9e6, 0.004),
-    "BRAVOUSDT": ("2025-03-01", None, 8e6, 8e6, -0.002),
-    "CHARLIEUSDT": ("2025-03-01", None, 7e6, 7e6, 0.002),
-    "DELTAUSDT": ("2025-03-01", None, 6e6, 1.2e7, 0.003),
-    "ECHOUSDT": ("2025-03-01", "2025-11-15", 5e6, 5e6, 0.001),
-    "FOXUSDT": ("2025-03-01", None, 4e6, 4e6, 0.002),
+    "ADAUSDT": ("2025-03-01", None, 9e6, 9e6, 0.004),
+    "BNBUSDT": ("2025-03-01", None, 8e6, 8e6, -0.002),
+    "CHZUSDT": ("2025-03-01", None, 7e6, 7e6, 0.002),
+    "DOTUSDT": ("2025-03-01", None, 6e6, 1.2e7, 0.003),
+    "EOSUSDT": ("2025-03-01", "2025-11-15", 5e6, 5e6, 0.001),
+    "FILUSDT": ("2025-03-01", None, 4e6, 4e6, 0.002),
     "USDCUSDT": ("2025-03-01", None, 1e9, 1e9, 0.0),
     "ETHBULLUSDT": ("2025-03-01", None, 5e8, 5e8, 0.0),
-    "LATEUSDT": ("2025-09-01", None, 2e7, 2e7, 0.003),
-    "NEWUSDT": ("2026-01-01", None, 1e8, 1e8, 0.005),
-    "ALPHABTC": ("2025-03-01", None, 1e15, 1e15, 0.0),
+    "LUNCUSDT": ("2025-09-01", None, 2e7, 2e7, 0.003),
+    "ZAMAUSDT": ("2026-01-01", None, 1e8, 1e8, 0.005),
+    "ADABTC": ("2025-03-01", None, 1e15, 1e15, 0.0),
 }
 LISTING_END = ms(2026, 3, 1)
 LISTING_FILLS_FROM = ms(2025, 9, 1)
-LISTING_FILLED = ("ALPHAUSDT", "BRAVOUSDT", "CHARLIEUSDT", "DELTAUSDT", "ECHOUSDT",
-                  "FOXUSDT", "LATEUSDT")
+LISTING_FILLED = ("ADAUSDT", "BNBUSDT", "CHZUSDT", "DOTUSDT", "EOSUSDT",
+                  "FILUSDT", "LUNCUSDT")
 
 
 def _put_bars(store: ArchiveStore, spec: DatasetSpec, bars: list[tuple[int, float, float]]):
@@ -376,7 +376,7 @@ def listing_world(root: Path, seed: int = 7) -> tuple[ArchiveStore, dict[str, Ma
             spec = DatasetSpec.from_name(f"spot/klines/{symbol}/15m")
             series.append((spec, _put_bars(store, spec, fill_bars)))
     series.extend(make_series(store, name, "2025-09", "2026-02")
-                  for name in ("um/klines/ALPHAUSDT/1d", "um/fundingRate/ALPHAUSDT"))
+                  for name in ("um/klines/ADAUSDT/1d", "um/fundingRate/ADAUSDT"))
     manifests = {}
     for period in (DEVELOPMENT, HOLDOUT):
         path = root / f"{period}.json"

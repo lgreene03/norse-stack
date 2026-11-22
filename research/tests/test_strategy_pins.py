@@ -27,6 +27,7 @@ from norse_research.loader import DatasetLoader, inside_ledger_entry
 from norse_research.manifest import Manifest, build, dumps
 from norse_research.periods import DEVELOPMENT
 from norse_research.runner import RESULT_PREFIX, DataView
+from norse_research.sim import SimulationError
 from norse_research.sources import disallowed_imports, inside, module_name_for
 from norse_research.sources import strategy_declarations as declarations
 from norse_research.store import ArchiveStore
@@ -138,6 +139,45 @@ def test_each_h1_configuration_builds_the_registered_strategy(cid):
     assert strategy.flipped is None
 
 
+class Untouchable:
+    """A data view that fails the test if anything on it is used at all."""
+
+    def __getattribute__(self, name):
+        raise AssertionError(f"the data view was touched ({name})")
+
+
+def refused(hypothesis: str) -> list[tuple[dict, str]]:
+    """Configurations a module must refuse, each with the reason it gives: a grid id run
+    as a control, a benchmark run as a trial, a control on another base, another
+    hypothesis's id, and a trial and a benchmark whose windows end after 2026-01-01."""
+    grid, bench, control, other_grid, foreign = {
+        "H1": ("H1-01", "B-H1", "C-H1", "H1-02", "H2-01"),
+        "H2": ("H2-01", "B-H2", "C-H2", "H2-02", "H1-01")}[hypothesis]
+    june = ("2021-06-01", "2021-06-05")
+    return [
+        ({**syn.configuration(grid, *june), "kind": "control"}, "trial, sensitivity or holdout"),
+        ({**syn.configuration(bench, *june), "kind": "trial"}, "runs as a benchmark"),
+        ({**syn.configuration(control, *june, seed=0), "base": other_grid}, "control on"),
+        ({**syn.configuration(grid, *june), "id": foreign}, f"not an {hypothesis} configuration"),
+        (syn.configuration(grid, "2025-12-01", "2026-01-31"), "at the latest"),
+        (syn.configuration(bench, "2025-12-01", "2026-01-31"), "at the latest"),
+    ]
+
+
+@pytest.mark.parametrize("hypothesis", ["H1", "H2"])
+def test_run_refuses_a_wrong_kind_or_window_before_touching_the_data_view(hypothesis):
+    """Quant review 1, L1 (choice 12): ``run`` checks the configuration on its first line,
+    so a refused run lists, covers and loads nothing. The view fails the test if any
+    attribute of it is read; a run that is not refused touches it at once."""
+    module = {"H1": trend, "H2": carry}[hypothesis]
+    for configuration, reason in refused(hypothesis):
+        with pytest.raises(SimulationError, match=reason):
+            module.run(configuration, Untouchable())
+    valid = syn.configuration(f"{hypothesis}-01", "2021-06-01", "2021-06-05")
+    with pytest.raises(AssertionError, match="touched"):
+        module.run(valid, Untouchable())
+
+
 def test_the_candidates_are_the_115_g06_pinned_and_their_bars_are_c_h1s_n():
     """C-H1 draws one number per development daily bar of the 115 candidates. The list
     in trend.py is G0.6's, and by the committed coverage metadata (row counts only, no
@@ -187,7 +227,7 @@ def run(configuration, data_view):
     window = Window.from_configuration(configuration)
     first = window.start - 160 * D
     rows = {}
-    for symbol, growth in (("AAAUSDT", 1.004), ("BBBUSDT", 0.997), ("BTCUSDT", 1.001),
+    for symbol, growth in (("ADAUSDT", 1.004), ("BNBUSDT", 0.997), ("BTCUSDT", 1.001),
                            ("ETHUSDT", 1.002)):
         closes = [100.0 * growth ** i for i in range(170)]
         for market in ("spot", "um"):

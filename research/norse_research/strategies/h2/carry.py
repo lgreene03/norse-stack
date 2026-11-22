@@ -72,7 +72,9 @@ def run(configuration, data_view):
     """The daily net returns of one registered H2 configuration, B-H2 or C-H2, over the
     resolved configuration's window, in the shape the runner hands to the harness. The
     recorded gaps its loads cross reach the ledger through the runner, which takes them
-    from the loader (section 5, Gaps)."""
+    from the loader (section 5, Gaps). The configuration is checked first, before the
+    data view is touched (``check_run``)."""
+    check_run(configuration)
     return simulate(configuration, load_market(configuration, data_view))
 
 
@@ -107,9 +109,11 @@ def simulate(configuration: Mapping, market: Market) -> list[tuple[str, float]]:
     return run_backtest(strategy_for(configuration, rows), configuration, market)
 
 
-def strategy_for(configuration: Mapping, rows: Mapping[str, Sequence]):
-    """The strategy object for a resolved configuration. ``rows`` holds the run's daily
-    and funding series by name; only C-H2 reads them, to shift its funding series."""
+def check_run(configuration: Mapping) -> None:
+    """Refuse a configuration this module does not run, from the configuration alone, so
+    ``run`` refuses before any coverage or load (choice 12): an id that is not H2's, a
+    kind other than the id's registered kind (section 9), a control on another base or
+    other coins, and a window past the development period outside the holdout run."""
     cid, kind = configuration["id"], configuration["kind"]
     window = Window.from_configuration(configuration)
     if kind != "holdout" and window.end > day_ms(DEVELOPMENT_END):
@@ -120,26 +124,35 @@ def strategy_for(configuration: Mapping, rows: Mapping[str, Sequence]):
     if cid in GRID:
         if kind not in GRID_KINDS:
             raise SimulationError(f"{cid} runs as a trial, sensitivity or holdout run")
-        return Carry(configuration["parameters"])
-    if cid == BENCHMARK:
+    elif cid == BENCHMARK:
         if kind != "benchmark":
             raise SimulationError(f"{cid} runs as a benchmark")
-        return Halves(window.start)
-    if cid == CONTROL:
+    elif cid == CONTROL:
         if kind != "control" or configuration["base"] != CONTROL_BASE:
             raise SimulationError(f"{cid} runs as a control on {CONTROL_BASE}")
-        parameters = configuration["parameters"]
-        if set(parameters["coins"]) != set(CONTROL_DRAW_ORDER):
+        if set(configuration["parameters"]["coins"]) != set(CONTROL_DRAW_ORDER):
             raise SimulationError(f"C-H2 draws for {CONTROL_DRAW_ORDER}")
-        perps = [n.split("/")[2] for n in rows if n.startswith("um/fundingRate/")]
-        end = day_ms(DEVELOPMENT_END)
-        development = {
-            coin: [s for s in rows[funding_series(_perpetual(coin, perps))]
-                   if s.calc_time < end]
-            for coin in CONTROL_DRAW_ORDER
-        }
-        return Carry(parameters, shifted_funding(development, configuration["seed"]))
-    raise SimulationError(f"{cid} is not an H2 configuration, benchmark or control")
+    else:
+        raise SimulationError(f"{cid} is not an H2 configuration, benchmark or control")
+
+
+def strategy_for(configuration: Mapping, rows: Mapping[str, Sequence]):
+    """The strategy object for a resolved configuration. ``rows`` holds the run's daily
+    and funding series by name; only C-H2 reads them, to shift its funding series."""
+    check_run(configuration)
+    cid = configuration["id"]
+    if cid in GRID:
+        return Carry(configuration["parameters"])
+    if cid == BENCHMARK:
+        return Halves(Window.from_configuration(configuration).start)
+    perps = [n.split("/")[2] for n in rows if n.startswith("um/fundingRate/")]
+    end = day_ms(DEVELOPMENT_END)
+    development = {
+        coin: [s for s in rows[funding_series(_perpetual(coin, perps))] if s.calc_time < end]
+        for coin in CONTROL_DRAW_ORDER
+    }
+    return Carry(configuration["parameters"],
+                 shifted_funding(development, configuration["seed"]))
 
 
 def _perpetual(coin: str, perpetuals: Sequence[str]) -> str:

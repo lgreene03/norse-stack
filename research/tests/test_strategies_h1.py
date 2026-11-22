@@ -102,30 +102,30 @@ def closes_with(points, default=100.0, days=152):
 def test_the_vote_compares_the_close_at_t_with_the_close_l_days_earlier():
     # Decision 2021-06-01 00:00: the close at t is day 150's bar (2021-05-31), and L days
     # earlier is the bar closing at t - L days: day 130 (L=20), 90 (L=60), 30 (L=120).
-    # AAA: 105 now; 110 twenty days back (vote 0), 100 sixty days back (vote 1), 104.99
-    # 120 days back (vote 1): s = 2/3. BBB: 100 throughout, every ratio exactly 1, which
+    # ADA: 105 now; 110 twenty days back (vote 0), 100 sixty days back (vote 1), 104.99
+    # 120 days back (vote 1): s = 2/3. BNB: 100 throughout, every ratio exactly 1, which
     # is not "above zero": s = 0. Section 6: w* = (1/5) x s without volatility scaling.
     rows = {
-        "spot/klines/AAAUSDT/1d": syn.daily(syn.H1_FIRST, closes_with(
+        "spot/klines/ADAUSDT/1d": syn.daily(syn.H1_FIRST, closes_with(
             {150: 105.0, 130: 110.0, 90: 100.0, 30: 104.99})),
-        "spot/klines/BBBUSDT/1d": syn.daily(syn.H1_FIRST, closes_with({})),
+        "spot/klines/BNBUSDT/1d": syn.daily(syn.H1_FIRST, closes_with({})),
     }
     probe, _ = one_day(rows, build("H1-08", rows))
     (t, signals), = probe.signals
-    assert t == JUNE and signals == {"AAAUSDT": 2 / 3, "BBBUSDT": 0.0}
+    assert t == JUNE and signals == {"ADAUSDT": 2 / 3, "BNBUSDT": 0.0}
     (_, decision), = probe.decisions
-    assert weights_of(decision) == {"AAAUSDT": pytest.approx(0.2 * 2 / 3, rel=1e-15),
-                                    "BBBUSDT": 0.0}
+    assert weights_of(decision) == {"ADAUSDT": pytest.approx(0.2 * 2 / 3, rel=1e-15),
+                                    "BNBUSDT": 0.0}
     assert decision.band == 0.25  # section 6, Rebalancing: the 25% band of H1-08
 
 
 def test_a_vote_one_day_either_side_of_the_lookback_would_differ():
     # Only the bar exactly 20 days back (day 130) is above the close at t; days 129 and
     # 131 are not, so a lookback read one bar off would vote 1, not 0.
-    rows = {"spot/klines/AAAUSDT/1d": syn.daily(syn.H1_FIRST, closes_with(
+    rows = {"spot/klines/ADAUSDT/1d": syn.daily(syn.H1_FIRST, closes_with(
         {150: 105.0, 130: 106.0, 129: 90.0, 131: 90.0}))}
     probe, _ = one_day(rows, build("H1-08", rows))
-    assert probe.signals[0][1] == {"AAAUSDT": 2 / 3}
+    assert probe.signals[0][1] == {"ADAUSDT": 2 / 3}
 
 
 def ewm_sigma(squares, span, per_year):
@@ -144,7 +144,7 @@ def test_the_volatility_scaled_weight_is_the_registered_formula():
     # 30 squares of 1e-4 (the latest) and 120 of 9e-4. In closed form the weights sum to
     # (1 - d^n) / (1 - d) with d = 59/61.
     returns = [0.03] * 120 + [-0.01] * 30 + [0.0]
-    rows = {"spot/klines/AAAUSDT/1d": syn.daily(syn.H1_FIRST, syn.geometric(100.0, returns))}
+    rows = {"spot/klines/ADAUSDT/1d": syn.daily(syn.H1_FIRST, syn.geometric(100.0, returns))}
     probe, _ = one_day(rows, build("H1-01", rows))
     d = 59 / 61
     head = (1 - d ** 30) / (1 - d)
@@ -153,24 +153,24 @@ def test_the_volatility_scaled_weight_is_the_registered_formula():
     assert sigma == pytest.approx(ewm_sigma([9e-4] * 120 + [1e-4] * 30, 60, 365), rel=1e-12)
     assert sigma > 0.2  # so the 20% target, not the one-fifth cap, binds
     (_, decision), = probe.decisions
-    assert weights_of(decision)["AAAUSDT"] == pytest.approx(0.2 * (2 / 3) * 0.2 / sigma,
+    assert weights_of(decision)["ADAUSDT"] == pytest.approx(0.2 * (2 / 3) * 0.2 / sigma,
                                                              rel=1e-9)
 
 
 def test_the_slot_cap_binds_when_volatility_is_below_the_target():
     # +0.5% a day: sigma = 0.005 x sqrt(365) = 9.6% < 20%, so min(1, 0.2 / sigma) = 1 and
     # the weight is the whole slot, one fifth of equity, never more ("at most 1x").
-    rows = {"spot/klines/AAAUSDT/1d": syn.daily(syn.H1_FIRST, syn.geometric(
+    rows = {"spot/klines/ADAUSDT/1d": syn.daily(syn.H1_FIRST, syn.geometric(
         100.0, [0.005] * 150 + [0.0]))}
     probe, _ = one_day(rows, build("H1-01", rows))
-    assert weights_of(probe.decisions[0][1])["AAAUSDT"] == pytest.approx(0.2, rel=1e-15)
+    assert weights_of(probe.decisions[0][1])["ADAUSDT"] == pytest.approx(0.2, rel=1e-15)
 
 
 def four_hour_rows(closes_4h, first=syn.H1_FIRST):
     """Daily bars from 2021-01-01 to 2021-06-01 and four-hour bars with the given closes."""
     return {
-        "spot/klines/AAAUSDT/1d": syn.daily(first, [100.0] * 152),
-        "spot/klines/AAAUSDT/4h": [syn.bar(first + i * syn.H4, syn.H4, c)
+        "spot/klines/ADAUSDT/1d": syn.daily(first, [100.0] * 152),
+        "spot/klines/ADAUSDT/4h": [syn.bar(first + i * syn.H4, syn.H4, c)
                                    for i, c in enumerate(closes_4h)],
     }
 
@@ -188,12 +188,12 @@ def test_four_hour_bars_read_lookbacks_and_the_span_in_calendar_days():
     t0, decision = probe.decisions[0]
     sigma = 0.005 * math.sqrt(2190)
     assert t0 == JUNE and weights_of(decision) == {
-        "AAAUSDT": pytest.approx(0.2 * 0.2 / sigma, rel=1e-9)}
+        "ADAUSDT": pytest.approx(0.2 * 0.2 / sigma, rel=1e-9)}
     spiked = list(closes)
     spiked[n - 1 - 120] = closes[n - 1] * 1.5  # the close exactly 20 days before 00:00
     rows = four_hour_rows(spiked)
     probe, _ = one_day(rows, build("H1-06", rows))
-    assert probe.signals[0] == (JUNE, {"AAAUSDT": 2 / 3})
+    assert probe.signals[0] == (JUNE, {"ADAUSDT": 2 / 3})
     # Six decisions a day, at every four-hour close (section 6).
     assert [t - JUNE for t, _ in probe.decisions] == [i * syn.H4 for i in range(6)]
 
@@ -203,7 +203,7 @@ def test_a_four_hour_decision_without_its_bar_is_skipped_and_changes_nothing():
     n = 151 * 6
     closes = syn.geometric(100.0, [0.005] * (n + 5))[:n + 6]
     rows = four_hour_rows(closes)
-    rows["spot/klines/AAAUSDT/4h"] = [b for b in rows["spot/klines/AAAUSDT/4h"]
+    rows["spot/klines/ADAUSDT/4h"] = [b for b in rows["spot/klines/ADAUSDT/4h"]
                                       if b.open_time != JUNE + syn.H4]  # closes at 08:00
     probe, _ = one_day(rows, build("H1-06", rows))
     by_time = dict(probe.decisions)
@@ -214,13 +214,13 @@ def test_a_four_hour_decision_without_its_bar_is_skipped_and_changes_nothing():
 # --- section 6, Funding filter (H1-07) ---------------------------------------------------
 
 
-def funded_rows(rate_in_window, perp="AAAUSDT", drop=None):
-    """AAA rising steadily, and its perpetual's funding every eight hours: 0.0001 before
+def funded_rows(rate_in_window, perp="ADAUSDT", drop=None):
+    """ADA rising steadily, and its perpetual's funding every eight hours: 0.0001 before
     the seven days to the 2021-06-01 decision, ``rate_in_window`` for the 21 settlements
     with calc_time in (t - 7 d + 60 s, t + 60 s], and a large rate exactly at t - 7 d,
     which the interval leaves out. Jitter of 5 ms, as the archive's."""
     t = JUNE
-    rows = {"spot/klines/AAAUSDT/1d": syn.daily(syn.H1_FIRST, syn.geometric(
+    rows = {"spot/klines/ADAUSDT/1d": syn.daily(syn.H1_FIRST, syn.geometric(
         100.0, [0.005] * 150 + [0.0]))}
     out = []
     for k in range(-200, 1):
@@ -235,7 +235,7 @@ def funded_rows(rate_in_window, perp="AAAUSDT", drop=None):
 
 def filtered_weight(rows):
     probe, _ = one_day(rows, build("H1-07", rows))
-    return weights_of(probe.decisions[0][1])["AAAUSDT"]
+    return weights_of(probe.decisions[0][1])["ADAUSDT"]
 
 
 def test_the_funding_filter_flattens_above_the_registered_sum():
@@ -246,8 +246,8 @@ def test_the_funding_filter_flattens_above_the_registered_sum():
 
 
 def test_the_funding_filter_reads_a_perpetual_quoted_per_thousand_coins():
-    # Section 4: KKK's perpetual may be 1000KKKUSDT; its rates compare directly.
-    rows = funded_rows(0.0064 / 21, perp="1000AAAUSDT")
+    # Section 4: PEPE's perpetual may be 1000PEPEUSDT; its rates compare directly.
+    rows = funded_rows(0.0064 / 21, perp="1000ADAUSDT")
     assert filtered_weight(rows) == 0.0
 
 
@@ -255,7 +255,7 @@ def test_the_funding_filter_does_not_apply_without_a_perpetual_or_across_a_gap()
     # "Where a member has no perpetual, or its perpetual's settlements do not cover the
     # seven days without a recorded gap, the filter does not apply."
     no_perp = funded_rows(0.0064 / 21)
-    no_perp.pop("um/fundingRate/AAAUSDT")
+    no_perp.pop("um/fundingRate/ADAUSDT")
     assert filtered_weight(no_perp) == pytest.approx(0.2, rel=1e-15)
     gap = funded_rows(0.0064 / 21 * 21 / 20, drop=-10)  # 20 settlements summing to 0.64%
     assert filtered_weight(gap) == pytest.approx(0.2, rel=1e-15)
@@ -264,10 +264,16 @@ def test_the_funding_filter_does_not_apply_without_a_perpetual_or_across_a_gap()
 def test_the_funding_filter_is_only_h1_07s():
     rows = funded_rows(0.0064 / 21)
     probe, _ = one_day(rows, build("H1-01", rows))
-    assert weights_of(probe.decisions[0][1])["AAAUSDT"] == pytest.approx(0.2, rel=1e-15)
+    assert weights_of(probe.decisions[0][1])["ADAUSDT"] == pytest.approx(0.2, rel=1e-15)
 
 
 # --- section 6, The universe -----------------------------------------------------------
+
+# The pairs the comments below call A1 to A8, in the order of their names. Every pair a
+# test ranks into a top ten is a pinned candidate, since a top ten holding any other pair
+# stops the run (choice 16).
+A = dict(enumerate(("ADAUSDT", "APEUSDT", "APTUSDT", "ARBUSDT", "ATOMUSDT", "AVAXUSDT",
+                    "AXSUSDT", "BCHUSDT"), start=1))
 
 
 def universe_rows(volumes, first_days=None, last_days=None, quote_outside=None):
@@ -299,57 +305,56 @@ def members(rows):
 
 def test_the_universe_is_the_first_five_eligible_of_the_ten_largest():
     # Section 6, steps 1 to 3. USDC is removed before ranking (STABLE_OR_FIAT); ETHBULL
-    # (leveraged) and PAXG (off-chain) are dropped by category (D14); YNG's first bar,
-    # 2021-03-01, is later than 120 days before the month-end close (D13); STP has no
+    # (leveraged) and PAXG (off-chain) are dropped by category (D14); TRUMP's first bar,
+    # 2021-03-01, is later than 120 days before the month-end close (D13); LUNA has no
     # month-end bar (it stopped on 2021-05-30). The ten largest after USDC are ETHBULL,
-    # PAXG, YNG, STP and A1 to A6, so the universe is A1 to A5, by volume, each one fifth.
+    # PAXG, TRUMP, LUNA and A1 to A6, so the universe is A1 to A5, by volume, each one fifth.
     # A7 and A8 are eligible but outside the ten. A8's huge volume on 2021-05-01 falls
     # outside "the 30 daily bars closing at the month end" and does not count.
-    volumes = {"USDCUSDT": 1e12, "ETHBULLUSDT": 9e9, "PAXGUSDT": 8e9, "YNGUSDT": 7e9,
-               "STPUSDT": 6e9}
-    volumes.update({f"A{i}USDT": 1e9 - i * 1e7 for i in range(1, 9)})
-    rows = universe_rows(volumes, first_days={"YNGUSDT": 59}, last_days={"STPUSDT": 149},
-                         quote_outside={"A8USDT": 1e15})
+    volumes = {"USDCUSDT": 1e12, "ETHBULLUSDT": 9e9, "PAXGUSDT": 8e9, "TRUMPUSDT": 7e9,
+               "LUNAUSDT": 6e9}
+    volumes.update({A[i]: 1e9 - i * 1e7 for i in range(1, 9)})
+    rows = universe_rows(volumes, first_days={"TRUMPUSDT": 59}, last_days={"LUNAUSDT": 149},
+                         quote_outside={A[8]: 1e15})
     decision = members(rows)
-    assert weights_of(decision) == {f"A{i}USDT": 0.2 for i in range(1, 6)}
+    assert weights_of(decision) == {A[i]: 0.2 for i in range(1, 6)}
     assert decision.band == 0.0  # section 8: B-H1 trades any difference
 
 
 def test_a_slot_holds_cash_when_fewer_than_five_of_the_ten_are_eligible():
     # Section 6, step 3 and section 15, item 8: the ranking stops at the ten largest, so
     # an eligible eleventh pair never fills a slot; the empty slot holds cash.
-    volumes = {"ETHBULLUSDT": 9e9, "PAXGUSDT": 8e9, "XAUTUSDT": 7.5e9, "YNGUSDT": 7e9,
-               "STPUSDT": 6e9, "YNG2USDT": 5e9}
-    volumes.update({f"A{i}USDT": 1e9 - i * 1e7 for i in range(1, 6)})
-    rows = universe_rows(volumes, first_days={"YNGUSDT": 59, "YNG2USDT": 40},
-                         last_days={"STPUSDT": 149})
-    assert weights_of(members(rows)) == {f"A{i}USDT": 0.2 for i in range(1, 5)}
+    volumes = {"ETHBULLUSDT": 9e9, "PAXGUSDT": 8e9, "XAUTUSDT": 7.5e9, "TRUMPUSDT": 7e9,
+               "LUNAUSDT": 6e9, "WIFUSDT": 5e9}
+    volumes.update({A[i]: 1e9 - i * 1e7 for i in range(1, 6)})
+    rows = universe_rows(volumes, first_days={"TRUMPUSDT": 59, "WIFUSDT": 40},
+                         last_days={"LUNAUSDT": 149})
+    assert weights_of(members(rows)) == {A[i]: 0.2 for i in range(1, 5)}
 
 
 def test_a_pair_one_day_short_of_120_days_is_not_eligible():
     # D13: "a daily close 120 days before the month-end close". The month-end close is
     # 2021-06-01 00:00; the close 120 days before is 2021-02-01 00:00, the close of the
     # bar opening 2021-01-31 (day 30). Starting on day 30 is eligible; day 31 is not.
-    rows = universe_rows({"A1USDT": 2e9, "A2USDT": 1e9}, first_days={"A1USDT": 31,
-                                                                     "A2USDT": 30})
-    assert weights_of(members(rows)) == {"A2USDT": 0.2}
+    rows = universe_rows({A[1]: 2e9, A[2]: 1e9}, first_days={A[1]: 31, A[2]: 30})
+    assert weights_of(members(rows)) == {A[2]: 0.2}
 
 
 def test_a_halted_member_holds_cash_until_the_next_month_end():
-    # Section 4 (D12): HHH's last bar is 2021-06-10; its position is closed at that bar's
+    # Section 4 (D12): HOOK's last bar is 2021-06-10; its position is closed at that bar's
     # low and its slot holds cash; the trend names no target for it until 2021-07-01.
     rows = {
-        "spot/klines/HHHUSDT/1d": syn.daily(syn.H1_FIRST, syn.geometric(100.0, [0.005] * 160)),
-        "spot/klines/AAAUSDT/1d": syn.daily(syn.H1_FIRST, syn.geometric(100.0, [0.005] * 190)),
+        "spot/klines/HOOKUSDT/1d": syn.daily(syn.H1_FIRST, syn.geometric(100.0, [0.005] * 160)),
+        "spot/klines/ADAUSDT/1d": syn.daily(syn.H1_FIRST, syn.geometric(100.0, [0.005] * 190)),
     }
-    rows["spot/klines/HHHUSDT/15m"] = syn.fills(JUNE, JUNE + 12 * D, 120.0)
-    rows["spot/klines/AAAUSDT/15m"] = syn.fills(JUNE, JUNE + 32 * D, 120.0)
+    rows["spot/klines/HOOKUSDT/15m"] = syn.fills(JUNE, JUNE + 12 * D, 120.0)
+    rows["spot/klines/ADAUSDT/15m"] = syn.fills(JUNE, JUNE + 32 * D, 120.0)
     probe, result = one_day(rows, build("H1-08", rows, last="2021-07-01"), days=31)
     halts = [f for f in result.fills if f.kind == "halt"]
-    assert [(f.symbol, syn.iso(f.at)) for f in halts] == [("HHHUSDT", "2021-06-11")]
+    assert [(f.symbol, syn.iso(f.at)) for f in halts] == [("HOOKUSDT", "2021-06-11")]
     for t, decision in probe.decisions:
         named = weights_of(decision)
-        assert ("HHHUSDT" in named) == (t < syn.ms(2021, 6, 11)), syn.iso(t)
+        assert ("HOOKUSDT" in named) == (t < syn.ms(2021, 6, 11)), syn.iso(t)
 
 
 # --- section 8, B-H1 ----------------------------------------------------------------------
@@ -363,10 +368,10 @@ def test_b_h1_trades_to_one_fifth_at_month_ends_only():
     # 0.3 - 0.2 E sold, E the equity marked then.
     closes_a1 = [100.0] * 182
     closes_a2 = [50.0] * 160 + [75.0] * 22
-    rows = {"spot/klines/A1USDT/1d": syn.daily(syn.H1_FIRST, closes_a1),
-            "spot/klines/A2USDT/1d": syn.daily(syn.H1_FIRST, closes_a2)}
-    rows["spot/klines/A1USDT/15m"] = syn.fills(JUNE, JUNE + 32 * D, 100.0)
-    rows["spot/klines/A2USDT/15m"] = syn.fills(JUNE, JUNE + 2 * D, 50.0) + syn.fills(
+    rows = {f"spot/klines/{A[1]}/1d": syn.daily(syn.H1_FIRST, closes_a1),
+            f"spot/klines/{A[2]}/1d": syn.daily(syn.H1_FIRST, closes_a2)}
+    rows[f"spot/klines/{A[1]}/15m"] = syn.fills(JUNE, JUNE + 32 * D, 100.0)
+    rows[f"spot/klines/{A[2]}/15m"] = syn.fills(JUNE, JUNE + 2 * D, 50.0) + syn.fills(
         syn.ms(2021, 7, 1), syn.ms(2021, 7, 2), 75.0)
     strategy = trend.strategy_for(syn.configuration("B-H1", "2021-06-01", "2021-07-01"), rows,
                                   syn.listed(rows))
@@ -374,12 +379,12 @@ def test_b_h1_trades_to_one_fifth_at_month_ends_only():
     assert [syn.iso(t) for t, d in probe.decisions if d is not None] == [
         "2021-06-01", "2021-07-01"]
     first = [(o.symbol, o.side, o.notional) for o in result.orders if o.decided_at == JUNE]
-    assert first == [("A1USDT", 1, 0.2), ("A2USDT", 1, 0.2)]
+    assert first == [(A[1], 1, 0.2), (A[2], 1, 0.2)]
     cost = 0.2 * 1.0002 * 1.001  # each buy: notional at the slipped price, plus the fee
     equity = (1.0 - 2 * cost) + 0.002 * 100.0 + 0.004 * 75.0
     july = [(o.symbol, o.side, o.notional) for o in result.orders if o.decided_at != JUNE]
-    assert july == [("A1USDT", 1, pytest.approx(0.2 * equity - 0.2, rel=1e-9)),
-                    ("A2USDT", -1, pytest.approx(0.3 - 0.2 * equity, rel=1e-9))]
+    assert july == [(A[1], 1, pytest.approx(0.2 * equity - 0.2, rel=1e-9)),
+                    (A[2], -1, pytest.approx(0.3 - 0.2 * equity, rel=1e-9))]
 
 
 # --- section 8, C-H1 ----------------------------------------------------------------------
@@ -391,34 +396,34 @@ def test_the_sign_flipped_series_compounds_actual_returns_with_flipped_signs():
     # Closes 100, 110, 99, 99, 108.9; flips on days 1 and 3. Synthetic: 100; day 1 +10%
     # flipped, 90; day 2 -10% kept, 81; day 3 0% flipped, 81; day 4 +10% kept, 89.1.
     bars = [Bar(i * D, c) for i, c in enumerate([100.0, 110.0, 99.0, 99.0, 108.9])]
-    view = SeriesView("spot/klines/AAAUSDT/1d", bars, [b.open_time for b in bars], len(bars))
-    flips = {"AAAUSDT": {b.open_time: i in (1, 3) for i, b in enumerate(bars)}}
+    view = SeriesView("spot/klines/ADAUSDT/1d", bars, [b.open_time for b in bars], len(bars))
+    flips = {"ADAUSDT": {b.open_time: i in (1, 3) for i, b in enumerate(bars)}}
     flipped = trend.SignFlipped(flips)
-    instrument = Instrument("AAAUSDT", 0)
+    instrument = Instrument("ADAUSDT", 0)
     got = [flipped.close(instrument, view, i) for i in range(5)]
     assert got == pytest.approx([100.0, 90.0, 81.0, 81.0, 89.1], rel=1e-12)
     # A second instrument of the same symbol starts again at its own first close.
     later = trend.SignFlipped(flips)
-    assert later.close(Instrument("AAAUSDT", 2 * D), view, 4) == pytest.approx(
+    assert later.close(Instrument("ADAUSDT", 2 * D), view, 4) == pytest.approx(
         99.0 * 1.0 * 1.1, rel=1e-12)
 
 
 def test_c_h1_votes_on_the_flipped_series_and_sizes_on_actual_prices():
-    # AAA rises 0.5% a day, every day flipped: the synthetic series falls, every vote is
+    # ADA rises 0.5% a day, every day flipped: the synthetic series falls, every vote is
     # 0 and the control holds nothing, where H1-01 holds the full slot. With no day
     # flipped the control is H1-01 exactly.
-    rows = {"spot/klines/AAAUSDT/1d": syn.daily(syn.H1_FIRST, syn.geometric(
+    rows = {"spot/klines/ADAUSDT/1d": syn.daily(syn.H1_FIRST, syn.geometric(
         100.0, [0.005] * 150 + [0.0]))}
-    days = {b.open_time for b in rows["spot/klines/AAAUSDT/1d"]}
+    days = {b.open_time for b in rows["spot/klines/ADAUSDT/1d"]}
     params = h1("C-H1", seed=0)["parameters"]
     flipped = trend.Trend(params, syn.listed(rows), trend.SignFlipped({
-        "AAAUSDT": dict.fromkeys(days, True)}))
+        "ADAUSDT": dict.fromkeys(days, True)}))
     probe, _ = one_day(rows, flipped)
-    assert weights_of(probe.decisions[0][1]) == {"AAAUSDT": 0.0}
+    assert weights_of(probe.decisions[0][1]) == {"ADAUSDT": 0.0}
     kept = trend.Trend(params, syn.listed(rows), trend.SignFlipped({
-        "AAAUSDT": dict.fromkeys(days, False)}))
+        "ADAUSDT": dict.fromkeys(days, False)}))
     probe, _ = one_day(rows, kept)
-    assert weights_of(probe.decisions[0][1]) == {"AAAUSDT": pytest.approx(0.2, rel=1e-15)}
+    assert weights_of(probe.decisions[0][1]) == {"ADAUSDT": pytest.approx(0.2, rel=1e-15)}
 
 
 def test_c_h1_draws_one_number_per_candidate_day_in_symbol_then_date_order():
@@ -450,13 +455,30 @@ def test_c_h1_draws_over_the_candidates_development_bars_only():
     # is not a candidate and any bar from 2026-01-01 on take no draw.
     first = syn.ms(2025, 12, 20)
     rows = {f"spot/klines/{s}/1d": syn.daily(first, [100.0] * 20)
-            for s in ("BTCUSDT", "ETHUSDT", "AAAUSDT")}
+            for s in ("BTCUSDT", "ETHUSDT", "QQQUSDT")}
+    assert "QQQUSDT" not in trend.CANDIDATES
     config = syn.configuration("C-H1", "2025-12-20", "2025-12-31", seed=3)
     control = trend.strategy_for(config, rows, syn.listed(rows))
-    development ={s: [b for b in rows[f"spot/klines/{s}/1d"] if b.open_time < syn.ms(2026, 1, 1)]
+    development = {s: [b for b in rows[f"spot/klines/{s}/1d"] if b.open_time < syn.ms(2026, 1, 1)]
                    for s in ("BTCUSDT", "ETHUSDT")}
     assert control.flipped.flips == trend.sign_flips(development, 3)
     assert {len(v) for v in control.flipped.flips.values()} == {12}
+
+
+def test_c_h1_refuses_a_listed_candidate_whose_rows_are_missing():
+    # Quant review 1, L2: skipping a candidate the run lists with development bars would
+    # move every later symbol's draws onto other bars, so C-H1 stops instead. ETH is
+    # listed from 2025-12-20 but its rows are not loaded. A candidate listed only from
+    # 2026-01-01 has no development bars, so its absence draws nothing and is accepted.
+    first = syn.ms(2025, 12, 20)
+    rows = {"spot/klines/BTCUSDT/1d": syn.daily(first, [100.0] * 20)}
+    config = syn.configuration("C-H1", "2025-12-20", "2025-12-31", seed=3)
+    listed = {"BTCUSDT": first, "ETHUSDT": first}
+    with pytest.raises(SimulationError, match=r"none are loaded for \['ETHUSDT'\]"):
+        trend.strategy_for(config, rows, listed)
+    later = {"BTCUSDT": first, "ZAMAUSDT": syn.ms(2026, 1, 1)}
+    control = trend.strategy_for(config, rows, later)
+    assert set(control.flipped.flips) == {"BTCUSDT"}
 
 
 # --- both drivers, and section 11, item 5 -----------------------------------------------
@@ -482,7 +504,7 @@ def test_batch_and_paper_give_identical_orders(market_rows, cid):
         assert getattr(batch, name) == getattr(paper, name), name
     assert batch.orders and len(batch.returns) == 61
     if cid != "B-H1":
-        assert {f.kind for f in batch.fills} == {"fill", "halt"}, "HHH stops (D12)"
+        assert {f.kind for f in batch.fills} == {"fill", "halt"}, "HOOK stops (D12)"
 
 
 def test_the_synthetic_market_exercises_the_rules(market_rows):
@@ -494,11 +516,11 @@ def test_the_synthetic_market_exercises_the_rules(market_rows):
     probe = Probe(trend.strategy_for(config, market_rows, listed))
     result = backtest(probe, Market.from_rows(market_rows, window.end), window, COSTS)
     universes = {syn.iso(t): symbols for t, symbols in probe.universes}
-    assert "HHHUSDT" in universes["2021-06-01"]
-    assert any(f.kind == "halt" and f.symbol == "HHHUSDT" for f in result.fills), "D12"
+    assert "HOOKUSDT" in universes["2021-06-01"]
+    assert any(f.kind == "halt" and f.symbol == "HOOKUSDT" for f in result.fills), "D12"
     for month in ("2021-06-01", "2021-07-01"):
-        assert not {"USDCUSDT", "ETHBULLUSDT", "GGGUSDT"} & set(universes[month]), month
-    assert any(lapse.order.symbol == "BBBUSDT" for lapse in result.lapses)
+        assert not {"USDCUSDT", "ETHBULLUSDT", "GMTUSDT"} & set(universes[month]), month
+    assert any(lapse.order.symbol == "BNBUSDT" for lapse in result.lapses)
     filtered = syn.configuration("H1-07", "2021-06-01", "2021-07-31")
     base, funded = (backtest(trend.strategy_for(c, market_rows, listed),
                              Market.from_rows(market_rows, window.end), window, COSTS)
@@ -530,12 +552,38 @@ def test_a_pair_is_ranked_only_once_its_coverage_starts_before_the_decision():
     # A1, the largest, is listed as first archived at the 2021-06-01 decision itself
     # (its rows say otherwise, so only the listing can leave it out): A2 to A6 are the
     # universe. Listed as first archived a day earlier, A1 ranks first again.
-    rows = universe_rows({f"A{i}USDT": 1e9 - i * 1e7 for i in range(1, 7)})
+    rows = universe_rows({A[i]: 1e9 - i * 1e7 for i in range(1, 7)})
     config = syn.configuration("B-H1", "2021-06-01", "2021-06-01")
     for first_archived, expected in ((JUNE, range(2, 7)), (JUNE - D, range(1, 6))):
-        listed = {**syn.listed(rows), "A1USDT": first_archived}
+        listed = {**syn.listed(rows), A[1]: first_archived}
         probe, _ = one_day(rows, trend.strategy_for(config, rows, listed))
-        assert weights_of(probe.decisions[0][1]) == {f"A{i}USDT": 0.2 for i in expected}
+        assert weights_of(probe.decisions[0][1]) == {A[i]: 0.2 for i in expected}
+
+
+def ranked_with_outsider(outsider_volume):
+    """ETHBULL, PAXG and A1 to A8, all pinned candidates, ranked by volume from 9e9 down
+    to 9.2e8, and QQQ, which is not a candidate, at ``outsider_volume``."""
+    volumes = {"ETHBULLUSDT": 9e9, "PAXGUSDT": 8e9, "QQQUSDT": outsider_volume}
+    volumes.update({A[i]: 1e9 - i * 1e7 for i in range(1, 9)})
+    assert "QQQUSDT" not in trend.CANDIDATES
+    return universe_rows(volumes)
+
+
+def test_a_top_ten_holding_a_pair_outside_the_candidates_stops_the_run():
+    # Choice 16 (quant review 1, M1): section 6, step 1 says the top ten "is the candidate
+    # set G1.1 pinned", and D14 classified only the candidates. QQQ at 9.25e8 ranks tenth,
+    # above A8: it would not be one of the five selected (A1 to A5), yet the run stops,
+    # because the whole top ten is checked.
+    with pytest.raises(SimulationError, match=r"\['QQQUSDT'\].*115 pinned candidates"):
+        members(ranked_with_outsider(9.25e8))
+
+
+def test_a_top_ten_of_candidates_alone_passes():
+    # The same pairs with QQQ at 9.15e8, below A8: it ranks eleventh, outside the ten, so
+    # the top ten is candidates alone and the universe is A1 to A5 (ETHBULL and PAXG
+    # dropped by category, D14).
+    assert weights_of(members(ranked_with_outsider(9.15e8))) == {
+        A[i]: 0.2 for i in range(1, 6)}
 
 
 @pytest.mark.parametrize(("cid", "extra"), [
@@ -550,9 +598,9 @@ def test_each_configuration_loads_only_the_series_it_reads(market_rows, cid, ext
     config = syn.configuration(cid, "2021-06-01", "2021-06-05",
                                seed=0 if cid == "C-H1" else None)
     offered = {**market_rows,
-               "spot/klines/AAABTC/1d": syn.daily(syn.H1_FIRST, [1.0] * syn.H1_DAYS,
+               "spot/klines/ADABTC/1d": syn.daily(syn.H1_FIRST, [1.0] * syn.H1_DAYS,
                                                   [1e15] * syn.H1_DAYS),
-               "um/klines/AAAUSDT/1d": syn.daily(syn.H1_FIRST, [100.0] * syn.H1_DAYS)}
+               "um/klines/ADAUSDT/1d": syn.daily(syn.H1_FIRST, [100.0] * syn.H1_DAYS)}
     view = syn.FakeView(offered)
     names = trend.series_needed(config, view.list_series())
     wanted = {n for n in market_rows if n.startswith("spot/") and n.endswith(("/1d", "/15m"))}
@@ -565,14 +613,13 @@ def test_each_configuration_loads_only_the_series_it_reads(market_rows, cid, ext
     assert view.covered == wanted
     assert view.loaded == {n for n in wanted if not n.endswith("/15m")}, (
         "15-minute bars are read lazily, for fills")
-    if cid == "C-H1":  # the synthetic pairs are not pinned candidates, so they draw no signs
-        with pytest.raises(SimulationError, match="not a pinned candidate"):
-            trend.run(config, syn.FakeView(offered))
-        return
     got = trend.simulate(config, market, trend.listed_pairs(view, names))
     assert any(n.endswith("/15m") for n in view.loaded)
     assert trend.run(config, syn.FakeView(offered)) == got
-    expected = trend.simulate(config, Market.from_rows(market_rows, market.horizon),
+    # The view loads to the horizon, so the same market from rows is cut there too:
+    # C-H1 draws one number per daily bar the market holds (from_rows keeps later rows).
+    cut = syn.truncated(market_rows, market.horizon)
+    expected = trend.simulate(config, Market.from_rows(cut, market.horizon),
                               syn.listed(market_rows))
     assert got == expected and len(expected) == 5
 
@@ -583,35 +630,35 @@ ENTRY, UNSEAL = "e" * 64, "f" * 64
 HOLDOUT_START = syn.ms(2026, 1, 1)
 
 # syn.LISTING_SPEC's ten largest at each month end, worked out from its flat volumes over
-# the 30 daily bars closing then: USDC is removed before ranking; ALPHABTC is not a USDT
-# pair; LATE is first archived on 2025-09-01 and NEW on 2026-01-01, so neither is ranked
-# at the decision on its first day; DELTA's volume doubles from 2025-10-01; ECHO's last bar
-# is 2025-11-15 (15 bars of 5e6 in November's window, below FOX's 30 of 4e6), and it has
+# the 30 daily bars closing then: USDC is removed before ranking; ADABTC is not a USDT
+# pair; LUNC is first archived on 2025-09-01 and ZAMA on 2026-01-01, so neither is ranked
+# at the decision on its first day; DOT's volume doubles from 2025-10-01; EOS's last bar
+# is 2025-11-15 (15 bars of 5e6 in November's window, below FIL's 30 of 4e6), and it has
 # no volume after.
 RANKINGS = {
-    "2025-09-01": ["ETHBULLUSDT", "ALPHAUSDT", "BRAVOUSDT", "CHARLIEUSDT", "DELTAUSDT",
-                   "ECHOUSDT", "FOXUSDT"],
-    "2025-10-01": ["ETHBULLUSDT", "LATEUSDT", "ALPHAUSDT", "BRAVOUSDT", "CHARLIEUSDT",
-                   "DELTAUSDT", "ECHOUSDT", "FOXUSDT"],
-    "2025-11-01": ["ETHBULLUSDT", "LATEUSDT", "DELTAUSDT", "ALPHAUSDT", "BRAVOUSDT",
-                   "CHARLIEUSDT", "ECHOUSDT", "FOXUSDT"],
-    "2025-12-01": ["ETHBULLUSDT", "LATEUSDT", "DELTAUSDT", "ALPHAUSDT", "BRAVOUSDT",
-                   "CHARLIEUSDT", "FOXUSDT", "ECHOUSDT"],
-    "2026-01-01": ["ETHBULLUSDT", "LATEUSDT", "DELTAUSDT", "ALPHAUSDT", "BRAVOUSDT",
-                   "CHARLIEUSDT", "FOXUSDT"],
-    "2026-02-01": ["ETHBULLUSDT", "NEWUSDT", "LATEUSDT", "DELTAUSDT", "ALPHAUSDT",
-                   "BRAVOUSDT", "CHARLIEUSDT", "FOXUSDT"],
+    "2025-09-01": ["ETHBULLUSDT", "ADAUSDT", "BNBUSDT", "CHZUSDT", "DOTUSDT",
+                   "EOSUSDT", "FILUSDT"],
+    "2025-10-01": ["ETHBULLUSDT", "LUNCUSDT", "ADAUSDT", "BNBUSDT", "CHZUSDT",
+                   "DOTUSDT", "EOSUSDT", "FILUSDT"],
+    "2025-11-01": ["ETHBULLUSDT", "LUNCUSDT", "DOTUSDT", "ADAUSDT", "BNBUSDT",
+                   "CHZUSDT", "EOSUSDT", "FILUSDT"],
+    "2025-12-01": ["ETHBULLUSDT", "LUNCUSDT", "DOTUSDT", "ADAUSDT", "BNBUSDT",
+                   "CHZUSDT", "FILUSDT", "EOSUSDT"],
+    "2026-01-01": ["ETHBULLUSDT", "LUNCUSDT", "DOTUSDT", "ADAUSDT", "BNBUSDT",
+                   "CHZUSDT", "FILUSDT"],
+    "2026-02-01": ["ETHBULLUSDT", "ZAMAUSDT", "LUNCUSDT", "DOTUSDT", "ADAUSDT",
+                   "BNBUSDT", "CHZUSDT", "FILUSDT"],
 }
-# Steps 2 and 3: ETHBULL dropped by category (D14); LATE has no close 120 days before a
-# month end until 2026-01-01 (2026-01-01 less 121 days is 2025-09-02), NEW none at all
-# (D13); ECHO has no month-end bar on 2025-12-01; the first five remaining.
+# Steps 2 and 3: ETHBULL dropped by category (D14); LUNC has no close 120 days before a
+# month end until 2026-01-01 (2026-01-01 less 121 days is 2025-09-02), ZAMA none at all
+# (D13); EOS has no month-end bar on 2025-12-01; the first five remaining.
 UNIVERSES = {
-    "2025-09-01": ["ALPHAUSDT", "BRAVOUSDT", "CHARLIEUSDT", "DELTAUSDT", "ECHOUSDT"],
-    "2025-10-01": ["ALPHAUSDT", "BRAVOUSDT", "CHARLIEUSDT", "DELTAUSDT", "ECHOUSDT"],
-    "2025-11-01": ["DELTAUSDT", "ALPHAUSDT", "BRAVOUSDT", "CHARLIEUSDT", "ECHOUSDT"],
-    "2025-12-01": ["DELTAUSDT", "ALPHAUSDT", "BRAVOUSDT", "CHARLIEUSDT", "FOXUSDT"],
-    "2026-01-01": ["LATEUSDT", "DELTAUSDT", "ALPHAUSDT", "BRAVOUSDT", "CHARLIEUSDT"],
-    "2026-02-01": ["LATEUSDT", "DELTAUSDT", "ALPHAUSDT", "BRAVOUSDT", "CHARLIEUSDT"],
+    "2025-09-01": ["ADAUSDT", "BNBUSDT", "CHZUSDT", "DOTUSDT", "EOSUSDT"],
+    "2025-10-01": ["ADAUSDT", "BNBUSDT", "CHZUSDT", "DOTUSDT", "EOSUSDT"],
+    "2025-11-01": ["DOTUSDT", "ADAUSDT", "BNBUSDT", "CHZUSDT", "EOSUSDT"],
+    "2025-12-01": ["DOTUSDT", "ADAUSDT", "BNBUSDT", "CHZUSDT", "FILUSDT"],
+    "2026-01-01": ["LUNCUSDT", "DOTUSDT", "ADAUSDT", "BNBUSDT", "CHZUSDT"],
+    "2026-02-01": ["LUNCUSDT", "DOTUSDT", "ADAUSDT", "BNBUSDT", "CHZUSDT"],
 }
 
 
@@ -653,7 +700,7 @@ def probed_run(config, view):
 def listing_runs(tmp_path_factory):
     """H1-01 twice on the synthetic manifests, each through the registered loader and the
     runner's DataView: as a trial to 2025-12-31 on the development manifest alone, and as
-    the holdout run to 2026-02-28 on both (section 11, item 5), whose listing adds NEW."""
+    the holdout run to 2026-02-28 on both (section 11, item 5), whose listing adds ZAMA."""
     store, manifests = syn.listing_world(tmp_path_factory.mktemp("listing"))
     trial = syn.configuration("H1-01", "2025-09-01", "2025-12-31")
     holdout = syn.configuration("H1-01", "2025-09-01", "2026-02-28", kind_override="holdout")
@@ -681,10 +728,10 @@ def test_the_universe_on_given_dates_is_ranked_from_the_listed_series(listing_ru
         for month, members in run["probe"].universes.items():
             assert run["probe"].named[syn.ms(*map(int, month.split("-")))] == set(members)
     # Only spot klines of USDT pairs, and for H1-01 no four-hour bars or funding, are read:
-    # ALPHABTC (the largest volume of all) and the perpetual's series are listed only.
+    # ADABTC (the largest volume of all) and the perpetual's series are listed only.
     for run in (development, holdout):
-        assert {"spot/klines/ALPHABTC/1d", "um/klines/ALPHAUSDT/1d",
-                "um/fundingRate/ALPHAUSDT"} <= set(run["listing"])
+        assert {"spot/klines/ADABTC/1d", "um/klines/ADAUSDT/1d",
+                "um/fundingRate/ADAUSDT"} <= set(run["listing"])
         assert all(n.startswith("spot/klines/") and "USDT/" in n and n.endswith(("/1d", "/15m"))
                    for n in run["names"])
     assert sum(r != 0.0 for _, r in development["result"].returns) > 100, "it traded"
@@ -692,24 +739,24 @@ def test_the_universe_on_given_dates_is_ranked_from_the_listed_series(listing_ru
 
 def test_a_pair_archived_only_in_the_holdout_never_enters_a_development_decision(
         listing_runs):
-    """NEW is pinned by the holdout manifest alone, from 2026-01-01. The holdout run lists
+    """ZAMA is pinned by the holdout manifest alone, from 2026-01-01. The holdout run lists
     and loads it, its coverage starts at the holdout, and no decision before 2026-01-01
     ranks it, names it or trades it; once a bar of it has closed it is ranked (2026-02-01)."""
     development, holdout = listing_runs["development"], listing_runs["holdout"]
-    new = "spot/klines/NEWUSDT/1d"
+    new = "spot/klines/ZAMAUSDT/1d"
     assert set(holdout["listing"]) - set(development["listing"]) == {new}
-    assert new in holdout["names"] and holdout["listed"]["NEWUSDT"] == HOLDOUT_START
-    assert "NEWUSDT" not in development["listed"]
+    assert new in holdout["names"] and holdout["listed"]["ZAMAUSDT"] == HOLDOUT_START
+    assert "ZAMAUSDT" not in development["listed"]
     before = {t: named for t, named in holdout["probe"].named.items() if t < HOLDOUT_START}
-    assert len(before) == 122 and not any("NEWUSDT" in named for named in before.values())
-    assert [m for m, ranked in holdout["probe"].rankings.items() if "NEWUSDT" in ranked] == [
+    assert len(before) == 122 and not any("ZAMAUSDT" in named for named in before.values())
+    assert [m for m, ranked in holdout["probe"].rankings.items() if "ZAMAUSDT" in ranked] == [
         "2026-02-01"]
-    assert not any(o.symbol == "NEWUSDT" for o in holdout["result"].orders)
+    assert not any(o.symbol == "ZAMAUSDT" for o in holdout["result"].orders)
 
 
 def test_the_development_months_rank_the_same_whether_or_not_holdout_pairs_are_listed(
         listing_runs):
-    """Section 11, item 5: the holdout run, whose listing holds NEW, ranks every
+    """Section 11, item 5: the holdout run, whose listing holds ZAMA, ranks every
     development month end exactly as the development run, whose listing does not, and
     decides and returns exactly the same to 2025-12-31. The pinned ``run`` returns what
     the probed run returns."""

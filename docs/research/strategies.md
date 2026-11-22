@@ -131,6 +131,18 @@ listing lacks that pair, as in the holdout run, whose listing holds it. A unit t
 skip itself: a pair listed as first archived at the decision is not ranked, though its rows
 are there.
 
+The guards of quant review 1. A pair outside the 115 candidates ranked tenth stops the run,
+though it would not be one of the five selected, and the same pairs with it ranked eleventh
+pass with candidates alone in the top ten (choice 16). Each module's `run` refuses a grid id
+run as a control, a benchmark run as a trial, a control on another base, another
+hypothesis's id and a window past 2026-01-01, given a data view that fails the test if any
+attribute of it is read; a run that is not refused touches that view at once (choice 12).
+C-H1 refuses a listed candidate whose development rows are missing, and accepts the absence
+of one listed only from 2026-01-01 (choice 6). Because the guard of choice 16 refuses any
+other pair in a top ten, every synthetic pair the H1 tests rank is a pinned candidate symbol
+(ADAUSDT, BNBUSDT and so on, with made-up prices and volumes), and a deliberately foreign
+pair is named QQQUSDT.
+
 ## The data: listing, spans and crossed gaps
 
 The quant's review of G1.9 (finding 3) requires each series' spans, its archived runs split
@@ -167,7 +179,8 @@ No list of pairs is committed in `trend.py`, and a listing error is a data-loadi
    opens at or after the decision (no bar of it has closed by then), sums each other pair's
    quote volume over the 30 daily bars closing at the month end, and ranks them through the
    engine's `rank_top` (G0.6's `rank_month_ends`, the 27 stablecoin and fiat bases removed,
-   the ten largest).
+   the ten largest). If any pair in that top ten is not one of the 115 pinned candidates,
+   the run stops (choice 16).
 4. The engine's `select_universe` drops D14's excluded categories exactly as
    preregistration.json classifies the candidates (ETHBULL, ETHBEAR, PAXG, XAUT and SNDKB),
    applies D13 (the month-end bar and a close 120 days before it) and takes the first five,
@@ -185,8 +198,21 @@ the development manifest, which by its metadata hold 702,301 rows in 23,459 file
 whole by every H1, B-H1 and C-H1 run), every spot 15-minute series lazily for fills (107),
 every spot four-hour series for H1-06 (107) and every perpetual's funding for H1-07 (102). H2
 reads BTC's and ETH's spot and perpetual daily and 15-minute series and their funding; B-H2
-only the spot. Memory and time for the 619 daily series, and for H1-06's 107 four-hour series
-held whole, have not been measured, since that would need the real data.
+only the spot.
+
+**Memory and time at full size** (quant review 1, L5; measured 2026-11-22, Python 3.13,
+`nice -n 15`, one process per run). A scratch data view took every series name, first and
+last time, recorded gap and row count from the development manifest's metadata, opening no
+data file, and generated every price and volume, building fresh rows on each load as the
+loader does; candidates were given the larger volumes, so every top ten was candidates. Each
+run covered H1's whole window, 2,802 days, and loaded the 619 daily series whole (702,301
+rows, equal to the manifest series by series; 158,821 of them the candidates', C-H1's n).
+H1-01 took 5.2 s and a peak resident memory of 767 MiB (63 MiB before the run); C-H1 with
+seed 0 took 7.0 s and 775 MiB; H1-06, with the 107 four-hour series also held whole, took
+8.8 s and 1,170 MiB. The times include generating the rows in Python but not reading and
+verifying archive files, which the real loader does for 23,459 daily files and every
+15-minute month a fill reaches, so a real run will be slower by that I/O; memory is the rows
+held plus the 15-minute months the fill cache keeps.
 
 ## Choices made
 
@@ -203,16 +229,29 @@ reading of the registration, not a new parameter.
    only those, so the result is the same; it keeps the monthly ranking cheap.
 3. **A lookback is read in calendar time,** t minus L days, at both bars, as section 6 says of
    four-hour bars ("in the same calendar days"). Where a four-hour bar is missing at that
-   instant (outages before 2020-02-19), the latest four-hour close before it within the
-   instrument is used, as section 5's marks carry a last close forward. A daily lookback
-   always finds its bar, since a missing daily bar ends the instrument and D13 guarantees 120
-   days of it.
+   instant (the exchange outages before 2020-02-19, and the pair-specific gaps on the last
+   day of an instrument, such as LUNAUSDT's from 04:00 on 2022-05-13 and FTTUSDT's from
+   08:00 on 2022-11-15), the latest four-hour close before it within the instrument is used,
+   as section 5's marks carry a last close forward. A daily lookback always finds its bar,
+   since a missing daily bar ends the instrument and D13 guarantees 120 days of it.
+   preregistration.json says the lookbacks are "converted to bars at six a day"; the code
+   follows the prose's "in the same calendar days", reading each lookback as a calendar
+   slot. The two readings agree wherever the four-hour series has no gap; they differ only
+   for an H1-06 decision within L days after a recorded four-hour gap, where counting 6L bars
+   back would land earlier than t minus L days (quant review 1, L4).
 4. **A skipped four-hour decision changes nothing, the universe included.** Section 5, Gaps
    item 2 skips "the four-hour decision at its close" without naming whose bar. When a live
-   member lacks its bar, the strategy returns no decision; when a held instrument lacks it,
-   the engine skips before asking (engine choice 10). If that ever happened at a month-end
-   00:00 decision, the previous universe would stand for the month. The committed coverage
-   metadata records no missing four-hour bar closing at 00:00 on a first, in either period.
+   member lacks its bar, the strategy returns no decision, so the whole book's H1-06
+   decision is skipped; when a held instrument lacks it, the engine skips before asking
+   (engine choice 10). This is not confined to the outages before 2020-02-19: the
+   development manifest records pair-specific four-hour gaps on the last day of LUNAUSDT's
+   first instrument (2022-05-13, bars from 04:00 missing) and of FTTUSDT's (2022-11-15, from
+   08:00), so if either is a live H1-06 member then, every H1-06 decision is skipped for up
+   to four four-hour closes. That is section 5's rule read literally, and the code keeps it
+   (quant review 1, L3). If a skip ever fell on a month-end 00:00 decision, the previous
+   universe would stand for the month; in development the only recorded four-hour gaps over
+   00:00 on a first belong to pairs with no live instrument then (ETHBULL and ETHBEAR at
+   2020-02-01, FTT from 2022-12 to 2023-09), so this never binds there.
 5. **H1-07's filter counts only settlements inside the member's instrument** (section 4: "A
    funding settlement applies to the spot instrument whose dates contain it"); D13 makes every
    member at least 120 days old, so this never binds. The filter is evaluated only where the
@@ -225,7 +264,9 @@ reading of the registration, not a new parameter.
    SNDKB, XAUT, ZAMA) have no development bars and take no draws. By the coverage metadata
    the other 107 hold the 158,821 bars G1.9's vectors use, and the development manifest pins
    all of their daily series; n is counted from the bars the run loads, and the listing
-   supplies every one of them.
+   supplies every one of them. A candidate the run lists with development bars but whose
+   rows are not loaded stops the run rather than being skipped, since skipping it would
+   move every later symbol's draws onto other bars (quant review 1, L2).
 7. **C-H2's shift moves rates, not times.** Each settlement keeps its `calc_time` and interval,
    so the trailing interval and when a value is known are the real rule's; M counts the
    development settlements, those before 2026-01-01.
@@ -243,7 +284,9 @@ reading of the registration, not a new parameter.
     trading between month ends".
 12. **A configuration runs only as its registered kind,** and only the holdout run's window may
     end after 2026-01-01; anything else is refused before data is read (section 9; section
-    11, item 6).
+    11, item 6). Each module's `check_run` needs the configuration alone and is the first
+    line of `run`, before any listing, coverage or load; `strategy_for` calls it too (quant
+    review 1, L1). A test hands `run` a data view that fails if touched at all.
 13. **Nothing patches the engine.** The modules import the engine only as `from
     norse_research.sim import ...` and `Funding` as `from norse_research.formats import
     Funding`, read no private attribute, subclass nothing from the package, and never
@@ -262,14 +305,16 @@ reading of the registration, not a new parameter.
     loaded nor ranked. The development manifest lists no other quote, so this changes
     nothing today; without it such a series would stop every run, since `rank_top` refuses
     a pair not quoted in USDT.
-16. **A pair outside the 115 candidates that reached a top ten would be eligible, as an
-    unclassified candidate is.** The registration classifies only the candidates
-    (preregistration.json, `exclusions.classified_candidates` and
-    `unclassified_candidates_are`) and states that every top ten falls within them (section
-    6, step 1); it says nothing of any other pair. H1 applies D14 exactly as registered,
-    through the engine's `select_universe`, and adds no guard naming the candidates, which
-    would put a committed list back into the universe rule. Such a pair could not be traded
-    unseen: none has 15-minute bars pinned, so the engine stops the run at its first fill
-    ("has no recorded span"); held at a signal of zero, it would keep its slot in cash for
-    the month. The alternative, stopping the run whenever a selected member is not one of the
-    115, is the lead's to choose.
+16. **A top ten holding any pair outside the 115 candidates stops the run.** At each month
+    end, `month_end_ranking` checks the whole computed top ten, not only the five selected,
+    and raises a `SimulationError` naming section 6, step 1 if any pair in it is not in
+    `CANDIDATES`. Section 6, step 1 states the premise outright ("so this top ten is the
+    candidate set G1.1 pinned"), so such a pair means the computed ranking has departed from
+    the registered one (a listing, loader or archive difference, a defect under run rule 3);
+    and D14 classified only the candidates (preregistration.json,
+    `exclusions.classified_candidates` and `unclassified_candidates_are`), so the pair's
+    category is undetermined. Left eligible, at a signal of zero it would hold a slot in cash
+    for the month and displace the fifth eligible candidate with no error. The guard selects
+    nothing; it only refuses, and `CANDIDATES` is the list C-H1 already commits, tested
+    against G0.6's file. The lead's ruling of 2026-11-22, following quant review 1, M1.
+    Every pair the H1 tests rank into a top ten is therefore a pinned candidate symbol.

@@ -110,9 +110,11 @@ def run(configuration, data_view):
     """The daily net returns of one registered H1 configuration, B-H1 or C-H1, over the
     resolved configuration's window, in the shape the runner hands to the harness.
 
+    The configuration is checked first, before the data view is touched (``check_run``).
     The series come from ``data_view.list_series()``, every series the run's committed
     manifests pin (both manifests in the holdout run), so no list of pairs is committed
     here and a listing error is a data-loading fix (section 11, item 6)."""
+    check_run(configuration)
     names = series_needed(configuration, data_view.list_series())
     listed = listed_pairs(data_view, names)
     market = load_market(configuration, data_view, names)
@@ -186,12 +188,11 @@ def simulate(configuration: Mapping, market: Market,
     return run_backtest(strategy_for(configuration, rows, listed), configuration, market)
 
 
-def strategy_for(configuration: Mapping, rows: Mapping[str, Sequence],
-                 listed: Mapping[str, int]):
-    """The strategy object for a resolved configuration. ``listed`` holds the pairs the
-    universe ranks, each with its first archived open (``listed_pairs``). ``rows`` holds
-    the run's daily (and four-hour and funding) series by name; only C-H1 reads it, to
-    draw one random number per development daily bar of the candidates."""
+def check_run(configuration: Mapping) -> None:
+    """Refuse a configuration this module does not run, from the configuration alone, so
+    ``run`` refuses before any listing, coverage or load (choice 12): an id that is not
+    H1's, a kind other than the id's registered kind (section 9), a control on another
+    base, and a window past the development period outside the holdout run."""
     cid, kind = configuration["id"], configuration["kind"]
     window = Window.from_configuration(configuration)
     if kind != "holdout" and window.end > day_ms(DEVELOPMENT_END):
@@ -202,22 +203,43 @@ def strategy_for(configuration: Mapping, rows: Mapping[str, Sequence],
     if cid in GRID:
         if kind not in GRID_KINDS:
             raise SimulationError(f"{cid} runs as a trial, sensitivity or holdout run")
-        return Trend(configuration["parameters"], listed)
-    if cid == BENCHMARK:
+    elif cid == BENCHMARK:
         if kind != "benchmark":
             raise SimulationError(f"{cid} runs as a benchmark")
-        return MonthEndEqualWeight(listed)
-    if cid == CONTROL:
+    elif cid == CONTROL:
         if kind != "control" or configuration["base"] != CONTROL_BASE:
             raise SimulationError(f"{cid} runs as a control on {CONTROL_BASE}")
-        end = day_ms(DEVELOPMENT_END)
-        daily = {
-            s: [bar for bar in rows[spot_series(s, "1d")] if bar.open_time < end]
-            for s in CANDIDATES if spot_series(s, "1d") in rows
-        }
-        flipped = SignFlipped(sign_flips(daily, configuration["seed"]))
-        return Trend(configuration["parameters"], listed, flipped)
-    raise SimulationError(f"{cid} is not an H1 configuration, benchmark or control")
+    else:
+        raise SimulationError(f"{cid} is not an H1 configuration, benchmark or control")
+
+
+def strategy_for(configuration: Mapping, rows: Mapping[str, Sequence],
+                 listed: Mapping[str, int]):
+    """The strategy object for a resolved configuration. ``listed`` holds the pairs the
+    universe ranks, each with its first archived open (``listed_pairs``). ``rows`` holds
+    the run's daily (and four-hour and funding) series by name; only C-H1 reads it, to
+    draw one random number per development daily bar of the candidates."""
+    check_run(configuration)
+    cid = configuration["id"]
+    if cid in GRID:
+        return Trend(configuration["parameters"], listed)
+    if cid == BENCHMARK:
+        return MonthEndEqualWeight(listed)
+    end = day_ms(DEVELOPMENT_END)
+    # Section 8, C-H1: "every development daily bar of the 115 pinned candidates". A
+    # candidate the run lists with development bars must have its rows here: skipping it
+    # would move every later symbol's draws onto other bars (quant review 1, L2).
+    missing = [s for s in CANDIDATES
+               if listed.get(s, end) < end and spot_series(s, "1d") not in rows]
+    if missing:
+        raise SimulationError(f"C-H1 draws for every candidate's development daily bars, "
+                              f"but none are loaded for {missing}")
+    daily = {
+        s: [bar for bar in rows[spot_series(s, "1d")] if bar.open_time < end]
+        for s in CANDIDATES if spot_series(s, "1d") in rows
+    }
+    flipped = SignFlipped(sign_flips(daily, configuration["seed"]))
+    return Trend(configuration["parameters"], listed, flipped)
 
 
 # --- section 6: the dated universe ------------------------------------------------------
@@ -241,8 +263,14 @@ def month_end_ranking(history, listed: Sequence[tuple[str, int]]) -> list[str]:
     before ranking: only the holdout run lists such pairs, and skipping them keeps every
     development month's ranking identical to the development run's (section 11, item
     5). ``rank_month_ends`` would leave them out anyway, since it never ranks a pair with
-    no volume in the window; the skip makes that hold by the manifests' metadata."""
+    no volume in the window; the skip makes that hold by the manifests' metadata.
+
+    Every pair in the ten must be one of the 115 pinned candidates, or the run stops:
+    step 1 says "so this top ten is the candidate set G1.1 pinned", and D14 classified
+    only the candidates, so any other pair means the ranking has departed from the
+    registered one and its category is undetermined (choice 16)."""
     t = history.now
+    month = month_of_decision(t)
     first_open = t - RANK_DAYS * DAY_MS
     volumes = {}
     for symbol, first_archived in listed:
@@ -251,7 +279,15 @@ def month_end_ranking(history, listed: Sequence[tuple[str, int]]) -> list[str]:
             continue
         view = history.series(name)
         volumes[symbol] = quote_volumes(view[view.index_after(first_open - 1):])
-    return rank_top(volumes, month_of_decision(t))
+    ranked = rank_top(volumes, month)
+    outside = [s for s in ranked if s not in CANDIDATES]
+    if outside:
+        raise SimulationError(
+            f"section 6, step 1: the {month} month end's top ten holds {outside}, which are "
+            "not among the 115 pinned candidates, so the ranking departs from the registered "
+            "one and D14 has not classified them (choice 16)"
+        )
+    return ranked
 
 
 def month_end_universe(history, listed: Sequence[tuple[str, int]],
