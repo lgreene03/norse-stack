@@ -1,0 +1,74 @@
+{
+  "B-H1": {
+    "path": "research/norse_research/strategies/h1/trend.py",
+    "function": "run"
+  },
+  "B-H2": {
+    "path": "research/norse_research/strategies/h2/carry.py",
+    "function": "run"
+  },
+  "C-H1": {
+    "path": "research/norse_research/strategies/h1/trend.py",
+    "function": "run"
+  },
+  "C-H2": {
+    "path": "research/norse_research/strategies/h2/carry.py",
+    "function": "run"
+  },
+  "H1-01": {
+    "path": "research/norse_research/strategies/h1/trend.py",
+    "function": "run"
+  },
+  "H1-02": {
+    "path": "research/norse_research/strategies/h1/trend.py",
+    "function": "run"
+  },
+  "H1-03": {
+    "path": "research/norse_research/strategies/h1/trend.py",
+    "function": "run"
+  },
+  "H1-04": {
+    "path": "research/norse_research/strategies/h1/trend.py",
+    "function": "run"
+  },
+  "H1-05": {
+    "path": "research/norse_research/strategies/h1/trend.py",
+    "function": "run"
+  },
+  "H1-06": {
+    "path": "research/norse_research/strategies/h1/trend.py",
+    "function": "run"
+  },
+  "H1-07": {
+    "path": "research/norse_research/strategies/h1/trend.py",
+    "function": "run"
+  },
+  "H1-08": {
+    "path": "research/norse_research/strategies/h1/trend.py",
+    "function": "run"
+  },
+  "H2-01": {
+    "path": "research/norse_research/strategies/h2/carry.py",
+    "function": "run"
+  },
+  "H2-02": {
+    "path": "research/norse_research/strategies/h2/carry.py",
+    "function": "run"
+  },
+  "H2-03": {
+    "path": "research/norse_research/strategies/h2/carry.py",
+    "function": "run"
+  },
+  "H2-04": {
+    "path": "research/norse_research/strategies/h2/carry.py",
+    "function": "run"
+  },
+  "H2-05": {
+    "path": "research/norse_research/strategies/h2/carry.py",
+    "function": "run"
+  },
+  "H2-06": {
+    "path": "research/norse_research/strategies/h2/carry.py",
+    "function": "run"
+  }
+}

@@ -225,7 +225,20 @@ can also be deleted. Every agent brief, the scheduled driver's included, states 
 out-of-sample computation happens outside the harness. As a speed bump, G1.5 may make the
 loader return rows overlapping a registered out-of-sample window only inside an open trial
 entry; a caller can still read files directly (T13), but the easy path stops and says why.
+One caller may read those rows outside an entry: G1.1's REST comparison (`datasets.py`),
+which checks archive bars against the exchange and computes no return
+(`integrity_audit=True`, held to that one caller by a test).
 **Process only.**
+
+**Dated note, 2026-11-22.** With the owner's approval, a one-off check (quant review 1 of
+PR 62, C1) ran once from the module `reconcile_universe` of commit 05e338a, as a second
+integrity-audit caller for that run alone. It ranked every development month end with H1's
+`month_end_ranking` on the development daily series and found the ranking equal to G0.6's
+published top ten at all 101 development month ends, printing nothing else. Security review
+A-M1 found that it ran unpinned strategy code outside the runner with out-of-sample rows in
+reach, so the module and its tests were removed afterwards, and the REST comparison is again
+the only caller. The P2 audit (G2.7) will find this run in the session transcripts; it is
+the approved run recorded here.
 
 **Tests.** No test can prove a run did not happen outside the harness. If the speed bump
 is adopted: `test_loader_returns_out_of_sample_rows_only_inside_an_open_trial` (G1.5). The

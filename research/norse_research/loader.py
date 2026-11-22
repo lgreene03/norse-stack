@@ -27,7 +27,11 @@ The only way research code receives rows is ``DatasetLoader.load``. It:
   T2: a script calling the loader directly is stopped and told why, though nothing
   stops it reading files itself. The REST comparison of G1.1, which checks archive
   bars against the exchange and computes no return, passes ``integrity_audit=True``
-  and is the only caller that may (a test checks this).
+  and is the only caller that may (a test checks this). Dated note: on 2026-11-22, with
+  the owner's approval, a one-off universe check (quant review 1 of PR 62, C1), the
+  module ``reconcile_universe`` of commit 05e338a, read development rows this way once.
+  It found H1's ranking equal to G0.6's at all 101 development month ends and was
+  removed afterwards on security review A-M1.
 
 Every result carries the manifest's SHA-256 and the files read, which is what a
 ledger entry cites (G1.5).
