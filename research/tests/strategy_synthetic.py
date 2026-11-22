@@ -334,7 +334,7 @@ LISTING_FILLED = ("ADAUSDT", "BNBUSDT", "CHZUSDT", "DOTUSDT", "EOSUSDT",
                   "FILUSDT", "LUNCUSDT")
 
 
-def _put_bars(store: ArchiveStore, spec: DatasetSpec, bars: list[tuple[int, float, float]]):
+def put_bars(store: ArchiveStore, spec: DatasetSpec, bars: list[tuple[int, float, float]]):
     """Monthly archive files of ``bars`` (open time, price, quote volume), each beside
     its CHECKSUM, as synthetic_store.put writes them; returns the months written."""
     by_month: dict[str, list[str]] = {}
@@ -371,10 +371,10 @@ def listing_world(root: Path, seed: int = 7) -> tuple[ArchiveStore, dict[str, Ma
             if symbol in LISTING_FILLED and t >= LISTING_FILLS_FROM:
                 fill_bars += [(t + q * M15, close, 1e4) for q in range(96)]
         spec = DatasetSpec.from_name(f"spot/klines/{symbol}/1d")
-        series.append((spec, _put_bars(store, spec, daily_bars)))
+        series.append((spec, put_bars(store, spec, daily_bars)))
         if fill_bars:
             spec = DatasetSpec.from_name(f"spot/klines/{symbol}/15m")
-            series.append((spec, _put_bars(store, spec, fill_bars)))
+            series.append((spec, put_bars(store, spec, fill_bars)))
     series.extend(make_series(store, name, "2025-09", "2026-02")
                   for name in ("um/klines/ADAUSDT/1d", "um/fundingRate/ADAUSDT"))
     manifests = {}
