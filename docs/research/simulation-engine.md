@@ -365,12 +365,25 @@ any module, nor a private name from outside the strategy's own paths: `from coll
 import __builtins__ as b` handed over `exec`, through which a sealed engine module could
 be changed with `object.__setattr__`, and the source check had accepted it since G1.5.
 
-One route stays open and is stated for review. A method called through its class with
-another object, `Tamper.reach(view)`, binds `self` to that object, so `self._book` there
-reaches the book behind a `BookView`; no rule on names can tell what `self` holds. The
-sound closure is in the engine: a `BookView` that keeps a snapshot of the book at the
-decision, which `decide` cannot tell apart, since it runs at one instant. It needs
-deliberate code that is visible in the committed diff.
+A method called through its class with another object, `Tamper.reach(view)`, binds
+`self` to that object, and no rule on names can tell what `self` holds; it reached the
+book behind a `BookView` through `self._book`. That is closed in the engine instead. A
+`BookView` is a snapshot of the book taken at the decision: cash and equity as numbers,
+the spot and perpetual quantities and the marks as read-only mappings of copies, the
+carry coins as a frozenset, and no reference to the book itself. `decide` runs at one
+instant, so it cannot tell the snapshot from the book. The strategy is also lent its own
+`History` over the same rows, since the engine reads its history again after the
+decision to build the orders (`now` among the rest, a public attribute a strategy could
+set). A test runs the exact probe and `view._book`-style routes through class methods in
+the runner, rewrites every slot of the view, and finds the orders, fills, lapses,
+accruals, marks, skips and returns of both drivers unchanged and the returns golden.
+
+One route of the same kind stays open and is stated for review. The series views a
+strategy is lent keep the run's state behind private attributes, and a method called
+through its class reaches them: raising `_count` reveals rows not yet known, and `_rows`
+is the live list the engine marks and fills from. Both need deliberate code that is
+visible in the committed diff. Closing it would make `SeriesView` frozen and hold its rows
+and times only inside closures.
 
 huginn's executor and research gateway cost defaults, which G1.9's "Done when" also
 names, live in the huginn repository; a separate huginn pull request aligns them.

@@ -42,6 +42,13 @@ class History(metaclass=EngineClass):
         self._ended = ended
         self._cache = cache
 
+    def lent(self) -> History:
+        """A history for the strategy alone, over the same rows: the engine reads its
+        own after the decision (``now`` among them, to build the orders), so nothing a
+        strategy sets on the one it is lent reaches the engine."""
+        return History(self.now, self.interval, self._views, self._segments, self._ended,
+                       self._cache)
+
     def series(self, name: str) -> SeriesView:
         """The known rows of a daily, four-hour or funding series. Fifteen-minute bars
         are the engine's, for fills, and are not shown."""

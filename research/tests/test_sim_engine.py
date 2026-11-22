@@ -264,9 +264,13 @@ def bar(open_time, step, close, volume, quote, low=None):
                  quote, 10, volume / 2, quote / 2)
 
 
-def run(configuration, data_view):
-    march = DAY0 + 3 * D
-    rows = {
+MARCH = DAY0 + 3 * D
+HORIZON = MARCH + 3 * D
+
+
+def golden_rows():
+    march = MARCH
+    return {
         "spot/klines/AAAUSDT/1d": [bar(DAY0 + i * D, D, c, 1000.0, c * 1000.0)
                                    for i, c in enumerate([98.0, 99.0, 100.0, 110.0, 120.0,
                                                           120.0])],
@@ -282,12 +286,19 @@ def run(configuration, data_view):
                                     bar(march + 3 * M15, M15, 21.0, 100.0, 2100.0),
                                     bar(march + D, M15, 21.0, 0.0, 0.0)],
     }
-    strategy = Scripted("1d", weights={
+
+
+def golden_strategy(kind=Scripted):
+    return kind("1d", weights={
         "2021-03-01": {"AAAUSDT": 0.5, "BBBUSDT": 0.3},
         "2021-03-02": {"AAAUSDT": 0.85, "BBBUSDT": 0.1},
         "2021-03-03": {"AAAUSDT": 0.0, "BBBUSDT": 0.3},
     })
-    return run_backtest(strategy, configuration, Market.from_rows(rows, march + 3 * D))
+
+
+def run(configuration, data_view):
+    return run_backtest(golden_strategy(), configuration,
+                        Market.from_rows(golden_rows(), HORIZON))
 '''
 
 

@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from heapq import heappop, heappush
 from itertools import count
 
-from ..formats import EngineClass, Funding, Kline
+from ..formats import EngineClass, Funding, Kline, read_only
 from .book import Book
 from .execution import (
     accrue,
@@ -100,31 +100,49 @@ def check_outage(witnesses: list[Series | None], before: int) -> None:
         raise SimulationError(outage_message(early[0]))
 
 
+@dataclass(frozen=True, slots=True, eq=False)
 class BookView(metaclass=EngineClass):
-    """The book as a strategy may see it at a decision: read-only, marked then."""
+    """The book as a strategy may see it at a decision: a snapshot taken then, marked
+    then. It holds only immutable values, numbers, read-only mappings and a frozenset,
+    and no reference to the live book, so nothing a strategy does to it, or to anything
+    it reaches from it, changes the run (security review of PR 61: a method called
+    through its class, ``Tamper.reach(view)``, bound ``self`` to the view and reached the
+    live book through ``self._book``). ``decide`` runs at one instant, so it cannot tell
+    the snapshot from the book."""
 
-    def __init__(self, book: Book, marks: Mapping, equity: float) -> None:
-        self._book = book
-        self._marks = dict(marks)
-        self.equity = equity
+    cash: float
+    equity: float
+    _spot: Mapping[str, float]  # spot symbol -> quantity held
+    _perp: Mapping[str, float]  # perpetual symbol -> signed quantity
+    _carry: frozenset  # spot symbols held in carry
+    _marks: Mapping[tuple[str, str], float]
 
-    @property
-    def cash(self) -> float:
-        return self._book.cash
+    @classmethod
+    def of(cls, book: Book, marks: Mapping, equity: float) -> BookView:
+        return cls(
+            float(book.cash),
+            float(equity),
+            read_only(book.spot),
+            read_only({symbol: position.quantity for symbol, position in book.perp.items()}),
+            frozenset(book.carry),
+            read_only(marks),
+        )
 
     def quantity(self, market: str, symbol: str) -> float:
-        return self._book.quantity(market, symbol)
+        if market == SPOT:
+            return self._spot.get(symbol, 0.0)
+        return self._perp.get(symbol, 0.0)
 
     def weight(self, symbol: str) -> float:
         """A spot position's weight, as a fraction of equity marked at the decision."""
-        held = self._book.spot.get(symbol, 0.0)
+        held = self._spot.get(symbol, 0.0)
         return held * self._marks[(SPOT, symbol)] / self.equity if held else 0.0
 
     def in_carry(self, symbol: str) -> bool:
-        return symbol in self._book.carry
+        return symbol in self._carry
 
     def held(self) -> list[str]:
-        return sorted(self._book.spot)
+        return sorted(self._spot)
 
 
 @dataclass
@@ -175,7 +193,9 @@ class _Run(metaclass=EngineClass):
             self.result.skips.append(Skip(t, tuple(sorted(s for _, s in missing))))
             return []
         equity = self.book.equity(marks)
-        decision = self.strategy.decide(history, BookView(self.book, marks, equity))
+        # The strategy gets its own history and a snapshot of the book: the engine
+        # reads ``history`` again below, and neither may be changed through them.
+        decision = self.strategy.decide(history.lent(), BookView.of(self.book, marks, equity))
         if decision is None:
             return []
         if not isinstance(decision, Decision):

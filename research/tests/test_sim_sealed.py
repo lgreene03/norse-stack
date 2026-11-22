@@ -179,7 +179,8 @@ def code_root(tmp_path_factory):
     return root
 
 
-def run_in_runner(code_root: Path, tmp: Path, source: str, configuration=None) -> dict:
+def run_in_runner(code_root: Path, tmp: Path, source: str, configuration=None,
+                  function: str = "run") -> dict:
     """``source`` as a pinned strategy module, run by the real runner in a fresh
     interpreter exactly as the harness starts it; no source check runs here."""
     module = code_root / "research" / "norse_research" / "strategies" / f"probe_{tmp.name}.py"
@@ -191,7 +192,7 @@ def run_in_runner(code_root: Path, tmp: Path, source: str, configuration=None) -
         "pycache": str(pycache),
         "module_path": str(module.relative_to(code_root)),
         "module_name": f"norse_research.strategies.{module.stem}",
-        "function": "run",
+        "function": function,
         "configuration": configuration or {"window": {"first_return_day": "2021-03-01",
                                                       "days": 1}},
         "entry": "e" * 64,
@@ -328,3 +329,146 @@ def test_a_backtest_ignores_every_rebound_standard_library_function(code_root, t
     for (_, got), want in zip(result["returns"], golden["weights"]["expected"]["returns"],
                               strict=True):
         assert got == pytest.approx(want, rel=1e-12)
+
+
+# --- what a strategy is lent --------------------------------------------------------------
+
+TAMPERING = '''
+
+from norse_research.sim import Costs, Window, backtest, paper_run
+
+
+class Tamper:
+    def reach(self):
+        self._book.cash = 1e9
+
+
+class Reach:
+    """``view._book``-style routes, each through a method called through its class, so
+    that ``self`` is whatever the strategy was lent."""
+
+    def book_spot(self):
+        self._book.spot["AAAUSDT"] = 1e9
+
+    def spot(self):
+        self._spot["AAAUSDT"] = 1e9
+
+    def perp(self):
+        self._perp.clear()
+
+    def carry(self):
+        self._carry.add("AAAUSDT")
+
+    def marks(self):
+        self._marks[("spot", "AAAUSDT")] = 0.0
+
+    def cash(self):
+        self.cash = 1e9
+
+    def history_now(self):
+        self.now = 0
+
+    def history_cache(self):
+        self._cache.clear()
+
+    def history_views(self):
+        self._views = None
+
+
+VIEW = (Tamper.reach, Reach.book_spot, Reach.spot, Reach.perp, Reach.carry, Reach.marks,
+        Reach.cash)
+HISTORY = (Reach.history_now, Reach.history_cache, Reach.history_views)
+
+
+class Tampering(Scripted):
+    """Decides exactly as ``Scripted`` does, then tries every route to the engine
+    through what it was lent, ending with every slot of the view rewritten."""
+
+    routes = "view"
+    attempts = 0
+
+    def decide(self, history, book):
+        decision = super().decide(history, book)
+        if Tampering.routes == "view":
+            attempts = [(a, book) for a in VIEW]
+        else:
+            attempts = [(a, history) for a in HISTORY]
+        for attempt, lent in attempts:
+            try:
+                attempt(lent)
+            except Exception:
+                pass
+            Tampering.attempts += 1
+        if Tampering.routes == "view":
+            for slot in getattr(type(book), "__slots__", ()):
+                object.__setattr__(book, slot, None)
+        return decision
+
+
+def run_tampered(configuration, data_view):
+    Tampering.routes = configuration["routes"]
+    window = Window.from_configuration(configuration)
+    costs = Costs.from_configuration(configuration)
+    for driver in ("backtest", "paper"):
+        runs = []
+        for kind in (Scripted, Tampering):
+            if driver == "backtest":
+                runs.append(backtest(golden_strategy(kind), Market.from_rows(golden_rows(), HORIZON),
+                                     window, costs))
+            else:
+                runs.append(paper_run(golden_strategy(kind), golden_rows(), window, costs))
+        clean, tampered = runs
+        for name in ("orders", "fills", "lapses", "accruals", "marks", "skips", "returns"):
+            if getattr(clean, name) != getattr(tampered, name):
+                raise AssertionError(f"{driver}: tampering changed the run's {name}")
+    if Tampering.attempts == 0:
+        raise AssertionError("no decision was taken, so nothing was tried")
+    return tampered.returns
+'''
+
+
+@pytest.mark.parametrize("routes", ["view", "history"])
+def test_nothing_a_strategy_does_to_what_it_is_lent_changes_the_run(routes, code_root, tmp_path):
+    """Security review of PR 61, the route stated after round 2: ``Tamper.reach(view)``,
+    a method called through its class with the view as ``self``, reached the live book
+    through ``self._book``. A ``BookView`` is now a snapshot holding immutable values
+    and no reference to the book, and a strategy gets its own history while the engine
+    keeps the one it builds the orders from. Every route below, the exact probe among
+    them, leaves the orders, fills, lapses, accruals, marks, skips and returns of both
+    drivers as they are without it, and the returns are the golden ones."""
+    from test_sim_engine import RUNNER_STRATEGY
+
+    configuration = {
+        "window": {"first_return_day": "2021-03-01", "last_return_day": "2021-03-03", "days": 3},
+        "costs": {"fee_bps_per_side": 10, "slippage_bps_per_side": 2},
+        "routes": routes,
+    }
+    result = run_in_runner(code_root, tmp_path, RUNNER_STRATEGY + TAMPERING, configuration,
+                           function="run_tampered")
+    assert result["ok"], result
+    golden = json.loads((Path(__file__).parent / "fixtures" / "sim-golden.json").read_text())
+    for (_, got), want in zip(result["returns"], golden["weights"]["expected"]["returns"],
+                              strict=True):
+        assert got == pytest.approx(want, rel=1e-12)
+
+
+def test_a_book_view_holds_no_reference_to_the_live_book():
+    from norse_research.sim import Book, BookView, Instrument
+
+    book = Book(cash=0.25)
+    book.spot["AAAUSDT"] = 2.0
+    book.trade("perp", "BTCUSDT", -1, 0.5, 100.0, 0.0)
+    book.carry["BTCUSDT"] = "BTCUSDT"
+    marks = {("spot", "AAAUSDT"): 10.0}
+    view = BookView.of(book, marks, 20.25)
+    assert (view.cash, view.equity, view.held()) == (0.25, 20.25, ["AAAUSDT"])
+    assert view.quantity("spot", "AAAUSDT") == 2.0 and view.quantity("perp", "BTCUSDT") == -0.5
+    assert view.weight("AAAUSDT") == 2.0 * 10.0 / 20.25 and view.in_carry("BTCUSDT")
+    book.cash, book.spot["AAAUSDT"], marks[("spot", "AAAUSDT")] = 9.0, 7.0, 99.0
+    assert (view.cash, view.quantity("spot", "AAAUSDT"), view.weight("AAAUSDT")) == (
+        0.25, 2.0, 2.0 * 10.0 / 20.25)
+    values = [view.cash, view.equity, view._spot, view._perp, view._carry, view._marks]
+    assert not any(v is book or v is book.spot or v is book.perp or v is book.carry
+                   or v is marks for v in values)
+    assert {type(v).__name__ for v in values} == {"float", "mappingproxy", "frozenset"}
+    assert Instrument("X", 0) not in view._carry  # a frozenset, not a live dict
