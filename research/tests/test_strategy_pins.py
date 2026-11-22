@@ -89,8 +89,11 @@ def test_the_genesis_step_accepts_the_pins_and_each_id_resolves_as_registered(
     clear_overrides(monkeypatch)
     world = World(tmp_path, genesis=False)
     try:
+        # The world's registration is synthetic, so the genesis step is told its hashes
+        # (gitledger.PREREGISTRATION_SHA256 pins the real one; security review of #65, L-9).
         write_genesis(world.ledger, tree_paths=TREE_PATHS, strategies=PINS,
-                      key_record=(world.prereg_commit, KEY_RECORD))
+                      key_record=(world.prereg_commit, KEY_RECORD),
+                      registration_sha256=world.registration_sha256)
         genesis = world.ledger.verify().snapshot.genesis
         assert genesis.body["strategies"] == PINS
         head = git(world.repo, "rev-parse", "HEAD")
