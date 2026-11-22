@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass as _dataclass
 from datetime import UTC, datetime
 from itertools import pairwise
 
@@ -275,7 +275,7 @@ class RowsSource(FillSource):
         return list(series.rows[lo:hi])
 
 
-@dataclass(frozen=True)
+@_dataclass(frozen=True)
 class Span(metaclass=EngineClass):
     """The times of the first and last row of one archived run of a series, as the
     runner's ``DataView.coverage`` reports them from the committed manifests' metadata.

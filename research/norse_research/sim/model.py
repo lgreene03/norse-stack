@@ -7,7 +7,8 @@ are integer milliseconds since the epoch, UTC, as the loader returns them.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass as _dataclass
+from dataclasses import field as _field
 from datetime import UTC, date, datetime, timedelta
 
 from ..formats import DatasetSpec, EngineClass, read_only
@@ -62,7 +63,7 @@ def day_ms(day: str) -> int:
 # --- the window (section 3) -------------------------------------------------------------
 
 
-@dataclass(frozen=True)
+@_dataclass(frozen=True)
 class Window(metaclass=EngineClass):
     """The return days of the window being run, from the resolved configuration.
 
@@ -124,7 +125,7 @@ def decision_step(interval: str) -> int:
 # --- costs (section 5, Costs; section 8, Cost sensitivity) ------------------------------
 
 
-@dataclass(frozen=True)
+@_dataclass(frozen=True)
 class Costs(metaclass=EngineClass):
     """Section 5: "the execution price is the reference price moved against the order
     by SlippageBps ... The fee is 10 bps of the traded notional at the execution price."
@@ -161,7 +162,7 @@ class Costs(metaclass=EngineClass):
 # --- instruments (section 4) ------------------------------------------------------------
 
 
-@dataclass(frozen=True, order=True)
+@_dataclass(frozen=True, order=True)
 class Instrument(metaclass=EngineClass):
     """Section 4: "An instrument is a maximal run of consecutive daily bars of one spot
     symbol in the pinned archive." It is named by its symbol and the open of its first
@@ -174,7 +175,7 @@ class Instrument(metaclass=EngineClass):
 # --- what a strategy returns ------------------------------------------------------------
 
 
-@dataclass(frozen=True)
+@_dataclass(frozen=True)
 class CarryTarget(metaclass=EngineClass):
     """Section 7: one coin's carry position, spot long and its perpetual short in equal
     quantity. ``fraction`` above zero holds the coin in carry, opening it at that
@@ -186,7 +187,7 @@ class CarryTarget(metaclass=EngineClass):
     fraction: float
 
 
-@dataclass(frozen=True)
+@_dataclass(frozen=True)
 class Decision(metaclass=EngineClass):
     """A strategy's answer at one decision time.
 
@@ -223,7 +224,7 @@ class Decision(metaclass=EngineClass):
 # --- what the engine emits --------------------------------------------------------------
 
 
-@dataclass(frozen=True)
+@_dataclass(frozen=True)
 class Order(metaclass=EngineClass):
     """One leg of an order, as decided; its quantity is fixed only at the fill.
 
@@ -249,7 +250,7 @@ class Order(metaclass=EngineClass):
         return (self.market, self.symbol)
 
 
-@dataclass(frozen=True)
+@_dataclass(frozen=True)
 class Fill(metaclass=EngineClass):
     """A change of position. ``kind`` is "fill" for an order filled on a 15-minute bar
     (section 5) and "halt" for section 4's close of an instrument that stopped
@@ -266,10 +267,10 @@ class Fill(metaclass=EngineClass):
     quantity: float
     fee: float
     scale: float  # the cash scaling of section 6, Orders; 1.0 when it did not bind
-    order: Order | None = field(default=None, compare=True)
+    order: Order | None = _field(default=None, compare=True)
 
 
-@dataclass(frozen=True)
+@_dataclass(frozen=True)
 class Lapse(metaclass=EngineClass):
     """Section 5: an order no bar with volume filled before its deadline."""
 
@@ -277,7 +278,7 @@ class Lapse(metaclass=EngineClass):
     at: int
 
 
-@dataclass(frozen=True)
+@_dataclass(frozen=True)
 class Accrual(metaclass=EngineClass):
     """Section 5, Funding: one settlement on the perpetual quantity held at its time."""
 
@@ -289,7 +290,7 @@ class Accrual(metaclass=EngineClass):
     amount: float  # the cash the book received (negative when it paid)
 
 
-@dataclass(frozen=True)
+@_dataclass(frozen=True)
 class Skip(metaclass=EngineClass):
     """Section 5, Gaps item 2: a four-hour decision skipped for a missing bar."""
 

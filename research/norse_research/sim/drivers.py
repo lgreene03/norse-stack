@@ -27,7 +27,8 @@ from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass as _dataclass
+from dataclasses import field as _field
 from heapq import heappop, heappush
 from itertools import count
 
@@ -109,7 +110,7 @@ def check_outage(witnesses: list[Series | None], before: int) -> None:
         raise SimulationError(outage_message(early[0]))
 
 
-@dataclass(frozen=True, slots=True, eq=False)
+@_dataclass(frozen=True, slots=True, eq=False)
 class BookView(metaclass=EngineClass):
     """The book as a strategy may see it at a decision: a snapshot taken then, marked
     then. It holds only immutable values, numbers, read-only mappings and a frozenset,
@@ -154,18 +155,18 @@ class BookView(metaclass=EngineClass):
         return sorted(self._spot)
 
 
-@dataclass
+@_dataclass
 class RunResult(metaclass=EngineClass):
     """Everything a run produced. ``returns`` is what the runner hands back to the
     harness: one (day, return) per day of the window (section 3)."""
 
-    returns: list[tuple[str, float]] = field(default_factory=list)
-    marks: list[tuple[int, float]] = field(default_factory=list)
-    orders: list[Order] = field(default_factory=list)
-    fills: list[Fill] = field(default_factory=list)
-    lapses: list[Lapse] = field(default_factory=list)
-    accruals: list[Accrual] = field(default_factory=list)
-    skips: list[Skip] = field(default_factory=list)
+    returns: list[tuple[str, float]] = _field(default_factory=list)
+    marks: list[tuple[int, float]] = _field(default_factory=list)
+    orders: list[Order] = _field(default_factory=list)
+    fills: list[Fill] = _field(default_factory=list)
+    lapses: list[Lapse] = _field(default_factory=list)
+    accruals: list[Accrual] = _field(default_factory=list)
+    skips: list[Skip] = _field(default_factory=list)
 
 
 class _Run(metaclass=EngineClass):
@@ -371,7 +372,7 @@ def run_backtest(strategy, configuration: Mapping, market: Market) -> list[tuple
 # --- paper trading ----------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
+@_dataclass(frozen=True)
 class BarEvent(metaclass=EngineClass):
     """A bar, delivered at its close."""
 
@@ -383,7 +384,7 @@ class BarEvent(metaclass=EngineClass):
         return (self.row.open_time + step_of(self.series), FILL, self.series)
 
 
-@dataclass(frozen=True)
+@_dataclass(frozen=True)
 class SettlementEvent(metaclass=EngineClass):
     """A funding settlement, delivered when section 5 counts it known: 60 seconds
     before its ``calc_time``."""
@@ -396,7 +397,7 @@ class SettlementEvent(metaclass=EngineClass):
         return (available_at(self.row, None), DATA, self.series)
 
 
-@dataclass(frozen=True)
+@_dataclass(frozen=True)
 class InstrumentEnded(metaclass=EngineClass):
     """Notice that an instrument stopped trading at the close of its last daily bar.
     Section 4's backtest learns it by looking one bar ahead; a live feed learns it from
@@ -411,7 +412,7 @@ class InstrumentEnded(metaclass=EngineClass):
         return (self.last_open + DAY_MS, NOTICE, self.symbol)
 
 
-@dataclass(frozen=True)
+@_dataclass(frozen=True)
 class Tick(metaclass=EngineClass):
     """The clock reaching a mark or decision time, after every row known by then."""
 

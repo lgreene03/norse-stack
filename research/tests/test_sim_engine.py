@@ -213,6 +213,13 @@ def test_the_engine_imports_nothing_a_strategy_may_not():
         # The engine's own classes build on formats.Frozen and EngineClass; the rule
         # against subclassing a class from this package is about strategies (E1).
         problems = [p for p in problems if "imported from this package" not in p]
+        # The engine declares __all__ and __slots__ and binds dataclass and field under
+        # private names; the rules against those names keep strategies from compiling
+        # text (security review round 5, B-H1), and test_strategy_reach.py shows the
+        # engine hands neither out.
+        problems = [p for p in problems
+                    if not p.endswith((": name __all__", ": name __slots__",
+                                       ": import of dataclass", ": import of field"))]
         assert problems == [], path.name
     universe_imports = disallowed_imports((PACKAGE / "universe.py").read_text(),
                                           "norse_research.universe")

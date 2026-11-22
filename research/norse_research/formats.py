@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from abc import ABCMeta as _ABCMeta
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass as _dataclass
 from io import BytesIO as _BytesIO
 from itertools import pairwise
 from types import MappingProxyType as _MappingProxyType
@@ -169,7 +169,7 @@ class DataIntegrityError(ValueError, metaclass=EngineClass):
     """A file's contents break the format or the time grid it must follow."""
 
 
-@dataclass(frozen=True)
+@_dataclass(frozen=True)
 class DatasetSpec(metaclass=EngineClass):
     """One archive series: a market, a kind, a symbol and (for bars) an interval."""
 
@@ -281,7 +281,7 @@ class Funding(
     __slots__ = ()
 
 
-@dataclass(frozen=True)
+@_dataclass(frozen=True)
 class Gap(metaclass=EngineClass):
     """Missing rows between two present ones (times in ms since the epoch, UTC)."""
 
