@@ -5,9 +5,9 @@ It renders a dark trading console — live trading (equity curve, signed open
 positions, fills feed), the **alpha factory** (composite score + per-alpha
 contribution / confidence / IC), **portfolio construction** (dollar-neutral
 target weights, factor exposures, risk contributions), the **walk-forward /
-PBO edge verdict**, plus two research/ops panels — the **research gateway**
+PBO edge verdict**, plus two research/ops panels, the **research gateway**
 (earlier walk-forward runs, read-only) and **execution TCA** (Forseti
-transaction-cost analysis) — and updates itself from the live services every 3s.
+transaction-cost analysis), and updates itself from the live services every 3s.
 The feature-store (Mimir) and market-regime (Heimdall) panels, and the header's
 regime tile, were removed with those services by G2.6 on 2026-11-22
 ([docs/CONTAINERS.md](../docs/CONTAINERS.md)).
