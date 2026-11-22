@@ -124,7 +124,7 @@ Bragi complements Odin by providing **trade explainability** -- for any given tr
 
 **How Norse Stack does it.** Huginn-AI uses **XGBoost**, a gradient-boosted decision tree algorithm. XGBoost is popular in quantitative finance because it handles tabular data well, is relatively interpretable compared to deep learning, and is resistant to overfitting when properly regularized. Huginn-AI's output becomes signal layer 8 -- the ML confidence score -- which feeds into Huginn's strategy logic alongside the other 9 signals. The ML model does not trade on its own; it is one voice among ten, and the strategy engine decides how much weight to give it.
 
-Additionally, Obi-Bridge's signal layer 9 uses **Ollama** (a local LLM runner) to process news sentiment. This is a separate ML application: a large language model reads news headlines and classifies them as bullish, bearish, or neutral for a given asset.
+Obi-Bridge's signal layer 9 once used **Ollama** (a local LLM runner) to classify news headlines as bullish, bearish, or neutral for a given asset. The service behind it, news-sentinel, was stopped on 2026-11-21 and retired by goal G2.6 because its two news sources' terms bar automated access and AI use (DATA_LICENCES.md, finding 1), so layer 9 now reads 0.
 
 ---
 

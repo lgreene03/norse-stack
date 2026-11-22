@@ -24,7 +24,7 @@ those repos. Everything under `services/`, `monitoring/`, `docs/`, `scripts/`,
 
 | Item | Status | Evidence / Gap |
 |------|--------|----------------|
-| **Panic / exception recovery on consume loops** | DONE | Python consumers isolate per-record failures rather than crashing the loop — `_decode_or_dlq` in [`services/huginn-ai/huginn_ai.py`](../services/huginn-ai/huginn_ai.py) wraps every decode; analytics paths in [`services/odin/odin.py`](../services/odin/odin.py) and `services/news-sentinel/sentinel.py` catch and continue. Go services (`huginn`, `sleipnir`) run the strategy/execution loops with their own recovery (sibling repos). |
+| **Panic / exception recovery on consume loops** | DONE | Python consumers isolate per-record failures rather than crashing the loop — `_decode_or_dlq` in [`services/huginn-ai/huginn_ai.py`](../services/huginn-ai/huginn_ai.py) wraps every decode; analytics paths in [`services/odin/odin.py`](../services/odin/odin.py) catch and continue. Go services (`huginn`, `sleipnir`) run the strategy/execution loops with their own recovery (sibling repos). |
 | **At-least-once delivery + idempotent consumers** | DONE | Kafka consumers read from earliest offset and **dedup on `execution_id`** (composite-key fallback when blank) — see dedup logic in [`services/huginn-ai/huginn_ai.py`](../services/huginn-ai/huginn_ai.py) (~L434, L510) and the `*_fills_duplicate_total` counters surfaced in alerts. Redelivery is expected and absorbed, not assumed-away. |
 | **Container healthchecks (liveness)** | DONE | Every long-running service in [`docker-compose.yml`](../docker-compose.yml) has a `healthcheck` keyed to **liveness** (`/healthz`), deliberately *not* readiness, with a comment explaining why gating on `/readyz` would flap an idle-but-healthy gateway (see `huginn`/`sleipnir` blocks). `obi-bridge` (no HTTP server) probes its worker via `/proc` cmdline scan. |
 | **Readiness vs liveness split** | DONE | `/healthz` (process up) is distinct from `/readyz` (consumer-loop progress) so orchestration and alerting can use the right signal — documented inline in the compose healthchecks and used by the `TargetDown` alert. |
@@ -71,7 +71,7 @@ those repos. Everything under `services/`, `monitoring/`, `docs/`, `scripts/`,
 
 | Item | Status | Evidence / Gap |
 |------|--------|----------------|
-| **Deduplication** | DONE | Consumers dedup on `execution_id` with a composite-key fallback — [`services/huginn-ai/huginn_ai.py`](../services/huginn-ai/huginn_ai.py) (~L434/L510). News-sentinel dedups headlines by title hash (`sentinel.py`). Duplicate-fill counters drive the `*DuplicateFills` alerts. |
+| **Deduplication** | DONE | Consumers dedup on `execution_id` with a composite-key fallback — [`services/huginn-ai/huginn_ai.py`](../services/huginn-ai/huginn_ai.py) (~L434/L510). Duplicate-fill counters drive the `*DuplicateFills` alerts. |
 | **Poison-message DLQ** | DONE | Undecodable records are isolated, counted, and **republished to a per-topic `.dlq`** (`FEATURES_DLQ_TOPIC`, `FILLS_DLQ_TOPIC`) by `_decode_or_dlq` — [`services/huginn-ai/huginn_ai.py`](../services/huginn-ai/huginn_ai.py) (~L1149). One poison record can't stall the consumer. |
 | **Schema + provenance tagging** | DONE | Models carry a stable `feature_schema_hash` and a best-effort git SHA; a persisted model is **rejected on load if its schema hash doesn't match** the current schema — [`services/huginn-ai/huginn_ai.py`](../services/huginn-ai/huginn_ai.py) (`_feature_schema_hash`, ~L260; load-guard ~L881). |
 | **Checkpoint / state restore** | DONE | Trained models persist to disk and reload on boot when schema-compatible; Huginn strategy state persists with a `huginn_strategy_state_persist_errors_total` counter and a dedicated alert for persistence failure. |
@@ -89,7 +89,7 @@ those repos. Everything under `services/`, `monitoring/`, `docs/`, `scripts/`,
 | **Determinism / parity tests** | DONE | `parity_test.go` (above) pins replay determinism. |
 | **Integration / contract tests** | PARTIAL | `services/obi-bridge/tests/test_contract.py` pins the inter-service message contract; a gated **end-to-end smoke** (`scripts/smoke.sh`) boots the full stack. The e2e job is **nightly/manual + `continue-on-error`** because multi-repo builds and registry pulls are flaky in CI — so PR signal stays green, e2e is a separate gate. |
 | **CI matrix** | DONE | Per-service matrix in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (lint always; tests where wired) plus compose-config validation, shellcheck, and monitoring-config validation. |
-| **Coverage reporting** | DONE | pytest emits term/xml/json coverage, a self-contained SVG badge, a step-summary line, and uploads to Codecov (non-blocking) — [`.github/workflows/ci.yml`](../.github/workflows/ci.yml). **PARTIAL caveat:** `bragi` and `news-sentinel` are **lint-only** (`has_tests: "false"`) until their owning agents add tests — explicitly tracked in the matrix comments. |
+| **Coverage reporting** | DONE | pytest emits term/xml/json coverage, a self-contained SVG badge, a step-summary line, and uploads to Codecov (non-blocking) — [`.github/workflows/ci.yml`](../.github/workflows/ci.yml). Every service in the matrix now runs its unit tests (`has_tests: "true"`); news-sentinel left the matrix when it was retired (G2.6). |
 
 ---
 

@@ -26,8 +26,8 @@ Apache-2.0, so anything committed to them is published.
 | Binance live API (stream.binance.com, api.binance.com, fapi.binance.com) | muninn recorder; obi-bridge; huginn `cmd/fetcher` | Binance Terms of Use (live page not fetchable; UK version of 27 Jul 2023 read) | Needs an account; out of scope (D3) | Not licensed | Recordings kept local; derived files published (finding 4) |
 | OKX public WebSocket, ws.okx.com | muninn recorder | OKX API Agreement (last updated 28 Jul 2026) | Own non-commercial trading only, with an account | Forbidden (9.4(a)) | Recordings kept local; fixtures published in muninn (findings 5, 6) |
 | Fear and Greed Index, api.alternative.me | obi-bridge; huginn-ai | alternative.me usage rules (undated) | Not addressed | Allowed with prominent attribution | Used internally (finding 9) |
-| CoinDesk RSS | news-sentinel | CoinDesk Terms of Use (effective 30 Oct 2026) | Not addressed | Forbidden | Automated access barred (finding 1) |
-| Cointelegraph RSS | news-sentinel | Cointelegraph terms (undated) | Not addressed | Forbidden | AI use needs consent (finding 1) |
+| CoinDesk RSS | news-sentinel, retired by G2.6 | CoinDesk Terms of Use (effective 30 Oct 2026) | Not addressed | Forbidden | Automated access barred; not read since 2026-11-21 (finding 1) |
+| Cointelegraph RSS | news-sentinel, retired by G2.6 | Cointelegraph terms (undated) | Not addressed | Forbidden | AI use needs consent; not read since 2026-11-21 (finding 1) |
 | Coinbase feed; Binance spot testnet | muninn adapter (disabled); sleipnir backend (not configured) | Not reviewed | | | Review before enabling (finding 10) |
 
 ## Binance public data (data.binance.vision)
@@ -178,10 +178,12 @@ index, so nothing is owed beyond attributing it wherever it is shown (finding 9)
 
 ## News feeds (CoinDesk and Cointelegraph)
 
-news-sentinel polls `https://www.coindesk.com/arc/outboundfeeds/rss/` and
-`https://cointelegraph.com/rss` every 300 seconds, classifies each headline's sentiment
-with a local LLM (Ollama), serves the scores on 127.0.0.1:8089, and obi-bridge adds them to
-`features.obi.v1`. It runs by default in `docker-compose.yml`.
+news-sentinel polled `https://www.coindesk.com/arc/outboundfeeds/rss/` and
+`https://cointelegraph.com/rss` every 300 seconds, classified each headline's sentiment
+with a local LLM (Ollama), served the scores on 127.0.0.1:8089, and obi-bridge added them to
+`features.obi.v1`. It ran by default in `docker-compose.yml` until the owner stopped it on
+2026-11-21, and G2.6 removes the service and its code (docs/CONTAINERS.md), so neither
+feed is read any more and obi-bridge's `newsSentiment` field reads 0.0.
 
 The [CoinDesk Terms of Use](https://www.coindesk.com/terms) (effective 30 October 2026,
 read on 2026-11-21) license only viewing, playing, printing and downloading the content,
@@ -253,7 +255,10 @@ technical change in the repository named.
    service runs by default, every 300 seconds, with no consent on record. The owner should
    decide whether to remove the two feeds (or news-sentinel), seek consent, or substitute
    sources whose terms allow automated and AI use; the change itself belongs in
-   `services/news-sentinel/sentinel.py` and `docker-compose.yml`.
+   `services/news-sentinel/sentinel.py` and `docker-compose.yml`. Resolved: the owner
+   stopped the service on 2026-11-21, and G2.6 retires it, removing the service from
+   `docker-compose.yml` and `services/news-sentinel/` from the repository
+   (docs/CONTAINERS.md).
 2. **Medium, likely.** Binance Vision data, and files derived from it, are published in
    this Apache-2.0 repository without the CC BY-NC-SA 4.0 licence that clause 4.5 of the
    Vision terms requires of a redistributed derivative work: the unmodified archive files
