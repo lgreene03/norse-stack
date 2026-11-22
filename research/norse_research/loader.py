@@ -45,7 +45,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from .formats import DataIntegrityError, DatasetSpec, Gap
+from .formats import _ENGINE_TOKEN, DataIntegrityError, DatasetSpec, Gap
 from .manifest import Manifest, ManifestError, gap_record, on_grid_and_gaps, read_series_file
 from .periods import (
     DEVELOPMENT,
@@ -71,7 +71,7 @@ class MissingData(LookupError):
     """The requested range runs past the data the manifest pins."""
 
 
-class GapError(DataIntegrityError):
+class GapError(DataIntegrityError, engine=_ENGINE_TOKEN):
     """The requested range contains a gap that the caller has not accepted."""
 
 

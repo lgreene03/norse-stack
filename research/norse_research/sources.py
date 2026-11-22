@@ -88,11 +88,14 @@ FRAME_NAMES = frozenset(
 COMPILING_HELPERS = frozenset(
     {"dataclass", "field", "make_dataclass", "namedtuple", "NamedTuple"}
 )
+# The metaclasses that build a class from three arguments, a namespace the caller writes
+# among them (security review round 5, R5-L1); no strategy needs one.
+CLASS_FACTORIES = frozenset({"EngineClass", "EngineABCMeta", "ABCMeta"})
 FORBIDDEN_NAMES = frozenset(
     {"sys", "modules", "os", "io", "builtins", "importlib", "subprocess", "socket",
      "pathlib", "shutil", "inspect", "attrgetter", "methodcaller", "gc", "ctypes", "mro",
      "update_wrapper", "wraps", "global_enum"}
-) | FRAME_NAMES | COMPILING_HELPERS
+) | FRAME_NAMES | COMPILING_HELPERS | CLASS_FACTORIES
 DECLARED = ("CONFIGURATIONS", "PARAMETERS", "DEFAULTS")
 
 
@@ -135,6 +138,13 @@ def disallowed_imports(
     problems += _engine_tampering(tree, imported)
     problems += _private_reach(tree)
     problems += _class_calls(tree)
+    # No strategy class chooses its metaclass: a function metaclass hands back the class
+    # namespace before the class exists (security review round 5, B-I1).
+    problems += [
+        f"line {node.lineno}: class {node.name} sets a metaclass"
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef) and any(k.arg == "metaclass" for k in node.keywords)
+    ]
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             problems += [

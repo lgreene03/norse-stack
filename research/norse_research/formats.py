@@ -36,11 +36,12 @@ LICENCE = "CC BY-NC-SA 4.0 (Binance public data, data.binance.vision)"
 _engine_sealed = False
 
 
-def _engine_module(name: str) -> bool:
-    """A module of the harness and engine package, not of the strategies loaded into it."""
-    inside = name == "norse_research" or name.startswith("norse_research.")
-    strategy = name == "norse_research.strategies" or name.startswith("norse_research.strategies.")
-    return inside and not strategy
+# What the engine passes, as ``class X(Base, engine=_ENGINE_TOKEN)``, to subclass one of its
+# own classes. An object, not a name: nothing a caller writes can forge it, and no
+# strategy can reach it, since private names, ``__dict__``, frames and the garbage
+# collector are all refused (security review round 5, R5-L1: the rule had trusted the
+# namespace's ``__module__``, a string a three-argument ``EngineClass(...)`` call writes).
+_ENGINE_TOKEN = object()
 
 
 class EngineClass(type):
@@ -50,17 +51,23 @@ class EngineClass(type):
     change a rule for its run while the ledger certifies the registered one.
 
     Only the engine subclasses an engine class, and only before it is sealed: a
-    subclass made in any other module, or made at all in a strategy's run, is refused,
-    whatever name its base is reached by (``K = Costs; class Free(K)``) and however the
-    class is built (a class statement, ``type``, ``__build_class__``)."""
+    subclass is refused unless it is made with the engine's private ``_ENGINE_TOKEN``,
+    and refused in any case once the engine is sealed, whatever name its base is reached
+    by (``K = Costs; class Free(K)``), however the class is built (a class statement,
+    ``type``, ``__build_class__``, a three-argument call of this metaclass) and whatever
+    module name its namespace claims. That holds in an unsealed process too: a test, a
+    development backtest or an audit script that imports strategy code."""
 
-    def __new__(mcls, name: str, bases: tuple, namespace: dict, **kwargs):
+    def __new__(mcls, name: str, bases: tuple, namespace: dict, engine=None, **kwargs):
         if any(isinstance(base, EngineClass) for base in bases) and (
-            _engine_sealed or not _engine_module(namespace.get("__module__", ""))
+            _engine_sealed or engine is not _ENGINE_TOKEN
         ):
             raise TypeError(f"{name}: an engine class is subclassed only by the engine itself "
                             "(security review of PR 61)")
         return super().__new__(mcls, name, bases, namespace, **kwargs)
+
+    def __init__(cls, name: str, bases: tuple, namespace: dict, engine=None, **kwargs):
+        super().__init__(name, bases, namespace, **kwargs)
 
     def __setattr__(cls, name: str, value) -> None:
         if _engine_sealed:
@@ -112,7 +119,9 @@ def build(instance: Frozen, **attributes) -> None:
     kind = type(instance)
     own = _OWN_FROZEN.get(kind)
     if own is None:  # once per class: a view is built at every new row count
-        own = _OWN_FROZEN[kind] = issubclass(kind, Frozen) and _engine_module(kind.__module__)
+        # Every Frozen subclass was made with the engine's token (EngineClass), so the
+        # class alone decides; no module name is read.
+        own = _OWN_FROZEN[kind] = issubclass(kind, Frozen)
     if not own:
         raise TypeError(f"build gives attributes to the engine's own frozen objects only, not to "
                         f"a {kind.__name__}")
