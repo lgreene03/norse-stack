@@ -1,8 +1,11 @@
 # Pre-registration of H1 and H2 (G0.7)
 
 **Status: signed by the owner on 2026-11-14; drafted on 2026-11-11 and revised on
-2026-11-13 after review (PR 52). It binds nothing until the commit holding it is tagged
-`prereg-v1` (section 16).** The owner is the only person on this project. The quant, CTPO, technical,
+2026-11-13 after review (PR 52); revised on 2026-11-21 on the owner's instruction to remove
+the ledger freeze (decision D21), and on 2026-11-22 on the owner's decisions to revise V after
+G1.7's calibration and to settle three points from the reviews of that revision (decisions
+D22 to D25), as `prereg-v2`. It binds nothing until the commit holding
+it is tagged (`prereg-v1`, and for this revision `prereg-v2`; section 16).** The owner is the only person on this project. The quant, CTPO, technical,
 security and interface roles named in this document are AI agents the owner runs, defined
 in [.claude/agents](../.claude/agents); the quant role drafted this document and the CTPO
 role reviewed it. Neither is an independent person, and neither signs: the owner alone
@@ -20,7 +23,7 @@ the single holdout candidate, and what each criterion implies in net Sharpe.
 **The machine-readable form governs.** [preregistration.json](preregistration.json)
 holds the same rules in a form the ledger (G1.5) and the seal (G1.6) load and hash. If it
 and this prose ever disagree, the JSON file governs. The genesis entry of the trial ledger
-records the SHA-256 of both files and the `prereg-v1` commit.
+records the SHA-256 of both files and the commit of the `prereg-*` tag it names.
 
 ## Contents
 
@@ -68,6 +71,17 @@ names exist. They are defined by what a token is, apply identically to both peri
 change nothing in development, and the reasoning is recorded in decision D14 so a reader
 can judge it. The arithmetic in section 12 uses only synthetic numbers and stated
 assumptions.
+
+**Disclosure about a committed fixture inside the holdout (added in `prereg-v2`).** The
+G2.5 manifest audit of 2026-11-21 ([#63](https://github.com/lgreene03/norse-stack/pull/63))
+found that huginn's committed walk-forward fixture `data/btc_test.jsonl` holds Binance
+BTC data from 2026-05-18, a day inside the holdout window, and that the seal's tests do
+not scan it. The file predates this pre-registration: it is the fixture of the retired
+OBI strategy, used for that strategy's walk-forward. It is intraday BTC data on that one
+day and holds no daily or four-hour bar of any series H1 or H2 reads beyond what that
+day implies. One row of it was printed during the 2026-11-21 audit, to identify the
+file. The file stays where it is, since huginn's reproduce check depends on it. The
+threat model's T21 residual, that reads outside the harness cannot be refused, covers it.
 
 ## 2. Data and periods
 
@@ -455,10 +469,12 @@ percentile among its hundred controls' Sharpe ratios. A random-sign trend contro
 earns about half the market's drift, so its distribution is not centred on zero; that is
 why it is reported rather than used as a threshold.
 
-**Cost sensitivity.** After the ledger freeze, each hypothesis's candidate (section 11) is
-re-costed at 7.5, 10 and 15 bps a side in total (round trips of 15, 20 and 30 bps, as G2.4
-names them), slippage staying at 2 bps and the fee taking the rest. These runs are
-reported in the tear sheet only. Every gate figure uses 10 bps plus 2 bps a side.
+**Cost sensitivity.** Each hypothesis's candidate (section 11) is re-costed at 7.5, 10 and
+15 bps a side in total (round trips of 15, 20 and 30 bps, as G2.4 names them), slippage
+staying at 2 bps and the fee taking the rest. These runs are allowed once every registered
+configuration of that hypothesis has a selectable run, before or after the unseal (decision
+D21; after it, the candidate is the one chosen on the entries before it), and are outside
+N. They are reported in the tear sheet only. Every gate figure uses 10 bps plus 2 bps a side.
 
 ## 9. What a trial is, how N is counted, and the budget
 
@@ -470,8 +486,10 @@ it resolves to; a run that resolves to no registered configuration is refused, a
 may produce returns outside the registered windows except the holdout run after the
 unseal. This closes threat T18 of the [ledger threat model](research/ledger-threat-model.md).
 
-**N** is the number of trial entries in the frozen ledger, from the genesis entry to the
-freeze tag, across H1, H2 and the reserve. Every trial entry opened counts once, whether
+**N** is the number of trial entries from the genesis entry to the unseal entry, which
+closes development (there is no ledger freeze, decision D21), across H1, H2 and the
+reserve; no trial, benchmark or control run may be opened after the unseal, and the result
+of one opened before it, if written after it, is not read. Every trial entry opened counts once, whether
 the run completes, fails or is aborted; every rerun of a configuration counts again; N is
 never deduplicated by configuration hash, and no statistic takes N from a caller.
 Benchmark, control, sensitivity and holdout entries are outside N. The genesis entry pins
@@ -488,20 +506,20 @@ for reruns; no configuration outside the grids is ever run.
    whatever the earlier results show. Stopping early after a good result would make the
    deflated Sharpe's N too small.
 2. A hypothesis is judged only when every one of its registered configurations has a
-   selectable run. If it has not by the freeze on 2026-12-01, it cannot pass and its
-   entries still count.
+   selectable run. One that never gets there is NOT RUN at the verdict, or FAIL if its own
+   entries and the reserve are exhausted (section 11), and its entries still count.
 3. A rerun requires a recorded defect: what was wrong and the commit that fixes it, written
    in the rerun's entry. A defect is a departure of the code from this registration, or a
    failure to complete; the rerun's entry names the section of this document the code
    departed from, and the fix may only bring the code into line with it. A fix to code
    both hypotheses use (the harness, loaders, fills or costs) reruns every configuration
    already run; a fix confined to one hypothesis's strategy code reruns that hypothesis's
-   configurations already run. Every statistic of section 10 is computed once, at the
-   freeze, from the committed return series with the code at the freeze tag, so a fix to
-   statistics code reruns no trial. Any figure displayed before the freeze (G1.8, G2.1) is
-   provisional and binds nothing.
-4. A configuration's selectable run is its last completed trial entry at the freeze whose
-   returns cover its hypothesis's whole out-of-sample window; the harness runs a grid
+   configurations already run. Every statistic of section 10 is computed on the entries
+   before the unseal entry, from their committed return series, so a fix to statistics code
+   reruns no trial. Any figure displayed before the unseal (G1.8, G2.1) is provisional and
+   binds nothing.
+4. A configuration's selectable run is its last completed trial entry before the unseal
+   whose returns cover its hypothesis's whole out-of-sample window; the harness runs a grid
    configuration only over that whole window. All selectable runs of a hypothesis must come
    from identical git tree hashes of the harness and strategy paths the genesis entry
    lists, as their entries record; a hypothesis whose selectable runs do not is treated as
@@ -539,24 +557,28 @@ and the deflated Sharpe ratio is DSR = PSR(SR0), where
 is the Sharpe ratio the best of N skill-less trials is expected to show (taken as 0 when
 N = 1). N is the ledger's count from section 9.
 
-**V, with no floor.** V is the sample variance (the denominator is one less than the
-number of selectable runs) of the daily Sharpe ratios of every selectable run in the
-ledger, both hypotheses together, each over its own window: the holdout candidate is
-chosen across both, so the deflation charges for the whole family. There is no floor at
-the null variance. If fewer than two selectable runs exist, V = 1/(T − 1) of the
-candidate's window (run rule 2 makes that impossible in practice). The DSR is computed
-with `norse_research.sharpe.deflated_sharpe_ratio(SR, T, γ3, γ4, N, V)`, V from
-`cross_trial_sharpe_variance` over the selectable runs and N from the ledger. This
-supersedes the floor that G1.3 chose (gate-statistics.md, "Decisions made here"), which
-`sharpe.deflated_sharpe` applies as max(1/(T − 1), V) and which also requires one Sharpe
-ratio per trial counted in N; that function must not be used for the gate as it stands.
-The reasons: the grid is fixed here, so near-duplicate trials cannot be added to lower V,
-which is the abuse the floor guards against; for equally correlated trials the paper's V
-with the raw count N reproduces the right expected maximum, whereas a floor would charge
-correlated trials as if they were independent; and both forms keep DEV-1's no-skill pass
-rate below 5% in every case simulated, the floor by a wide margin and the paper's form by
-at least one point (section 12), the paper's keeping more of the power the gate lacks
-(section 13).
+**V, the null variance.** V = 1/(T − 1), with T the number of daily returns of the
+candidate's window: the variance of a Sharpe ratio estimate when the true Sharpe ratio is
+zero. SR0 = √V × E[max Z_N] is then the Sharpe ratio the best of N independent skill-less
+trials is expected to show. Trials whose correlations are non-negative can only show a
+smaller maximum (Slepian's inequality), so the deflation charges for selection at least as
+much as the trials could exploit, whatever their non-negative correlation. (Negatively
+correlated trials can show a slightly larger maximum: by about 1.7% for 30 trials at the
+lowest possible common correlation, −1/29. Strong negative correlation among these grids is
+implausible.) V does not depend on any run's
+result: a real edge in one configuration or one hypothesis does not raise its own bar, and
+neither hypothesis's bar depends on whether the other has selectable runs. DEV-2 uses the
+same V, of the excess series, whose window is the same. The DSR is
+`norse_research.sharpe.deflated_sharpe_ratio(SR, T, γ3, γ4, N, 1/(T − 1))`, with N from
+the ledger and V from `norse_research.sharpe.null_sharpe_variance(T)`, which
+`norse_research.gate.trial_sharpe_variance` returns for every run. This supersedes
+prereg-v1's cross-trial variance, the sample variance of every selectable run's Sharpe
+ratio across both hypotheses with no floor (decision D22). G1.7 showed that it charges a
+real edge as selection noise: SR0 is 0.554 times a single planted edge and 1.065 times an
+edge shared within one hypothesis. Under it, a hypothesis whose configurations share an
+edge, beside one without skill, passed at most 8% of the time at Sharpe ratios of 1 to 2.
+G1.3's `sharpe.deflated_sharpe`, which takes the larger of 1/(T − 1) and a cross-trial
+variance and requires one Sharpe ratio per trial counted in N, is not the gate's function.
 
 Known answers, from the paper's own example and reproduced by G1.3's tests (N = 100, V of
 1/2 in annual terms, an annualised Sharpe of 2.5 over T = 1,250 daily returns at 250 a
@@ -588,7 +610,7 @@ a matrix in which one column has the highest Sharpe ratio in every block gives 0
 which the in-sample best is always the out-of-sample worst gives 1. A PBO over all
 selectable runs of both hypotheses, on their common days, is reported too, but is not a
 criterion: each hypothesis's verdict depends on its own trials, and the choice between two
-passing candidates is charged by the deflated Sharpe's family-wide N and V.
+passing candidates is charged by the deflated Sharpe's family-wide N.
 
 **The criteria.** A hypothesis passes development only if its candidate (section 11) meets
 all five:
@@ -610,9 +632,8 @@ slope of r on r_B, intercept included, over the window (decision D15): H2 holds 
 quantities long and short, so there is no market exposure for it to pass on, and a
 volatility-matched comparison would instead ask it to beat the market's Sharpe ratio
 (section 12). H1's excess is G1.3's `excess_returns(r, volatility_matched(r_B, r))`; H2's
-has no implementation yet (section 15). The DSR of an excess series uses the same N, and V
-computed the same way, with no floor, over every selectable run's excess-return Sharpe
-ratio. Calendar years for DEV-4 are 2018 (from
+has no implementation yet (section 15). The DSR of an excess series uses the same N and
+the same V, 1/(T − 1) of its window. Calendar years for DEV-4 are 2018 (from
 05-01) to 2025 for H1, and 2020 (from 01-08) to 2025 for H2.
 
 **The holdout criterion.** HOLD-1: on the holdout candidate's 304 holdout daily returns,
@@ -634,17 +655,31 @@ percentiles, the 5th and 95th percentiles of the daily Sharpe ratio, annualised 
 square root of 365.
 
 **Calibration.** The gate as registered here, with these windows, a family N of up to 30,
-V across both hypotheses with no floor and per-hypothesis PBO matrices of 8 and 6 columns,
-is what G1.7 must calibrate: no strategy is judged until it passes at most 5% of 1,000
-simulated no-skill ledgers at N = 30 and detects a planted Sharpe of 1.5. Because V has no
-floor, the no-skill ledgers must include families correlated within each hypothesis and
-across the two (the only case where the two forms of V differ, and the one that brings the
-paper's form closest to 5%), and power must be reported for a family whose configurations share one
-edge as well as for a single planted column.
+V the null variance of the candidate's window and per-hypothesis PBO matrices of 8 and 6
+columns, is what G1.7 must calibrate. No strategy is judged until both halves hold, at
+N = 30, in the families of G1.7's study as it stands at
+[#66](https://github.com/lgreene03/norse-stack/pull/66)'s commit c2365ee (seed 20261121,
+1,000 ledgers each), unchanged for the rerun except V and the detection constants; the
+JSON's `gate.calibration` lists them by id. No skill: in every one of its 17 no-skill
+families separately, the gate produces a holdout candidate in at most 50 of 1,000
+simulated ledgers (5%); its two serially correlated families are reported only.
+Detection: in each of the four single-planted families at an annualised Sharpe ratio of
+2.0 (`single-H1-s2-low`, `single-H1-s2-high`, `single-H2-s2-low` and `single-H2-s2-high`),
+the planted hypothesis passes development, its candidate meeting DEV-1 to DEV-5, in more
+than 500 of the 1,000 ledgers; the minimum of the four decides. That metric is the one
+G1.7 committed before its first full run (in #66's 9ac814f), with 2.0 in place of 1.5
+(decision D22). Power at 1.5, at N = 14 and for an edge shared within one hypothesis is
+reported with the same families. The no-skill families include configurations correlated
+within each hypothesis and across the two, where the null variance's charge for
+independent trials is furthest from the trials' own dispersion. If G1.7's full rerun
+under this gate does not meet both halves, `prereg-v2` is still tagged as it stands, the
+gate is not revised again in this iteration, and the iteration closes NOT JUDGED
+(decision D24).
 
 ## 11. The holdout candidate, the single holdout run and the verdict
 
-The candidate is chosen by a mechanical rule over the frozen ledger, so neither a look at
+The candidate is chosen by a mechanical rule over the entries before the unseal entry,
+which closes development (there is no ledger freeze, decision D21), so neither a look at
 development results nor a private look at 2026 can change which configuration is judged
 (threat T22).
 
@@ -662,7 +697,15 @@ development results nor a private look at 2026 can change which configuration is
    password manager, with only its salted hash committed under G1.6). The key record
    (scrypt with n of at least 2^17, r 8, p 1 and a 16-byte salt, threat model T25) is
    pinned in the genesis entry, which is written after G1.6 commits it. The harness
-   refuses an unseal that names any other configuration.
+   refuses an unseal that names any other configuration. The unseal closes development:
+   N, V and the holdout candidate are computed on the entries before it, and no trial,
+   benchmark or control run may be opened after it (decision D21). The result of a run
+   opened before the unseal may still be written after it; replay accepts it and the gate
+   ignores it, since it computes on the entries before the unseal. It comes only once each
+   hypothesis has a selectable run of every registered configuration or has exhausted its
+   own entries and the reserve: item 3 compares the two candidates, so an unseal while the
+   other grid can still run would stop it early, which run rule 1 forbids within a
+   hypothesis. An earlier unseal is refused, and the ledger refuses one written anyway.
 5. **The holdout run** is one simulation of the candidate configuration from the start of
    its development window through 2026-10-31, with positions carried across the boundary
    and the 2025-12 month-end universe taking effect at 2026-01-01 00:00. HOLD-1 reads only
@@ -675,15 +718,48 @@ development results nor a private look at 2026 can change which configuration is
    selectable run plus only commits that touch data loading or the seal, every attempt
    ledgered. No other configuration, and no benchmark, control or sensitivity run, ever
    reads holdout data.
+7. **Only the owner starts holdout runs**, and does so straight after the unseal; no
+   agent, scheduled task or second clone starts one (decision D25). The code does not
+   enforce this. Starting a holdout run needs no key, so an agent could still use up the
+   attempts the seal allows (three, `rules.HOLDOUT_ATTEMPTS`) by killing a run straight
+   after its attempt entry, or by starting one from a second clone while the owner's is
+   running, which closes the owner's attempt as abandoned. The rule is a written one, and a holdout
+   run started by anyone but the owner is an incident.
 
 **The verdict, per hypothesis**, in words:
 
 | Verdict | When |
 |---|---|
+| VOID | for both hypotheses, whenever the trial ledger's hash chain fails verification: the iteration is void and restarts from pre-registration, as its kill criteria say, and nothing the ledger holds stands as evidence either way |
+| NOT JUDGED | for both hypotheses, whenever the gate did not pass its calibration under G1.7 (section 10, "Calibration"), a calibration that never completed included: no strategy is judged, and no development or holdout figure is reported as evidence |
 | PASS | it passes development, its candidate was the holdout candidate, and HOLD-1 holds |
-| PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT | it passes development, but the other hypothesis's candidate was the holdout candidate |
+| PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT | it passes development, but the other hypothesis's candidate was the holdout candidate; or it passes development, but no unseal can happen because the other hypothesis's grid is neither complete nor exhausted when the verdict is given, so the holdout stays sealed and the verdict is computed on the ledger at that point (decision D23) |
 | FAIL | otherwise, once every registered configuration has a selectable run; and whenever the hypothesis's own entries and the reserve are exhausted without a pass |
-| NOT RUN | not every registered configuration has a selectable run at the freeze, and the hypothesis's own entries and the reserve are not exhausted; if they are, the verdict is FAIL |
+| NOT RUN | not every registered configuration has a selectable run at the verdict, and the hypothesis's own entries and the reserve are not exhausted; if they are, the verdict is FAIL |
+
+The rows are read in order and the first that holds gives the verdict; VOID and NOT JUDGED
+come from the iteration's kill criteria and replace every other row for both hypotheses.
+PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT comes before FAIL, so a hypothesis that
+passes development is never read as FAIL because the other's unfinished grid kept the
+holdout sealed (decision D23); that other hypothesis is then NOT RUN.
+
+**When the verdict waits.** No verdict is given for either hypothesis while the ledger
+holds an unseal entry whose holdout run has neither returned a result nor used up the runs
+the seal allows, or while a holdout candidate exists, both hypotheses' grids are complete
+or exhausted, and the ledger holds no unseal entry. So a hypothesis whose candidate is the
+holdout candidate, and whose holdout is still to come, is never given FAIL by the table
+above for want of a holdout result. A development pass beside a grid that is neither
+complete nor exhausted does not wait: it is PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT
+(decision D23). This is the publication rule of the verdict texts (docs/verdict).
+
+**What closes development when there is no holdout candidate.** Without a holdout
+candidate there is no unseal. Development then closes once each hypothesis has a
+selectable run of every registered configuration or has exhausted its own entries and the
+reserve, and neither passes development: the verdict is then given as the table says,
+computed on the ledger at that point, and records the ledger entry it was computed at.
+Any later trial entry can only be a rerun with a recorded defect (run rule 3); it changes a
+published verdict only if the defect is recorded and the verdict reissued. This is the
+minimum the verdict needs; no ledger entry marks the point.
 
 ## 12. The net Sharpe each criterion implies
 
@@ -693,11 +769,12 @@ the true Sharpe ratio with even odds of passing. The scripts that produced it re
 market data.
 
 **Base assumptions.** Daily net returns independent and normal (γ3 = 0, γ4 = 3); the
-windows of section 3 (H1 2,802 days, H2 2,185); V equal to 1/T, the dispersion of Sharpe
-estimates among independent skill-less trials (the reading behind NEXT_ITERATION.md's
-earlier figures); 365 days a year. Because V pools runs over both windows, its expectation
-for independent skill-less trials is the mean of 1/(T − 1) over the 14 runs, about 1.12/T
-for H1 and 0.87/T for H2; the sensitivity table shows the marks that implies.
+windows of section 3 (H1 2,802 days, H2 2,185); V equal to 1/(T − 1), the gate's V
+(section 10, decision D22), so the DEV-1 marks below are the gate's actual marks under
+these assumptions; 365 days a year. Until `prereg-v2` these rows were computed with
+V = 1/T, the reading behind NEXT_ITERATION.md's earlier figures. With 1/(T − 1) every
+figure in this section is the same to two decimals but one: H2's four-in-five figure at
+N = 30 moves from 1.86 to 1.87 (1.86498 to 1.86518). The largest change is 0.0002.
 
 | Criterion | H1, N = 10 | N = 20 | N = 30 | H2, N = 10 | N = 20 | N = 30 |
 |---|---|---|---|---|---|---|
@@ -716,9 +793,9 @@ assumed about 5.6 years for every hypothesis.
 
 **How the rows were computed.**
 
-* DEV-1 solves PSR(SR0) = 0.95 for SR, with SR0 = √(1/T) × E[max Z_N], where E[max Z_N] is
+* DEV-1 solves PSR(SR0) = 0.95 for SR, with SR0 = √(1/(T − 1)) × E[max Z_N], where E[max Z_N] is
   1.5746, 1.9007 and 2.0734 at N = 10, 20 and 30. In power terms, the true Sharpe ratio that
-  passes DEV-1 four times in five is 1.47, 1.58 and 1.65 for H1 and 1.66, 1.79 and 1.86 for H2.
+  passes DEV-1 four times in five is 1.47, 1.58 and 1.65 for H1 and 1.66, 1.79 and 1.87 for H2.
 * DEV-2 needs the same figure from the excess series. For H1, a volatility-matched
   excess has Sharpe (S − S_B) / √(2 − 2ρ), where S_B is the benchmark's Sharpe ratio and ρ
   the correlation, so the strategy needs S ≥ S_B + √(2 − 2ρ) × (the DEV-1 figure). The row
@@ -749,30 +826,34 @@ assumed about 5.6 years for every hypothesis.
 
 | Assumption | H1, N = 10 | N = 20 | N = 30 | H2, N = 10 | N = 20 | N = 30 |
 |---|---|---|---|---|---|---|
-| Base: normal, V = 1/T | 1.16 | 1.28 | 1.34 | 1.32 | 1.45 | 1.52 |
-| Pooled null V: the mean of 1/(T − 1) over 8 H1 and 6 H2 runs, as registered | 1.20 | 1.32 | 1.39 | 1.28 | 1.40 | 1.47 |
+| Base: normal, V = 1/(T − 1), as registered | 1.16 | 1.28 | 1.34 | 1.32 | 1.45 | 1.52 |
 | Fat tails: γ3 = −1, γ4 = 10 | 1.18 | 1.30 | 1.37 | 1.34 | 1.48 | 1.55 |
-| Correlated trials: V = 0.25/T (pairwise correlation 0.75) | 0.88 | 0.94 | 0.97 | 0.99 | 1.06 | 1.10 |
-| Dispersed trials: V = 2/T | 1.40 | 1.56 | 1.65 | 1.58 | 1.77 | 1.87 |
-| Correlated and fat-tailed | 0.89 | 0.95 | 0.98 | 1.01 | 1.08 | 1.12 |
+| prereg-v1, superseded: pooled null V, the mean of 1/(T − 1) over 8 H1 and 6 H2 runs | 1.20 | 1.32 | 1.39 | 1.28 | 1.40 | 1.47 |
+| prereg-v1, superseded: correlated trials, V = 0.25/T (pairwise correlation 0.75) | 0.88 | 0.94 | 0.97 | 0.99 | 1.06 | 1.10 |
+| prereg-v1, superseded: dispersed trials, V = 2/T | 1.40 | 1.56 | 1.65 | 1.58 | 1.77 | 1.87 |
+| prereg-v1, superseded: correlated and fat-tailed | 0.89 | 0.95 | 0.98 | 1.01 | 1.08 | 1.12 |
 
 For DEV-5 under fat tails (a Student t with γ4 = 10), the figures rise to 0.52 (H1) and 0.62
-(H2). V is the one input the data sets: trials of one hypothesis are correlated, which
-lowers V and with it the bar, while a family in which H1 and H2 differ sharply raises it.
-Using the empirical V with the raw count N follows the paper: for equally correlated
-trials it reproduces the correct expected maximum, whereas a floor at 1/T would give
+(H2). Under `prereg-v1`, V was the one input the data set, as the rows marked prereg-v1
+show: trials of one hypothesis are correlated, which lowered V and with it the bar, while a
+family in which H1 and H2 differ sharply, or a real edge in one configuration, raised it.
+Since `prereg-v2` (D22) V is the null variance, which no run's result moves. It gives
 correlated trials no credit for their correlation, charging for them as if they were
-independent.
+independent; that is the power the gate gives up to stay safe whatever the correlation
+(section 10).
 
-**Is the gate still safe without the floor?** Yes, on DEV-1 alone. The CTPO simulated
+**Was prereg-v1's gate safe without the floor?** Yes, on DEV-1 alone. The CTPO simulated
 no-skill families shaped like the registered grid (8 columns over 2,802 days and 6 over
 2,185, N of 14 or 30, 20,000 runs each) on 2026-11-13. With H1 and H2 independent and
 correlation within a hypothesis from 0 to 0.95, DEV-1 passed 0.01% to 0.56% of families
 without the floor and 0.01% to 0.09% with it. With the trials also correlated across the
 two hypotheses (within 0.5 to 0.999, across up to the within value), it passed up to 3.5%
 at N = 30 and 4.0% at N = 14 without the floor: below 5% in every case simulated, but not
-by a wide margin. G1.7 calibrates the whole gate on families correlated within and across
-hypotheses (section 10).
+by a wide margin. G1.7 then calibrated that whole gate and found it safe but unable to
+detect a planted Sharpe ratio of 1.5 (section 15, item 24). Under the null variance, the
+quant's reduced check of G1.7's families found false passes in at most 0.14% of no-skill
+ledgers; G1.7's full rerun calibrates the gate as now registered, on families correlated
+within and across hypotheses (section 10).
 
 ## 13. What the gate cannot detect
 
@@ -780,8 +861,19 @@ hypotheses (section 10).
   time in six (1.34 needed, standard error 0.36 a year) and for H2 about one time in ten
   (1.52 needed, standard error 0.41). A strategy worth trading at a Sharpe of 0.7 to 1.0
   would most likely be reported as a fail.
-  A fail is therefore "no edge large enough to detect in 6 to 8 years of daily data", not
-  "no edge".
+  A development FAIL is therefore evidence against a single configuration with a true
+  Sharpe ratio of about 2 or more, which the gate passes about nine times in ten when the
+  benchmark has no drift, and not against an edge as such. Those figures are the quant
+  role's reduced check under the null variance (normal returns, DEV-4 and DEV-5 taken as
+  met), which passed a single planted configuration at 2.0 in 88% to 94% of ledgers and one
+  at 1.5 in 46% to 51%; G1.7's full rerun replaces them. For H1 in a market where
+  buy-and-hold did well, DEV-2 raises the bar: with a benchmark Sharpe ratio of 1.0 and a
+  correlation of 0.7, H1's DEV-2 even-odds mark at N = 30 is about 2.04 (section 12), so a
+  true 2.0 there passes only about half the time. A development FAIL is no evidence against
+  a modest edge, nor against one shared across a hypothesis's configurations, which passes
+  at most about half the time because of DEV-3 (below). A FAIL from HOLD-1, or from a
+  hypothesis's own entries and the reserve running out, says nothing about whether such a
+  configuration exists.
 * **The holdout catches only a gross failure.** Over 304 days, a strategy with a true
   Sharpe of 1.0 shows a positive holdout Sharpe 82% of the time, and one with 1.5, 91%;
   HOLD-1 can reject a strategy that has stopped working, not confirm one that works.
@@ -814,7 +906,10 @@ hypotheses (section 10).
 All are in [DECISIONS.md](DECISIONS.md). D11 to D15 were decided by the owner on
 2026-11-11, on the quant's recommendation; each entry keeps the options that were rejected
 and why. D16 and D17 are the owner's decisions of the same day on the ledger's and the
-seal's protections.
+seal's protections; D21 is the owner's decision of 2026-11-21 that removes the ledger
+freeze, and D22 to D25 the owner's decisions of 2026-11-22: D22 revises V after G1.7,
+and D23 to D25 settle three points the quant and security roles' reviews of `prereg-v2`
+raised (those roles are AI agents; their reviews are advice, not approvals).
 
 | Decision | What it fixes here |
 |---|---|
@@ -827,6 +922,11 @@ seal's protections.
 | D15 | H2's excess return is against a beta-matched buy-and-hold; H1's stays volatility-matched |
 | D16 | rulesets: main cannot be force pushed or deleted and needs the `research` and `validate` checks; `prereg-*` and `ledger-*` tags cannot be moved or deleted |
 | D17 | the holdout files stay off the local mirror until the single unseal, then are fetched again and verified against the frozen holdout manifest |
+| D21 | there is no ledger freeze: the unseal entry closes development, N, V and the holdout candidate are computed on the entries before it, and the unseal comes only once each hypothesis's grid is complete or its budget exhausted, so a hypothesis without a selectable run of every configuration at the unseal is FAIL (its budget is exhausted); NOT RUN arises only at a verdict given before development closes |
+| D22 | V in SR0 is the null variance 1/(T − 1) of the candidate's window, for DEV-1 and DEV-2; the calibration's detection condition is at N = 30, in each of the four single-planted families at an annualised Sharpe ratio of 2.0, the planted hypothesis passing development in more than 500 of 1,000 ledgers; `prereg-v2` is tagged only once G1.7's full rerun under the revised gate has completed and been recorded; the three section 11 clarifications of `prereg-v2` confirmed unchanged |
+| D23 | a hypothesis that passes development while the other's grid is neither complete nor exhausted when the verdict is given is PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT, not FAIL, and the holdout stays sealed (section 11) |
+| D24 | if G1.7's full rerun under the revised gate does not meet section 10's calibration condition, `prereg-v2` is tagged as it stands, the gate is not revised again in this iteration, and the iteration closes NOT JUDGED |
+| D25 | only the owner starts holdout runs, straight after the unseal; no agent, scheduled task or second clone starts one. The code does not enforce it (section 11, item 7) |
 
 ## 15. Where NEXT_ITERATION.md, the register and merged code disagree with this
 
@@ -838,15 +938,16 @@ its JSON file and DECISIONS.md.
 
 **Decisions of the merged G1.3 code and page that this supersedes.**
 
-1. **Medium, confirmed.** The variance V in SR0. G1.3 floors V at the null variance
-   1/(T − 1), and `sharpe.deflated_sharpe` requires one Sharpe ratio per trial counted in
-   N. Here V is the paper's cross-trial variance over the selectable runs, with no floor,
-   computed through `deflated_sharpe_ratio` (section 10). gate-statistics.md's sentence that
-   correlated trials "make it strict rather than lenient" no longer holds: correlated trials
-   lower V, and with it the bar, as the paper intends. Follow-ups: G1.5 calls
-   `deflated_sharpe_ratio` directly with V from the selectable runs, or G1.3's
-   `deflated_sharpe` is changed to take V separately from N; G1.7 calibrates on correlated
-   no-skill families.
+1. **Medium, confirmed; reversed in `prereg-v2` (item 24).** The variance V in SR0. G1.3
+   floors V at the null variance 1/(T − 1), and `sharpe.deflated_sharpe` requires one
+   Sharpe ratio per trial counted in N. `prereg-v1` replaced the floor with the paper's
+   cross-trial variance over the selectable runs, with no floor, and said gate-statistics.md's
+   sentence that correlated trials "make it strict rather than lenient" no longer held.
+   `prereg-v2` removes both the cross-trial V and G1.3's floor (decision D22): V is the null
+   variance alone, which no run's result moves, so correlated trials again make the gate
+   strict rather than lenient (section 10). The gate calls `deflated_sharpe_ratio` directly
+   with `null_sharpe_variance` (G1.5, as revised for D22); G1.3's `deflated_sharpe` is still
+   not the gate's function.
 2. **Medium, confirmed.** PBO columns. G1.3's `cscv` docstring and page say the columns are
    "the N ledger trials"; here they are the hypothesis's selectable runs (section 10). The
    block rule is G1.3's as merged: no row is dropped.
@@ -879,11 +980,13 @@ its JSON file and DECISIONS.md.
    no-skill families correlated within and across hypotheses among the 1,000 ledgers and
    power reported for a family that shares one edge as well as for a single planted column
    (sections 10 and 13). A calibration of a simpler gate would not support the 5%
-   false-pass claim for this one.
+   false-pass claim for this one. Since `prereg-v2`, V is the null variance instead (item
+   24), and G1.7 calibrates that gate on the same families.
 10. **Medium, confirmed.** NEXT_ITERATION.md's kill criteria call an exhausted budget a fail;
     the verdict table says so (section 11), and NOT RUN applies only while budget remains.
 11. **Low, likely.** Sensitivity runs sit outside N, so they must be enforced: follow-up for
-    security and G1.5 to add `test_sensitivity_run_before_the_freeze_is_refused` and
+    security and G1.5 to add `test_sensitivity_run_before_its_hypothesis_is_complete_is_refused`
+    (named for the freeze until decision D21) and
     `test_sensitivity_run_of_a_non_candidate_is_refused`.
 12. **Low, confirmed.** NEXT_ITERATION.md calls benchmark and control runs "recorded but can
     never be selected", G2.1 speaks of "random-sign control runs ... marked unselectable",
@@ -918,6 +1021,38 @@ its JSON file and DECISIONS.md.
 23. **Informational.** The pre-registration was due on 2026-11-07 and is drafted on
     2026-11-11; G2.2 and G2.3 cannot start before it is tagged and G1.7 has passed.
 
+**G1.7's calibration (added in `prereg-v2`).**
+
+24. **Medium, confirmed; changed after the synthetic calibration (decision D22).** G1.7
+    ([#66](https://github.com/lgreene03/norse-stack/pull/66)) calibrated the gate as
+    `prereg-v1` registered it and found it safe but underpowered: no no-skill family passed
+    more than 1.3% of 1,000 ledgers at N = 30, but a single planted configuration at an
+    annualised Sharpe ratio of 1.5 passed development in only 144 to 335 of 1,000, so the
+    detection half of section 10's condition failed, and an edge shared within one
+    hypothesis, beside one without skill, passed at most 8% of the time at Sharpe ratios of
+    1 to 2. The cause is the pooled cross-trial V, which a real edge inflates: SR0 is 0.554
+    times a single planted edge and 1.065 times an edge shared within one hypothesis.
+    `prereg-v2` makes two changes. V is the null variance 1/(T − 1) of the candidate's
+    window, for DEV-1 and DEV-2 (section 10, "V, the null variance"). The detection clause
+    is restated: at N = 30, in each of the four single-planted families at an annualised
+    Sharpe ratio of 2.0, the planted hypothesis must pass development in more than 500 of
+    1,000 ledgers, with power at 1.5, at N = 14 and for a shared edge reported (section 10,
+    "Calibration"). Both
+    were chosen after the synthetic calibration's results were seen and before any trial or
+    genesis entry; no strategy has run, so neither can favour one. The old clause, "detects
+    a planted Sharpe of 1.5" in every family at N = 30, was inconsistent with this document
+    from the start, not merely missed: by section 12's own arithmetic H2's even-odds DEV-1
+    mark at N = 30 is 1.52 even under the null variance, before DEV-2 is applied, so only a V
+    below the null variance could have met it, and that is the unsafe direction. The quant
+    role's reduced check of the revision (normal returns only, DEV-4 and DEV-5 taken as met)
+    found false passes in at most 0.14% of no-skill ledgers, a single 1.5 passing in 46% to
+    51%, a single 2.0 in 88% to 94% and a shared 1.5 in 35% to 48%. The full rerun of every
+    family at 1,000 ledgers under the revised gate is G1.7's, in #66. It runs after this
+    revision merges to main, so the detection clause is committed, with its date, before
+    its full results exist, and before the `prereg-v2` tag, as the owner chose (D22); the
+    tag and then the genesis entry follow it. The register row "V in SR0 can be lowered by disqualifying a hypothesis"
+    (security review L7) is closed by the same change.
+
 ## 16. Change control and signatures
 
 Until the first ledger entry that follows the genesis entry, a change to this document or
@@ -945,13 +1080,22 @@ tag but not creating one, so the first `prereg-v1` created anywhere is permanent
 squash merge would orphan a tag placed on this branch. One GitHub identity is shared by
 the owner and every agent, so neither the signature row nor the tag proves who acted; D18
 records the owner's instruction, and what the tag does prove is that these rules were
-fixed before the ledger's genesis entry.
+fixed before the ledger's genesis entry. The owner instructed in conversation on
+2026-11-21 that the change removing the ledger freeze be tagged `prereg-v2` (D21), as D18
+did for `prereg-v1`. On 2026-11-22 the owner chose the gate revision (D22) on the stated
+terms that the full calibration is rerun before tagging, which extends that instruction to
+the same tag with D22 in it. The lead creates that annotated tag on the commit on main that
+holds this revision, once G1.7's full rerun under it has completed and been recorded. If
+that rerun does not meet section 10's calibration condition, the tag is still created on
+that commit, as the revision stands: the gate is not revised again in this iteration, and
+the iteration closes NOT JUDGED (decision D24).
 
 **Change log.**
 
 | Tag | Date | Reason |
 |---|---|---|
 | `prereg-v1` | 2026-11-14 | first version |
+| `prereg-v2` | 2026-11-21 and 2026-11-22 | the ledger freeze removed; the unseal closes development (D21); section 1 discloses huginn's fixture `data/btc_test.jsonl`, BTC data from 2026-05-18 inside the holdout, found by the G2.5 audit; section 11, from the G3.1 drafting (#64): the unseal waits until each hypothesis's grid is complete or its budget exhausted (no early stopping across hypotheses), what closes development with no holdout candidate (minimal, in prose; no ledger entry marks it), and the verdicts VOID and NOT JUDGED, which the owner confirmed unchanged on 2026-11-22 (D22); section 10, after G1.7's calibration (#66) and before any trial or genesis entry: V is the null variance 1/(T − 1) of the candidate's window for DEV-1 and DEV-2, and the calibration's detection condition is at N = 30, in each of the four single-planted families at an annualised Sharpe ratio of 2.0, the planted hypothesis passing development in more than 500 of 1,000 ledgers (D22), with the consequential edits to sections 12, 13 and 14 and section 15, items 1, 9 and 24; after the quant and security roles' reviews of #65 (AI agent roles, not approvals): section 10's detection clause pinned to N = 30, the four single-planted families at 2.0 and the metric "the planted hypothesis passes development", and its Slepian sentence limited to non-negative correlation; section 12's H2 four-in-five figure at N = 30 corrected to 1.87; section 13's meaning of a FAIL; section 14's D21 row (an incomplete hypothesis at the unseal is FAIL); "no entry may follow the unseal" reworded in sections 9 and 11 (a result of a run opened before it is accepted and ignored); and the owner's decisions of 2026-11-22: a development pass beside an unfinished grid is PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT (D23), a failed calibration rerun means tagging anyway and NOT JUDGED (D24), and only the owner starts holdout runs (D25, section 11, item 7); after the quant role's second review: D24 worded as "not revised again in this iteration", the calibration's families pinned by id to #66 at c2365ee (section 10 and `gate.calibration`), section 11's rule on when the verdict waits, and section 14's D22 row giving the tag's wait for the rerun |
 
 **Signatures.**
 

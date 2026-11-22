@@ -48,11 +48,15 @@ informative only: no trust decision reads the clock, and a test fails if code ou
 * **Result** closes an open entry: the status, a summary, and for a completed run the
   SHA-256 of its committed return series. It repeats the open entry's configuration hash,
   commit, manifest hash and cost basis, so each result entry holds every field G1.5 names.
-* **Unseal** (G1.6) is written at most once, after the freeze anchor, when the owner's
-  passphrase verifies. It names the pre-registration genesis names, the holdout candidate
-  the registered rule selects on the frozen ledger, and the hashes of the holdout manifest
-  and the key record, and reveals the scrypt output the key record commits to; the
-  holdout run follows it. See [holdout-seal.md](holdout-seal.md).
+* **Unseal** (G1.6) is written at most once, when the owner's passphrase verifies, and
+  closes development: there is no ledger freeze (decision D21), so no trial, benchmark or
+  control run may be opened after it, and N, V and the holdout candidate are computed on
+  the entries before it. The result of a run opened before it may still be written after
+  it; replay accepts it and the gate ignores it (security review of #65, L-1). It names the pre-registration genesis names, the holdout candidate
+  the registered rule selects on those entries, the commit the holdout runs at, the hash
+  of the data loading and seal diff the owner accepted since the candidate's run, and the
+  hashes of the holdout manifest and the key record, and reveals the scrypt output the key
+  record commits to; the holdout run follows it. See [holdout-seal.md](holdout-seal.md).
 
 N is the number of open entries of kind `trial`: reruns, failures and runs that never
 finished all count, and nothing is deduplicated by configuration hash (section 9).
@@ -82,7 +86,7 @@ Before it writes anything the harness refuses on any of these:
   outside a short allowlist (identity, dates, the global configuration file, prompts and
   the editor), `PYTHONPATH`, `PYTHONHOME`, `PYTHONSTARTUP`, `PYTHONHASHSEED`,
   `PYTHONUSERBASE` or `PYTHONOPTIMIZE`; an interpreter started with `-O`; a `git` on the
-  path inside the repository. The genesis, tag and freeze commands refuse them too;
+  path inside the repository. The genesis, tag and seal commands refuse them too;
 * a remote that is not the pinned one: its resolved fetch and push URLs must equal the URL
   genesis pins, and no URL rewrite, `receivepack`, `uploadpack`, proxy or SSH command may
   be configured in any scope; `refs/replace/` refs are refused and git runs with
@@ -105,28 +109,31 @@ Before it writes anything the harness refuses on any of these:
 * a run the registered rules forbid: out of registered order; a rerun without its
   recorded defect, or naming a fix commit that the run it repeats already had; a
   benchmark, a control seed or a sensitivity cost run again without a recorded defect;
-  past the budget; a reserve draw without its reason; anything but a candidate's
-  sensitivity run, the unseal or the holdout run after the freeze; a sensitivity run
-  before it.
+  past the budget; a reserve draw without its reason; a trial, benchmark or control after
+  the unseal, which closes development (decision D21); a sensitivity run of anything but
+  its hypothesis's candidate, which exists once every registered configuration of that
+  hypothesis has a selectable run (before or after the unseal; section 8).
 
 It then appends the open entry, under a lock, refusing if the ledger moved since the run
-was admitted or if the freeze was tagged meanwhile, and reads the remote back to confirm it
-holds the entry. If the write, the commit, the push or that read fails, the run is refused
+was admitted (an unseal written meanwhile moves it, and the unseal rule is checked under
+the lock too), and reads the remote back to confirm it holds the entry. If the write, the commit, the push or that read fails, the run is refused
 and nothing of the strategy has run. A strategy that fails or whose process exits is
 ledgered as failed, with the repository, the dataset store, the home folder, any
 `/Volumes/<name>` and every other absolute path removed from its error. Rows from 2018-05-01
 on, the start of the registered out-of-sample windows, load only inside an open ledger
 entry (the REST comparison of G1.1 is the one integrity audit allowed past).
 
-## Verifying, tagging, freezing and the genesis step
+## Verifying, tagging and the genesis step
 
 ```bash
 cd research
 python -m norse_research.gitledger verify    # the chain plus its anchors
 python -m norse_research.gitledger sync      # fast-forward a fresh clone's local ledger
 python -m norse_research.gitledger tag ledger-m1 --message "M1: the gate"
-python -m norse_research.gate freeze --message "M2: the ledger freeze"
 ```
+
+There is no ledger freeze and no freeze command (decision D21, 2026-11-21): the unseal
+entry closes development.
 
 `verify` checks the remote, the chain, that the remote's ledger head is in the local file,
 that the genesis anchor exists and that every `ledger-*` tag on a ledger commit is an
@@ -135,25 +142,26 @@ version of the file along the branch's first-parent history only appended, that 
 committed return series still matches its hash, that `prereg-v1` still points where
 genesis says, that the run rules hold over the whole ledger, that every open entry is
 exactly what the registration resolves it to with the strategy genesis pins, that no
-sensitivity run comes before the freeze and nothing else after it, and that every rerun's
+trial, benchmark or control follows the unseal, that every sensitivity run re-costs its
+hypothesis's candidate on the entries before it (or before the unseal), that the unseal
+comes only once each hypothesis's grid is complete or its own entries and the reserve are
+spent, names the candidate the registered rule selects on the entries before it and records the
+data loading and seal diff from the candidate's commit to its own, and that every rerun's
 fix commit is new since the run it repeats.
 
-The genesis and freeze anchors are named for their content:
-`ledger-genesis-<hash of the first genesis entry>` and `ledger-freeze-<the frozen ledger
-commit>`. A tag on a commit holding no ledger, or a reserved name (`ledger-genesis`,
-`ledger-freeze` and either with any suffix) that does not match its content, is reported
-and ignored, so a stray tag can never take an anchor's place or block the genesis step or
-the freeze. Any other `ledger-*` tag on a ledger commit must sit in the ledger's history,
+The genesis anchor is named for its content: `ledger-genesis-<hash of the first genesis
+entry>`. A tag on a commit holding no ledger, or the reserved name (`ledger-genesis` with
+any suffix) not matching its content, is reported and ignored, so a stray tag can never
+take the anchor's place or block the genesis step. Any other `ledger-*` tag on a ledger commit must sit in the ledger's history,
 because one that does not is the evidence of a rewritten ledger (T10). **Never run `git
 push --tags` in this repository**: it would publish any local `ledger-*` or `prereg-*` tag
 for good.
 
 `tag` creates an annotated tag object and pushes it straight to the remote after full
-verification; it never replaces a tag and refuses the reserved names. The freeze has its
-own command: it refuses while a registered configuration lacks a selectable run, unless
-`--allow-incomplete` states that the freeze leaves it unrun. From the freeze on, the gate
-computes only on the ledger at the freeze anchor, and only on a ledger the gate itself
-issued; a ledger it issued before the freeze stays provisional, so check `frozen`.
+verification; it never replaces a tag and refuses the reserved name. The gate computes
+only on a ledger it issued itself, after anchored verification: the current ledger before
+the unseal, which is provisional, and the entries before the unseal once it exists, so
+check `closed` before relying on a figure.
 
 The genesis entry is written once, after the owner has created the holdout key record with
 `python -m norse_research.seal key-record` and committed it on main (section 11, item 4;
@@ -213,12 +221,13 @@ clone and by `audit.force_push_findings` over GitHub's activity record.
 
 ## Open questions
 
-* **V and a disqualified hypothesis (security review L7, for the quant).** Under run rule
-  4, a hypothesis whose selectable runs come from different trees is treated as having
-  none, and V is then computed over the other hypothesis's runs only. If that lowers V, it
-  lowers the bar for the other hypothesis's candidate. The gate does this exactly as
-  section 10 registers it; whether it should is a registration question, and nothing here
-  changes it.
+* **V and a disqualified hypothesis (security review L7, for the quant). Closed by
+  decision D22.** Under run rule 4, a hypothesis whose selectable runs come from different
+  trees is treated as having none. Under `prereg-v1`, V was then computed over the other
+  hypothesis's runs only, which could lower the bar for the other hypothesis's candidate.
+  Since `prereg-v2`, V is the null variance of the candidate's window, which reads no run,
+  so the other hypothesis's bar is the same either way
+  (`test_one_hypothesis_s_sr0_does_not_change_when_the_other_has_no_selectable_runs`).
 
 ## What this does not cover
 

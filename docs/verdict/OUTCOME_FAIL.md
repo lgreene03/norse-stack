@@ -70,18 +70,20 @@ Binance's public archive alone, every file pinned by hash in the manifests
 Every run was entered in an append-only, hash-chained trial ledger before its result existed,
 and failed runs and reruns count. Development closed on {{DEV_CLOSE_DATE}} at ledger entry
 `{{DEV_CLOSE_ENTRY}}`, with {{N}} trial entries across both hypotheses and the reserve, and
-every deflated Sharpe ratio above is charged for all of them: given that count and how much the
-selectable runs' Sharpe ratios differed, the best of {{N}} trials with no skill would be
-expected to show an annualised Sharpe ratio of about {{SR0}}. Each hypothesis is judged on one
-configuration only, its candidate, the one with the highest development deflated Sharpe ratio,
-so no search of its grid can find one that happens to clear every criterion. Before any
-strategy was judged, the gate was calibrated on simulated ledgers: it passed
-{{CAL_NOSKILL_PASS_RATE}} of 1,000 ledgers with no skill at N = 30, against a limit of 5%. Its
-power at a planted net Sharpe ratio of 1.5, the share of such simulated families it passed, was
-{{CAL_POWER_H1_SINGLE}} for H1 and {{CAL_POWER_H2_SINGLE}} for H2 when one configuration
-carries the edge, and {{CAL_POWER_H1_SHARED}} and {{CAL_POWER_H2_SHARED}} when every
-configuration shares it; the [calibration report]({{CAL_REPORT}}) gives the rest, the figures
-at 1.0 and 2.0 included. The holdout, 2026-01-01 to 2026-10-31, was sealed in code, its files
+every deflated Sharpe ratio above is charged for all of them: given that count and the length
+of each window, the best of {{N}} independent trials with no skill would be expected to show an
+annualised Sharpe ratio of about {{H1_SR0}} over H1's window and {{H2_SR0}} over H2's. Each
+hypothesis is judged on one configuration only, its candidate, the one with the highest
+development deflated Sharpe ratio, so no search of its grid can find one that happens to clear
+every criterion. Before any strategy was judged, the gate was calibrated on simulated ledgers:
+in its worst family of ledgers with no skill it passed {{CAL_NOSKILL_PASS_RATE}} of 1,000 at
+N = 30, against a limit of 5% in every family. With one configuration carrying a planted net
+Sharpe ratio of 2.0, the planted hypothesis passed development in {{CAL_DETECTION_H1}} of the
+ledgers for H1 and {{CAL_DETECTION_H2}} for H2, against a bar of more than half in each such
+family. At a planted 1.5 the share was {{CAL_POWER_H1_SINGLE}} for H1 and
+{{CAL_POWER_H2_SINGLE}} for H2 when one configuration carries the edge, and
+{{CAL_POWER_H1_SHARED}} and {{CAL_POWER_H2_SHARED}} when every configuration shares it; the
+[calibration report]({{CAL_REPORT}}) gives the rest, the figures at 1.0 included. The holdout, 2026-01-01 to 2026-10-31, was sealed in code, its files
 kept off disk, and could be opened once, with the owner's key, for the single candidate a
 mechanical rule selects.
 
@@ -93,9 +95,12 @@ it was the holdout candidate (the higher development deflated Sharpe ratio of th
 that passed development, compared unrounded, ties going to H1), and on the holdout its Sharpe
 ratio was above zero and no more than 1.645 standard errors below its development estimate
 (HOLD-1). **PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT**: its candidate met all five
-development criteria, but the other hypothesis's candidate ranked higher and took the holdout.
-It is not a pass, and under this registration it can never be tested or become one, because the
-holdout is open to one candidate only. **FAIL**: its candidate missed at least one development
+development criteria, but either the other hypothesis's candidate ranked higher and took the
+holdout, or the other hypothesis's grid was neither complete nor out of budget when the verdict
+was given, so no unseal could happen and the holdout stayed sealed (decision D23). It is not a
+pass, it was not tested on the holdout in this iteration, and it cannot become one in it, because
+the holdout opens only once both grids are complete or exhausted, and then to one candidate
+only. **FAIL**: its candidate missed at least one development
 criterion; or it was the holdout candidate and HOLD-1 did not hold, which includes a holdout
 run that never returned a result; or its own trial entries and the reserve ran out before it
 could pass. **NOT RUN**: when development closed, not every one of its registered

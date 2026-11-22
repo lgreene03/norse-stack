@@ -24,10 +24,10 @@ not excess: a normal distribution has 3. The papers' formulas use that conventio
 Where N comes from. ``n_trials`` and the trial Sharpe ratios are parameters here,
 and nothing here reads the ledger. The gate's public functions, in
 ``norse_research.gate``, take the ledger and have no N parameter (threat T19): they
-read N from it under the counting rule registered in ``prereg-v1`` and call
-``deflated_sharpe_ratio`` with V from the selectable runs, as section 10 of
-docs/PREREGISTRATION.md registers. ``deflated_sharpe`` below floors V and is not
-used by the gate (section 15, item 1).
+read N from it under the counting rule the pre-registration registers and call
+``deflated_sharpe_ratio`` with V = ``null_sharpe_variance`` of the candidate's window,
+as section 10 of docs/PREREGISTRATION.md registers (decision D22). ``deflated_sharpe``
+below floors V and is not used by the gate (section 15, item 1).
 """
 
 from __future__ import annotations
@@ -213,9 +213,9 @@ def deflated_sharpe(
     ``n_trials`` is N, and ``trial_sharpes`` the per-observation Sharpe ratios of
     those N trials' joined out-of-sample returns (the candidate's included).
 
-    Not the gate's function: the registered gate uses V with no floor, from the
-    selectable runs (``norse_research.gate.deflated_sharpe_of``; section 10 and
-    section 15, item 1 of docs/PREREGISTRATION.md).
+    Not the gate's function: the registered gate uses V = 1 / (T - 1) alone, whatever
+    the trials' Sharpe ratios (``norse_research.gate.deflated_sharpe_of``; section 10
+    and section 15, items 1 and 24 of docs/PREREGISTRATION.md; decision D22).
 
     The variance in SR_0 is the larger of the null variance 1 / (T - 1) and the
     cross-trial variance of ``trial_sharpes`` (when given and N is at least 2). The

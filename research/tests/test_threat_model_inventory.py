@@ -26,7 +26,7 @@ GOALS = DOCS / "ITERATION_GOALS.md"
 ALWAYS = {"G1.5", "G1.6"}  # delivered here, whatever the register says yet
 PREREGISTRATION_TESTS = {
     "G1.5": {
-        "test_sensitivity_run_before_the_freeze_is_refused",
+        "test_sensitivity_run_before_its_hypothesis_is_complete_is_refused",
         "test_sensitivity_run_of_a_non_candidate_is_refused",
     }
 }

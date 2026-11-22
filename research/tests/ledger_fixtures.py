@@ -30,6 +30,7 @@ from pathlib import Path
 from norse_research.binance_archive import DOWNLOAD_URL, ArchiveNotFound
 from norse_research.canonical import sha256_hex
 from norse_research.gitledger import (
+    PREREGISTRATION_TAG,
     GitLedger,
     genesis_fields,
     period_constants,
@@ -291,8 +292,9 @@ def pins_for(registration: Registration, paths: dict[str, str], behaviours=None)
 
 class World:
     """A bare remote, a working clone with a committed copy of the package, a
-    registration, manifest, key record and two strategy modules, ``prereg-v1`` on the
-    remote, and (unless ``genesis=False``) a genesis entry and its anchor.
+    registration, manifest, key record and two strategy modules, the pre-registration
+    tag a genesis entry names by default on the remote, and (unless ``genesis=False``) a
+    genesis entry and its anchor.
 
     ``behaviours`` maps a configuration id to the function genesis pins for it;
     ``configurations`` overrides which ids a module declares; ``evasive`` adds the
@@ -337,8 +339,8 @@ class World:
             self.write(path, self.source(h, configurations, evasive=evasive))
         self.commit("code, registration and manifest")
         self.push()
-        git(self.repo, "tag", "-a", "prereg-v1", "-m", "synthetic registration")
-        git(self.repo, "push", "--quiet", "origin", "refs/tags/prereg-v1")
+        git(self.repo, "tag", "-a", PREREGISTRATION_TAG, "-m", "synthetic registration")
+        git(self.repo, "push", "--quiet", "origin", f"refs/tags/{PREREGISTRATION_TAG}")
         self.prereg_commit = git(self.repo, "rev-parse", "HEAD")
         self.pins = pins_for(self.registration, self.paths, behaviours)
         self.ledger = GitLedger(self.repo)
@@ -470,22 +472,38 @@ class World:
 
 
 def grid_world(tmp: Path, *, skilled: str | None = "H1-03", benchmark: bool = True,
-               freeze: bool = True, behaviours=None) -> World:
-    """A world whose ledger holds every H1 configuration's selectable run, with
-    ``skilled`` the one that passes development (none if None), both benchmarks' runs,
-    which the freeze needs, and the freeze anchor. H2 has no runs, so H2 has no
-    candidate."""
-    from norse_research import gate
+               h2: bool = True, incomplete: bool = False, loader_changed: bool = False,
+               loader_line: str = "# as the runs had it", behaviours=None) -> World:
+    """A world whose ledger holds every H1 and H2 configuration's selectable run, with
+    ``skilled`` the one that passes development (none if None; H2's have no edge), and
+    both benchmarks' runs, which DEV-2 needs, so the unseal may come (decision D21: it
+    closes development, and only once both grids are complete or their budgets spent).
 
+    ``h2=False`` leaves H2 unrun, so an unseal would stop its grid early.
+    ``incomplete`` also leaves the last H1 configuration unrun, so no hypothesis has a
+    candidate. ``loader_changed`` runs the grids at a commit whose loader.py differs
+    from HEAD's, so the unseal has a data loading diff to accept (security review round
+    3, T1), the runs' loader.py carrying ``loader_line`` at its end; HEAD's package is
+    still the code under test."""
     registration = Registration.from_bytes(REAL_PREREG_JSON.read_bytes())
-    pinned = {cid: "noise" for cid in registration.order["H1"]}
+    pinned = {cid: "noise" for h in ("H1", "H2") for cid in registration.order[h]}
     pinned["B-H1"] = "market"
     if skilled is not None:
         pinned[skilled] = "skilled"
     world = World(tmp, behaviours={**pinned, **(behaviours or {})})
-    world.runs_by_hand([*registration.order["H1"], *(["B-H1", "B-H2"] if benchmark else [])])
-    if freeze:
-        gate.freeze(world.ledger, "M2: the ledger freeze", allow_incomplete=True)
+    loader = "research/norse_research/loader.py"
+    if loader_changed:
+        world.write(loader, (PACKAGE / "loader.py").read_text() + f"\n{loader_line}\n")
+        world.commit("loader: the data loading the runs used")
+        world.push()
+    order = list(registration.order["H1"][:-1] if incomplete else registration.order["H1"])
+    if h2 and not incomplete:
+        order += registration.order["H2"]
+    world.runs_by_hand([*order, *(["B-H1", "B-H2"] if benchmark else [])])
+    if loader_changed:
+        world.write(loader, (PACKAGE / "loader.py").read_bytes())
+        world.commit("loader: a data loading fix after the runs")
+        world.push()
     return world
 
 
@@ -570,11 +588,12 @@ class Book:
         return LedgerSnapshot.from_bytes(self.data, self.files)
 
 
-def issued(book: Book, frozen: bool = False):
-    """The gate's ledger for an in-memory book, issued as gate_ledger would."""
+def issued(book: Book, closed: bool = False):
+    """The gate's ledger for an in-memory book, issued as gate_ledger would; ``closed``
+    as it is once the unseal entry exists (decision D21)."""
     from norse_research import gate
 
-    return gate._issue(book.snapshot(), book.registration, None, frozen)
+    return gate._issue(book.snapshot(), book.registration, None, closed)
 
 
 def open_body(registration: Registration, cid: str, *, seed=None, cost=None, rerun=None,

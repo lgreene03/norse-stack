@@ -142,7 +142,10 @@ the committed pre-registration, and a second unseal fails. It is contaminated by
 because everyone has seen 2026 prices, so it can only catch a failure; paper
 trading after the verdict is the first genuinely unseen evidence. Before judging
 any strategy, the gate must pass at most 5% of 1,000 simulated no-skill ledgers at
-N = 30 and detect a planted Sharpe of 1.5. Every result cites its dataset manifest
+N = 30 and detect a planted Sharpe of 1.5. (Superseded: since `prereg-v2`, decision
+D22, detection is a single planted Sharpe of 2.0, the planted hypothesis passing
+development in more than half of the ledgers in each of the four families at N = 30;
+section 10 of PREREGISTRATION.md governs.) Every result cites its dataset manifest
 hash and commit SHA.
 
 ## Hypotheses
@@ -202,7 +205,8 @@ seal. The date is two days later than first set, and this says so.
 benchmark and control runs, tear sheets generated per hypothesis (net of 20 bps,
 intervals, deflated Sharpe, PBO, minimum track record, cost sensitivity at 15, 20
 and 30 bps), and every input checksum-verified with its licence recorded. The ledger
-is frozen on 12-01. The tear sheets' cost basis is governed by sections 5 and 8 of
+was to be frozen on 12-01; there is no ledger freeze since decision D21, and the unseal
+entry closes development instead. The tear sheets' cost basis is governed by sections 5 and 8 of
 PREREGISTRATION.md (its section 15, item 18).
 
 **M3, by 2026-12-15: the verdict.** The single holdout run by 12-08, the verdict
@@ -213,8 +217,11 @@ before the unseal; the matching one is merged.
 ## Kill criteria
 
 If H1 and H2 both fail, strategy search stops for this product: no re-tuning and no
-hypotheses invented after seeing results. If the gate fails its no-skill
-calibration, no strategy is judged. If the trial budget is exhausted before a pass,
+hypotheses invented after seeing results. If the gate fails its calibration, either
+half of it (at most 5% false passes in every no-skill family, and detection of a
+planted Sharpe of 2.0 under decision D22; section 10 of PREREGISTRATION.md), no
+strategy is judged and the iteration closes NOT JUDGED, with no further revision of
+the gate in it (decision D24). If the trial budget is exhausted before a pass,
 that is a fail. If the ledger's chain breaks, the iteration is void and restarts
 from pre-registration. The verdict in each case, an exhausted budget included, is
 governed by the verdict table in section 11 of PREREGISTRATION.md (its section 15,

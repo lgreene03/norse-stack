@@ -21,8 +21,9 @@ N and the trials' return series are parameters of these functions, and nothing h
 reads a ledger. The gate's public functions are in `norse_research.gate` (G1.5,
 [trial-ledger.md](trial-ledger.md)): they take the ledger and have no N parameter, read
 N as the count of trial entries under the counting rule registered in `prereg-v1`
-([ledger-threat-model.md](ledger-threat-model.md), principle 3), and build V and the PBO
-matrix from the selectable runs (threat T19, `test_statistics_take_n_only_from_the_ledger`).
+([ledger-threat-model.md](ledger-threat-model.md), principle 3), take V as the null
+variance 1 / (T - 1) of the candidate's window (decision D22) and build the PBO matrix from
+the selectable runs (threat T19, `test_statistics_take_n_only_from_the_ledger`).
 
 Since `prereg-v1`, [PREREGISTRATION.md](../PREREGISTRATION.md) governs how the gate uses
 these functions wherever this page differs from it (its sections 8, 10 and 12, and
@@ -118,9 +119,10 @@ The full calibration at N = 30 over 1,000 ledgers is G1.7's, not this page's.
 autocorrelated daily returns make its standard error too small, which is one reason for
 the block bootstrap below. N counts trials, not independent trials, so correlated trials
 make it strict rather than lenient. It says nothing about whether a strategy that passed
-on 2018 to 2025 will work later. For the gate, the sentence on correlated trials no longer
-holds, and how V is computed is governed by section 10 of PREREGISTRATION.md (its
-section 15, item 1).
+on 2018 to 2025 will work later. Under `prereg-v1` the sentence on correlated trials did
+not hold for the gate, whose V was the cross-trial variance; since `prereg-v2` (decision
+D22) the gate's V is the null variance alone, so it holds again. How V is computed is
+governed by section 10 of PREREGISTRATION.md (its section 15, items 1 and 24).
 
 ## The probabilistic Sharpe ratio and minimum track record length
 
@@ -341,8 +343,9 @@ reading: r_B is the benchmark's last completed run covering the window whose rec
 digest equals that of the hypothesis's selectable runs, which run rule 4 already requires to
 share one. A benchmark run from other harness code, such as one left from before a harness fix
 the trials were rerun for, is never compared with them, and without a matching run the gate
-refuses DEV-2 rather than calling it a fail. Because no benchmark may run after the ledger
-freeze, the freeze refuses while either benchmark lacks such a run (finding 3). H2's excess is
+refuses DEV-2 rather than calling it a fail. Because no benchmark may be opened after the unseal,
+which closes development now that there is no ledger freeze (decision D21), the unseal is
+refused while a benchmark DEV-2 needs lacks such a run (finding 3). H2's excess is
 beta matched instead of volatility matched (decision D15; `benchmark.beta_matched`).
 
 ## What these are not
@@ -368,7 +371,11 @@ before any trial. The gate takes the larger of the two. With correlated trials t
 cross-trial variance falls below the null one, and the paper's form would then lower the
 bar below the published pass mark; the floor stops near-duplicate trials doing that, while
 trials that genuinely disperse raise SR_0 as the paper intends. Under the null with
-independent trials the two agree.
+independent trials the two agree. G0.7 replaced this in `prereg-v1` with the cross-trial
+variance and no floor. G1.7's calibration then showed that a real edge inflates the
+cross-trial variance, so it charges the edge as selection noise, and `prereg-v2` (decision
+D22) registers the null variance alone for DEV-1 and DEV-2: dispersion among the trials no
+longer raises SR_0 either. `deflated_sharpe` keeps the floor and is not the gate's function.
 
 **Joined, not averaged.** The DSR is computed once, on the candidate's daily
 out-of-sample returns with every fold joined, with skewness, kurtosis and T read from that
@@ -400,6 +407,8 @@ Each with severity (what goes wrong if ignored) and confidence.
 2. **Medium, confirmed.** The variance in SR_0 was unspecified, and the paper's choice can
    be made more lenient than the published table by running near-duplicate trials. Resolved
    above with a floor; G0.7 must adopt or change it, and G1.7 calibrate whichever is chosen.
+   G0.7 chose the cross-trial variance with no floor; after G1.7, `prereg-v2` chose the
+   null variance (decision D22).
 3. **Medium, confirmed in simulation.** PBO < 0.5 is not evidence of skill: on pure noise a
    single matrix's PBO ranged from 0.06 to 0.94, and about half pass. It must never be
    quoted as a pass on its own. G1.7's calibration should report each criterion's no-skill

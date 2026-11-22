@@ -2,30 +2,37 @@
 
 **H1, dated-universe trend: {{H1_VERDICT}}. H2, funding carry: {{H2_VERDICT}}.**
 
-No hypothesis passed. Both candidates met all five development criteria registered before any
-trial ran. {{HOLDOUT_HYPOTHESIS}}'s candidate, {{HOLDOUT_CANDIDATE}}, ranked higher on the
-development deflated Sharpe ratio, compared unrounded with ties going to H1, so the registered
-rule made it the holdout candidate, and on the holdout, sealed in code until {{UNSEAL_TIME}},
-it did not meet HOLD-1. {{OTHER_HYPOTHESIS}}'s candidate, {{OTHER_CANDIDATE}}, passed
-development but never read the holdout, and under this registration it never will, because the
-holdout is open to one candidate only.
+No hypothesis passed. {{OTHER_HYPOTHESIS}}'s candidate, {{OTHER_CANDIDATE}}, met all five
+development criteria registered before any trial ran, but it was not tested on the holdout in
+this iteration. The holdout table below shows which of two reasons applies. If
+it names a holdout candidate and an unseal, both hypotheses passed development, and that
+candidate ranked higher on the development deflated Sharpe ratio, compared unrounded with ties
+going to H1, so the registered rule gave it the holdout, which is open to one candidate only;
+on the holdout, sealed in code until the unseal, it did not meet HOLD-1. If the table reads "not
+opened", the other hypothesis is NOT RUN: its grid was neither complete nor out of budget when
+the verdict was given, and the registration allows no unseal until both grids are, so the
+holdout stayed sealed and no candidate read it (decision D23).
 
 {{OTHER_HYPOTHESIS}}'s result is a development pass and nothing more. It is not a pass, and it
 is not evidence that the holdout would have gone differently for it: its development figures,
 in the table, cleared the same corrections as every other, but it lacks the one check the
-registration requires before anything is called a pass. The rule that chose between the two
-development passes was fixed before any trial ran, so that the choice could not be made after
-anyone had seen how either did in 2026. Presenting {{OTHER_HYPOTHESIS}} as the one that would
-have worked would undo that rule, and this text does not.
+registration requires before anything is called a pass. The rules that decide who reads the
+holdout were fixed before any trial ran: the one that chooses between two development passes,
+so that the choice could not be made after anyone had seen how either did in 2026, and the one
+that keeps the holdout shut until both grids are complete or exhausted, so that it could not be
+opened for one hypothesis while the other could still run. Presenting {{OTHER_HYPOTHESIS}} as
+the one that would have worked would undo those rules, and this text does not.
 
-If the holdout table shows a result entry, {{HOLDOUT_CANDIDATE}}'s result is the failure the
+If the holdout table shows a result entry, the holdout candidate's result is the failure the
 holdout exists to catch: a development record that survived every correction for the number of
 trials run, followed by a check on months the rule that chose it never read, which it did not
 pass. The check is coarse in this direction as well: over 304 days a strategy with a true net
 Sharpe ratio of 1.0 shows a positive Sharpe ratio only 82% of the time, so the result is that
 no edge appeared on the one window the registration allows, not proof that none exists. If the
-table shows no result entry, no holdout return was ever computed, and the registration counts
-that as a fail without saying anything about 2026. Either way it is a fail, and it stands.
+table shows an unseal but no result entry, no holdout return was ever computed, and the
+registration counts that as a fail without saying anything about 2026. Either way the holdout
+candidate's result is a fail, and it stands. If the table reads "not opened", no candidate was
+tested on the holdout, and no result in this section comes from 2026.
 
 ### Results
 
@@ -86,18 +93,20 @@ Binance's public archive alone, every file pinned by hash in the manifests
 Every run was entered in an append-only, hash-chained trial ledger before its result existed,
 and failed runs and reruns count. Development closed on {{DEV_CLOSE_DATE}} at ledger entry
 `{{DEV_CLOSE_ENTRY}}`, with {{N}} trial entries across both hypotheses and the reserve, and
-every deflated Sharpe ratio above is charged for all of them: given that count and how much the
-selectable runs' Sharpe ratios differed, the best of {{N}} trials with no skill would be
-expected to show an annualised Sharpe ratio of about {{SR0}}. Each hypothesis is judged on one
-configuration only, its candidate, the one with the highest development deflated Sharpe ratio,
-so no search of its grid can find one that happens to clear every criterion. Before any
-strategy was judged, the gate was calibrated on simulated ledgers: it passed
-{{CAL_NOSKILL_PASS_RATE}} of 1,000 ledgers with no skill at N = 30, against a limit of 5%. Its
-power at a planted net Sharpe ratio of 1.5, the share of such simulated families it passed, was
-{{CAL_POWER_H1_SINGLE}} for H1 and {{CAL_POWER_H2_SINGLE}} for H2 when one configuration
-carries the edge, and {{CAL_POWER_H1_SHARED}} and {{CAL_POWER_H2_SHARED}} when every
-configuration shares it; the [calibration report]({{CAL_REPORT}}) gives the rest, the figures
-at 1.0 and 2.0 included. The holdout, 2026-01-01 to 2026-10-31, was sealed in code, its files
+every deflated Sharpe ratio above is charged for all of them: given that count and the length
+of each window, the best of {{N}} independent trials with no skill would be expected to show an
+annualised Sharpe ratio of about {{H1_SR0}} over H1's window and {{H2_SR0}} over H2's. Each
+hypothesis is judged on one configuration only, its candidate, the one with the highest
+development deflated Sharpe ratio, so no search of its grid can find one that happens to clear
+every criterion. Before any strategy was judged, the gate was calibrated on simulated ledgers:
+in its worst family of ledgers with no skill it passed {{CAL_NOSKILL_PASS_RATE}} of 1,000 at
+N = 30, against a limit of 5% in every family. With one configuration carrying a planted net
+Sharpe ratio of 2.0, the planted hypothesis passed development in {{CAL_DETECTION_H1}} of the
+ledgers for H1 and {{CAL_DETECTION_H2}} for H2, against a bar of more than half in each such
+family. At a planted 1.5 the share was {{CAL_POWER_H1_SINGLE}} for H1 and
+{{CAL_POWER_H2_SINGLE}} for H2 when one configuration carries the edge, and
+{{CAL_POWER_H1_SHARED}} and {{CAL_POWER_H2_SHARED}} when every configuration shares it; the
+[calibration report]({{CAL_REPORT}}) gives the rest, the figures at 1.0 included. The holdout, 2026-01-01 to 2026-10-31, was sealed in code, its files
 kept off disk, and could be opened once, with the owner's key, for the single candidate a
 mechanical rule selects.
 
@@ -109,9 +118,12 @@ it was the holdout candidate (the higher development deflated Sharpe ratio of th
 that passed development, compared unrounded, ties going to H1), and on the holdout its Sharpe
 ratio was above zero and no more than 1.645 standard errors below its development estimate
 (HOLD-1). **PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT**: its candidate met all five
-development criteria, but the other hypothesis's candidate ranked higher and took the holdout.
-It is not a pass, and under this registration it can never be tested or become one, because the
-holdout is open to one candidate only. **FAIL**: its candidate missed at least one development
+development criteria, but either the other hypothesis's candidate ranked higher and took the
+holdout, or the other hypothesis's grid was neither complete nor out of budget when the verdict
+was given, so no unseal could happen and the holdout stayed sealed (decision D23). It is not a
+pass, it was not tested on the holdout in this iteration, and it cannot become one in it, because
+the holdout opens only once both grids are complete or exhausted, and then to one candidate
+only. **FAIL**: its candidate missed at least one development
 criterion; or it was the holdout candidate and HOLD-1 did not hold, which includes a holdout
 run that never returned a result; or its own trial entries and the reserve ran out before it
 could pass. **NOT RUN**: when development closed, not every one of its registered
@@ -165,7 +177,7 @@ does not settle it.
 
 No hypothesis passed, so the claim that Norse trades with an edge is retired here, in writing,
 as it would be on a fail. The kill criteria stop strategy search when both hypotheses fail;
-{{OTHER_HYPOTHESIS}} did not fail, but nothing left in this registration can test it. The only
+{{OTHER_HYPOTHESIS}} did not fail, but nothing left in this iteration can test it. The only
 evidence that could is data no one has yet seen, through a new pre-registration with a holdout
 of its own or a forward paper test registered as a goal of its own. Whether to do either is the
 owner's decision when the next iteration's goal is drafted, and its result would be a new

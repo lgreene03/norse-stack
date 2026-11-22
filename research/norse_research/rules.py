@@ -16,16 +16,21 @@ The rules:
 * every open entry is exactly what the registration resolves its request to: its kind,
   hypothesis, window, costs, seed and registered parameters, with the strategy the
   genesis entry pins for it (review N7);
-* before the freeze no sensitivity run, after it nothing else but the unseal and the
-  holdout run (section 8; review N2);
-* the unseal comes after the freeze anchor, and once (section 11, item 4; T20, T23);
+* the unseal closes development (decision D21; there is no ledger freeze): after it no
+  trial, benchmark or control run is opened. The result of one opened before it may
+  still land after it; replay accepts it and the gate ignores it, since it computes on
+  the entries before the unseal (security review of #65, L-1). A sensitivity run is of
+  a hypothesis's candidate, once every registered configuration of that hypothesis has
+  a selectable run, before or after the unseal; that needs the gate, so ``gate``
+  replays it (section 8);
+* the unseal comes once (section 11, item 4; T23);
 * a holdout run comes after the unseal, runs the unseal's candidate configuration and
   nothing else, and after one completed holdout result nothing more: a run that failed
   or never finished may be retried, every attempt ledgered (section 11, items 5 and
   6; T22). The commit rule of item 6 needs git, so ``gitledger`` replays it;
 * every holdout run, and every attempt within one, is at exactly the commit the unseal
-  records, where item 6's rule was applied once, and there are at most
-  ``HOLDOUT_RUNS`` of them. Nothing a run reports about itself decides anything: on a
+  records, where item 6's rule was applied once, and at most ``HOLDOUT_ATTEMPTS`` runs
+  reach the unsealed stage. Nothing a run reports about itself decides anything: on a
   machine with one user no such report can be authenticated (security review round 2,
   N1; the coordinator's decision, in docs/research/holdout-seal.md).
 """
@@ -153,20 +158,34 @@ def holdout_rule_error(prior: Sequence[Entry], run: Mapping) -> str | None:
     if any(e.type == RESULT and e.body["opens"] in held and e.body["status"] == COMPLETED
            for e in prior):
         return "one result spends the seal: the holdout run has its result (section 11, item 6)"
-    if len(held) >= HOLDOUT_RUNS:
-        return (
-            f"the holdout has been run {len(held)} times, the most section 11, item 6 allows "
-            f"here ({HOLDOUT_RUNS})"
-        )
-    return holdout_commit_rule(prior, run.get("commit"))
+    return holdout_attempt_error(prior, run.get("commit"))
 
 
 # Section 11, item 6 lets a holdout run that fails before producing a result be retried,
 # with no limit stated. This implements it conservatively: at most three holdout runs
-# follow the unseal, every one at the unseal's commit, so a retry can only repeat a run
+# reach the unsealed stage (an attempt entry, written just before the strategy is first
+# given the unseal), every one at the unseal's commit, so a retry can only repeat a run
 # that failed for a reason outside the code and data (a crash, a full disk), never
-# change what it computes (security review round 2, N1 and N3).
-HOLDOUT_RUNS = 3
+# change what it computes (security review round 2, N1 and N3). A run that fails before
+# its attempt entry, in the development reproduction or on a network error, read nothing
+# of the holdout and does not count, so failures that need no key cannot use the cap
+# up (security review round 3, C1).
+HOLDOUT_ATTEMPTS = 3
+
+
+def holdout_attempt_error(prior: Sequence[Entry], commit: str | None) -> str | None:
+    """Why a holdout run or attempt at ``commit`` may not follow ``prior``, or None: the
+    unseal's commit only, and fewer than ``HOLDOUT_ATTEMPTS`` earlier attempts."""
+    problem = holdout_commit_rule(prior, commit)
+    if problem:
+        return problem
+    attempts = sum(1 for e in prior if e.type == ATTEMPT)
+    if attempts >= HOLDOUT_ATTEMPTS:
+        return (
+            f"the holdout has reached its unsealed stage {attempts} times, the most section "
+            f"11, item 6 allows here ({HOLDOUT_ATTEMPTS})"
+        )
+    return None
 
 
 def holdout_commit_rule(prior: Sequence[Entry], commit: str | None) -> str | None:
@@ -275,40 +294,53 @@ def holdout_registration_error(
     return None
 
 
+def budget_exhausted(entries: Sequence[Entry], registration: Registration, h: str) -> bool:
+    """Whether hypothesis ``h`` has used its own trial entries and the reserve is used,
+    so it can run no further trial (section 9, run rule 5; the budget rule above)."""
+    trials = [e for e in entries if e.type == OPEN and e.body["kind"] == TRIAL]
+    own = sum(1 for e in trials if e.body["hypothesis"] == h and e.body["reserve_reason"] is None)
+    reserve = sum(1 for e in trials if e.body["reserve_reason"] is not None)
+    return own >= registration.own_budget[h] and reserve >= registration.reserve_budget
+
+
+def after_unseal_error(prior: Sequence[Entry], kind: str) -> str | None:
+    """Why a run of ``kind`` may not be opened after ``prior``, or None: the unseal
+    closes development, so no trial, benchmark or control is opened after it (decision
+    D21). Only opens are refused: the result of a run opened before the unseal is
+    accepted after it, and the gate ignores it (L-1)."""
+    if kind in (TRIAL, BENCHMARK, CONTROL) and any(e.type == UNSEAL for e in prior):
+        return (
+            f"a {kind} run after the unseal, which closed development (decision D21; "
+            "section 11)"
+        )
+    return None
+
+
 def check_run_rules(
     entries: Sequence[Entry],
     registration: Registration,
     genesis: Entry | None = None,
-    frozen_length: int | None = None,
 ) -> None:
     """Replay the run rules over a whole ledger; name the first entry that breaks one.
 
     With ``genesis``, every open entry must also be what the registration resolves it
-    to; ``frozen_length`` is the number of entries at the freeze anchor, if any."""
+    to. Which configuration a sensitivity run may re-cost needs the gate, which replays
+    it (``gate.check_sensitivity_entries``)."""
     for index, entry in enumerate(entries):
-        after = frozen_length is not None and index >= frozen_length
-        if entry.type == UNSEAL and not after:
-            raise VerificationError(
-                f"entry {entry.seq} breaks the run rules: an unseal before the freeze anchor; "
-                "the candidate is chosen on the frozen ledger (section 11; T20)"
-            )
         if entry.type == ATTEMPT:
-            error = holdout_commit_rule(entries[:index], entry.body["commit"])
+            error = holdout_attempt_error(entries[:index], entry.body["commit"])
             if error:
                 raise VerificationError(f"entry {entry.seq} breaks the run rules: {error}")
         if entry.type != OPEN:
             continue
         kind = entry.body["kind"]
-        error = run_rule_error(entries[:index], registration, run_of(entry))
+        error = after_unseal_error(entries[:index], kind)
+        if error is None:
+            error = run_rule_error(entries[:index], registration, run_of(entry))
         if error is None and genesis is not None:
             error = (
                 holdout_registration_error(entry, entries[:index], registration, genesis)
                 if kind == HOLDOUT else registration_error(entry, registration, genesis)
             )
-        if error is None:
-            if kind == SENSITIVITY and not after:
-                error = "a sensitivity run before the freeze"
-            elif kind not in (SENSITIVITY, HOLDOUT) and after:
-                error = f"a {kind} run after the freeze"
         if error:
             raise VerificationError(f"entry {entry.seq} breaks the run rules: {error}")

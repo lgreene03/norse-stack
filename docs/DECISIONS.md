@@ -223,3 +223,114 @@ for it. The pre-registration still defines N on the frozen ledger (its section 1
 one registered freeze at G2.7 stands until a superseding pre-registration says otherwise;
 when it is taken, no run starts from any clone other than the one taking it, which closes
 N2b by process. Making the freeze a chain entry stays a follow-up in the register.
+
+## 2026-11-21
+
+**D21. No ledger freeze; the unseal closes development.** Decided by the owner on
+2026-11-21: "This is local personal dev. No need for freezes." The ledger freeze is
+removed entirely, with the `gate.freeze` command, the `ledger-freeze-*` anchor and its
+verification, and every rule keyed on it. The unseal entry closes development instead: N,
+V and the holdout candidate are computed on the ledger before the unseal entry, and the
+ledger, the harness and replay refuse any trial, benchmark or control run opened after it.
+The result of a run opened before the unseal may still be written after it; replay
+accepts it and the gate ignores it (worded so on 2026-11-22, after the security role's
+review of #65, finding L-1, since an earlier sentence here claimed more than the code
+enforces). The
+pre-registration's "by the freeze on 2026-12-01" goes: a hypothesis is judged only when
+every registered configuration has a selectable run, and one that never gets there is NOT
+RUN at the verdict, or FAIL if its own entries and the reserve are exhausted.
+Cost-sensitivity runs (section 8) are allowed for a hypothesis's candidate once every
+registered configuration of that hypothesis has a selectable run, before or after the
+unseal, outside N. The holdout seal stays as merged in
+[#59](https://github.com/lgreene03/norse-stack/pull/59), apart from item 3 of this change
+(the three-run cap counts only runs that reached the unsealed stage, security review round
+3, C1) and item 4 (the unseal shows the data loading and seal diff since the candidate's
+run and records the hash the owner accepts, round 3, T1). D20's surviving registered
+freeze at G2.7 is withdrawn, and with it follow-up N2b, the race between a freeze and a
+run from a second clone: the unseal is a chain entry that moves the ledger head, so a run
+admitted before it is refused at its append. The owner's instruction covers the
+`prereg-v2` tag for this change, as D18 covered `prereg-v1`: the lead creates the
+annotated tag on the merged commit on main. At the coordinator's direction `prereg-v2`
+also settles what the G3.1 drafting ([#64](https://github.com/lgreene03/norse-stack/pull/64),
+its open questions 1, 4, 10 and 11) found D21 leaves open: the unseal waits until each
+hypothesis's grid is complete or its own entries and the reserve are exhausted, so no
+hypothesis is stopped early by the other's unseal; with no holdout candidate, development
+closes at that same point and the verdict records the ledger entry it was computed at; and
+the verdict table gains VOID (a broken hash chain) and NOT JUDGED (a gate that did not pass
+its calibration). It also discloses huginn's fixture `data/btc_test.jsonl`, which holds
+BTC data from 2026-05-18 inside the holdout, as the G2.5 audit
+([#63](https://github.com/lgreene03/norse-stack/pull/63)) found. These are the
+coordinator's clarifications, not further owner decisions.
+
+## 2026-11-22
+
+**D22. V is the null variance; the calibration's detection clause is restated.** Decided
+by the owner on 2026-11-22: "Revise V". G1.7's calibration
+([#66](https://github.com/lgreene03/norse-stack/pull/66), docs/research/gate-calibration.md
+there) found the gate registered in `prereg-v1` safe but underpowered. No no-skill family
+passed more than 1.3% of 1,000 ledgers at N = 30, but a single planted configuration at an
+annualised Sharpe ratio of 1.5 passed development in only 144 to 335 of 1,000, so the
+detection half of section 10's condition failed. The cause is V, the cross-trial variance
+of the selectable runs' Sharpe ratios pooled over both hypotheses with no floor, which a
+real edge inflates: SR0 is 0.554 times a single planted edge and 1.065 times an edge shared
+within one hypothesis. Section 10 now sets V = 1/(T − 1), the null variance of the
+candidate's window, for DEV-1 and DEV-2, with N still from the ledger before the unseal, so
+no run's result moves the bar, and restates the detection clause: at N = 30, in each of
+the four single-planted families at an annualised Sharpe ratio of 2.0, the planted
+hypothesis must pass development in more than 500 of 1,000 ledgers (G1.7's committed
+metric, pinned after the quant role's review of #65), with power at 1.5, at N = 14 and for
+an edge shared within one hypothesis reported. The old clause asked for 1.5 in every family,
+which section 12's own arithmetic ruled out (H2's even-odds mark at N = 30 is 1.52 even
+under the null variance). Both changes were chosen after the synthetic calibration and
+before any trial or genesis entry, and section 15, item 24 of the pre-registration
+discloses that. The quant role's review of #66 recommended the change, with figures from a
+reduced check of the revision on normal returns only: false passes in at most 0.14% of
+no-skill ledgers, a single 1.5 passing in 46% to 51% of ledgers, a single 2.0 in 88% to 94%
+and a shared 1.5 in 35% to 48%. The quant is an AI agent role the owner runs, not an
+independent person; its review is advice, not an approval or a signature, and the decision
+is the owner's alone. The full calibration rerun under the revised gate, every family at
+1,000 ledgers, is G1.7's in #66. It runs after this revision merges to main, so the
+detection clause is committed, with its date, before its full results exist, and before
+the `prereg-v2` tag, as the option the owner chose said ("The full calibration is rerun
+before tagging"); the tag and then the genesis entry follow it. The owner also confirmed,
+unchanged, the three clarifications D21 recorded as the coordinator's: the unseal waits
+until each hypothesis's grid is complete or its own entries and the reserve are exhausted;
+with no holdout candidate, development closes at that same point and the verdict records
+the ledger entry it was computed at; and the verdict table's VOID and NOT JUDGED rows. They
+are now owner decisions. The change is part of `prereg-v2`
+([#65](https://github.com/lgreene03/norse-stack/pull/65)).
+
+D23 to D25 settle three points that the quant and security roles' reviews of #65 raised
+and left for the owner. Both roles are AI agents the owner runs; their reviews are advice,
+not approvals or signatures. All three are part of `prereg-v2`.
+
+**D23. A development pass beside an unfinished grid is not a FAIL.** Decided by the owner on
+2026-11-22: "Passed dev, not tested". The quant role's review found that a hypothesis
+passing development could fall through to FAIL. The unseal waits for both grids (D21), so
+when the other hypothesis's grid is neither complete nor exhausted at the verdict, no unseal
+can happen; the passing hypothesis is not the holdout candidate's, so neither PASS nor
+PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT applied as worded. That row now covers the
+case: such a hypothesis reads PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT, not FAIL, the
+holdout stays sealed, and the other hypothesis is NOT RUN. The row comes before FAIL in
+section 11's table, in the JSON and in G3.1's verdict texts (docs/verdict), so the case
+cannot reach FAIL. No code computes verdicts yet (G3.3), so the rule is in the documents
+only.
+
+**D24. If the calibration rerun fails, tag anyway and close NOT JUDGED.** Decided by the
+owner on 2026-11-22: "Tag anyway, NOT JUDGED". If G1.7's full rerun under the revised gate
+does not meet the restated calibration clause, `prereg-v2` is tagged as it stands, the gate
+is not revised again in this iteration, and the iteration closes NOT JUDGED.
+Deciding this before the rerun runs keeps D22's property that the condition is fixed
+before its results are seen. Section 10's "Calibration", section 16's tagging paragraph and
+the JSON's `gate.calibration` and `change_control.signing_and_tag` say so.
+
+**D25. Only the owner starts holdout runs.** Decided by the owner on 2026-11-22: "Written
+rule". The security role's review (finding M-2, a residual of round 3's C1) showed that
+starting a holdout run needs no key, so the three attempts the seal allows can still be used
+up deliberately. Only the owner starts holdout runs, and does so straight after the unseal;
+no agent, scheduled task or second clone starts one. The residual stays, stated plainly:
+the code does not enforce this, so an agent could still use up the three attempts by
+killing a run straight after its attempt entry, or by starting one from a second clone. The
+key record's design is unchanged. Section 11, item 7 of the pre-registration and
+docs/research/holdout-seal.md, the owner's runbook for the seal, carry the rule; the
+operator runbook, docs/RUNBOOK.md, does not cover the holdout.

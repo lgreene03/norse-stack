@@ -29,9 +29,10 @@ harness:
    loaded from the repository, is not byte for byte the file at HEAD (T15, M3);
 9. resolves the request against the registration (T16 to T18) and applies the run
    rules, a rerun's fix commit being new since the run it repeats (section 9; L8),
-   the freeze and the bounded sensitivity runs (section 15, item 11; N13);
+   the unseal closing development (decision D21) and the bounded sensitivity runs,
+   each re-costing a candidate (section 8; section 15, item 11; N13);
 10. appends the open entry, commits it and pushes it, refusing if the ledger moved
-    since step 2 or the freeze was tagged meanwhile (M2, N2). If any of that fails the
+    since step 2 or the unseal was written meanwhile (M2, N2). If any of that fails the
     run is refused and nothing of the strategy has run (T8);
 11. runs the strategy in the fresh interpreter, inside the open entry, with the
     resolved configuration and a view that loads rows through the registered loader,
@@ -46,10 +47,11 @@ harness:
 ``{"configuration": "holdout", "candidate_sha256": <the unseal's configuration hash>}``
 and takes steps 1 to 6 and 8 as above. It is then refused without the unseal entry,
 for any configuration but the unseal's (T22), once a holdout result has spent the
-seal or after three runs, when the candidate's configuration no longer resolves the
-same at HEAD, at any commit but the one the unseal records (item 6's rule was applied
-there, once), when the committed holdout manifest is not the registered one, and when
-the holdout files on disk do not all verify against it. Its open entry is appended as
+seal or three runs have reached the unsealed stage, when the candidate's configuration
+no longer resolves the same at HEAD, at any commit but the one the unseal records
+(item 6's rule was applied there, once), when the committed holdout manifest is not
+the registered one, and when the holdout files on disk do not all verify against it.
+Its open entry is appended as
 any other; then, before any holdout row is read, the remote's ledger must hold the
 unseal entry and that open entry (T23). The strategy first runs over the candidate's
 own development window, without the unseal, and must reproduce the candidate's
@@ -59,9 +61,10 @@ positions carried across the boundary, inside the unsealed run, whose developmen
 part must match again. That unsealed run is bracketed by an attempt entry, written
 first, and its close, recording the outcome; the run holds the clone's holdout lock
 throughout, so a second one there is refused (security review H2, M1). A failure is
-ledgered and may be retried under the same unseal, at the same commit, at most three
-runs in all (security review round 2, N1). Once the strategy has been given the
-unseal, a failure's own text is withheld
+ledgered and may be retried under the same unseal, at the same commit, until three
+runs in all have reached the unsealed stage, an attempt entry each; a run refused or
+failed before its attempt entry does not count (security review round 2, N1; round 3,
+C1). Once the strategy has been given the unseal, a failure's own text is withheld
 from the ledger (L7). A completed result spends the seal. HOLD-1 and the verdict read
 that result later (G3.2, G3.3); nothing here computes a statistic of holdout returns.
 """
@@ -86,7 +89,7 @@ from typing import Any
 from . import seal
 from .canonical import sha256_hex
 from .environment import ENV_ALLOWED, ENV_REFUSED, check_environment, git_version
-from .gate import RegisteredLedger, candidates, gate_ledger, holdout_candidate
+from .gate import RegisteredLedger, gate_ledger, holdout_candidate, sensitivity_error
 from .gitledger import (
     PACKAGE_PATH,
     Git,
@@ -125,7 +128,7 @@ from .registration import (
     RunNotRegistered,
     Window,
 )
-from .rules import run_rule_error
+from .rules import after_unseal_error, run_rule_error
 from .runner import RESULT_PREFIX
 from .sources import (
     ALLOWED_IMPORTS,
@@ -489,23 +492,22 @@ def admit(
     snapshot: LedgerSnapshot,
     registration: Registration,
     resolved: Resolved,
-    frozen: RegisteredLedger | None,
+    issued: RegisteredLedger | None = None,
 ) -> None:
     """Refuse a run the registered rules do not allow. Reads the ledger, never the
-    clock: "after the freeze" means the freeze anchor exists (T11)."""
+    clock (T11): no trial, benchmark or control run is opened after the unseal entry,
+    which closes development (decision D21), and a sensitivity run only of its hypothesis's
+    candidate on ``issued``, the gate's ledger, before or after the unseal (section 8)."""
     kind, h, cid = resolved.kind, resolved.hypothesis, resolved.configuration_id
+    closed = after_unseal_error(snapshot.entries, kind)
+    if closed:
+        raise RunRefused(closed)
     if kind == SENSITIVITY:
-        if frozen is None or not frozen.frozen:
-            raise RunRefused("a sensitivity run comes only after the ledger freeze (section 8)")
-        candidate = candidates(frozen).get(h)
-        if candidate is None or candidate.configuration_id != cid:
-            chosen = candidate.configuration_id if candidate else "none"
-            raise RunRefused(
-                f"{cid} is not {h}'s candidate ({chosen}); only a candidate is re-costed "
-                "(section 8)"
-            )
-    elif frozen is not None:
-        raise RunRefused("the ledger is frozen: only the candidates' sensitivity runs remain")
+        if issued is None:
+            raise RunRefused("a sensitivity run is admitted only on the gate's ledger (section 8)")
+        problem = sensitivity_error(issued, h, cid)
+        if problem:
+            raise RunRefused(problem)
     error = run_rule_error(
         snapshot.entries,
         registration,
@@ -588,8 +590,8 @@ def run(
     check_loaded_modules(git, repo, head)
     resolved = registration.resolve(request, strategy)
     check_rerun_commit(git, snapshot, resolved, head)
-    frozen = gate_ledger(ledger) if verified.freeze is not None else None
-    admit(snapshot, registration, resolved, frozen)
+    issued = gate_ledger(ledger, snapshot) if resolved.kind == SENSITIVITY else None
+    admit(snapshot, registration, resolved, issued)
 
     opened = ledger.append(
         {
@@ -949,12 +951,13 @@ def rehearse_holdout(
     check_clean_tree(git)
     head = git.text("rev-parse", "HEAD")
     check_head_on_main(git, remote, head)
-    frozen = gate_ledger(ledger)
-    if not frozen.frozen:
-        raise RunRefused("the rehearsal runs the holdout candidate, chosen on the frozen ledger")
-    candidate = holdout_candidate(frozen)
+    issued = gate_ledger(ledger, verified.snapshot)
+    candidate = holdout_candidate(issued)
     if candidate is None:
-        raise RunRefused("no hypothesis passes development: no unseal, nothing to rehearse")
+        raise RunRefused(
+            "no hypothesis has passed development with a selectable run of every registered "
+            "configuration: no holdout candidate, so no unseal and nothing to rehearse"
+        )
     cid, h = candidate.configuration_id, candidate.hypothesis
     strategy = load_strategy(git, head, genesis, registration, cid)
     check_loaded_modules(git, repo, head)
@@ -974,7 +977,7 @@ def rehearse_holdout(
         raise UnmanifestedData(str(exc)) from None
     if store is None:
         raise RunRefused("the rehearsal reads the dataset store; none was given")
-    committed = [(d, float(v)) for d, v in frozen.snapshot.returns_of(candidate.result_entry)]
+    committed = [(d, float(v)) for d, v in issued.snapshot.returns_of(candidate.result_entry)]
     try:
         returned = _run_strategy(
             git, head, genesis.body["strategies"][cid], paths[h], manifest_rel,

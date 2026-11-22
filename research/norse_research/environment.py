@@ -1,7 +1,7 @@
 """What the process around a ledger write may and may not carry (G1.5; T15, review M5, N10).
 
 A variable can change a result, or what git reads and writes, with no file at all. The
-harness, the genesis step, the milestone tags and the freeze all refuse:
+harness, the genesis step, the milestone tags and the seal all refuse:
 
 * ``NORSE_*`` (except ``NORSE_DATASETS_DIR``, which only says where the verified files
   are) and ``RISK_*``;
