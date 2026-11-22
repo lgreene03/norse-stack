@@ -44,7 +44,6 @@
     live: {
       totalValue: 1000.3, cash: 935.8, realizedPnL: 0.58, unrealizedPnL: -0.06,
       fees: 0.21, totalFills: 22, ordersCostSuppressed: 10,
-      regime: 'TREND',
       positions: [
         { instrument: 'BTC-USDT', quantity: 0.001, averageCost: 64197.4, lastMarkPrice: 64210.0, unrealizedPnL: 0.013 },
         { instrument: 'ETH-USDT', quantity: -0.002, averageCost: 1727.1, lastMarkPrice: 1723.0, unrealizedPnL: 0.008 }
@@ -112,19 +111,6 @@
         }
       }
     },
-    features: {
-      asOf: '2026-06-22T14:56:00Z',
-      basis: 'point-in-time (event_time ≤ as_of AND ingest_time ≤ as_of)',
-      sources: [
-        { instrument: 'BTC-USDT', count: 18422, last_event_time: '2026-06-22T14:55:58Z', max_ingest_lag_secs: 3.2 },
-        { instrument: 'ETH-USDT', count: 17988, last_event_time: '2026-06-22T14:55:57Z', max_ingest_lag_secs: 4.1 },
-        { instrument: 'SOL-USDT', count: 16110, last_event_time: '2026-06-22T14:55:40Z', max_ingest_lag_secs: 88.0 }
-      ],
-      features: [
-        { instrument: 'BTC-USDT', event_time: '2026-06-22T14:55:58Z', ingest_time: '2026-06-22T14:56:01Z', feature: {} },
-        { instrument: 'ETH-USDT', event_time: '2026-06-22T14:55:57Z', ingest_time: '2026-06-22T14:56:01Z', feature: {} }
-      ]
-    },
     tca: {
       available: true, asOf: '2026-06-22T14:56:00Z',
       basis: 'fees + reported-slippage only',
@@ -133,17 +119,6 @@
         'BTC-USDT': { totalFills: 9, avgSlippageBps: null, totalFees: 0.11, totalNotional: 230.4 },
         'ETH-USDT': { totalFills: 13, avgSlippageBps: null, totalFees: 0.10, totalNotional: 182.2 }
       }
-    },
-    regime: {
-      trained: true,
-      currentRegime: { id: 2, label: 'calm', probability: 0.9998 },
-      stateProbs: [0.0002, 0.0, 0.9998],
-      nStates: 3, nObservations: 1000, fitObservations: 1000, refits: 2,
-      logLikelihood: -3249.5,
-      stationary: [0.336, 0.205, 0.459],
-      labels: ['turbulent', 'trending', 'calm'],
-      features: ['trend_m5_momentum', 'volatility_atr', 'abs_obi_imbalance'],
-      asOf: '2026-06-22T14:56:00Z'
     },
     impact: {
       impact: {
@@ -193,26 +168,6 @@
     if (secs < 90) return nf(secs, secs < 10 ? 1 : 0) + 's';
     if (secs < 5400) return nf(secs / 60, 0) + 'm';
     return nf(secs / 3600, 1) + 'h';
-  }
-
-  // as-of for the Mimir lookup: the datetime-local input when set, else now.
-  function currentAsOf() {
-    var el = document.querySelector('[data-nc="fs-asof"]');
-    if (el && el.value) {
-      // datetime-local has no timezone; treat as local and convert to ISO.
-      var d = new Date(el.value);
-      if (!isNaN(d.getTime())) return d.toISOString();
-    }
-    return new Date().toISOString();
-  }
-  // Set the as-of input default to "now" (local) once, if empty.
-  function ensureAsOfDefault() {
-    var el = document.querySelector('[data-nc="fs-asof"]');
-    if (!el || el.value) return;
-    var d = new Date();
-    var p = function (n) { return (n < 10 ? '0' : '') + n; };
-    el.value = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
-               'T' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
   }
 
   // ====================================================================
@@ -278,7 +233,7 @@
     }
 
     var data = { live: null, alpha: null, portfolio: null, validation: null, services: null,
-                 research: null, features: null, tca: null, regime: null, impact: null,
+                 research: null, tca: null, impact: null,
                  idle: null };
     var sources = new Set();
 
@@ -294,7 +249,7 @@
         totalValue: p.TotalValue, cash: p.Cash,
         realizedPnL: p.RealizedPnL, unrealizedPnL: p.UnrealizedPnL,
         fees: p.TotalCosts, totalFills: p.TotalFills,
-        ordersCostSuppressed: null, regime: null,
+        ordersCostSuppressed: null,
         positions: [], fills: [], equitySeries: null,
         // live breaker state — top-level `halted` (bool) + `halt_reason` (string)
         // on the huginn /api/snapshot response. Authoritative source for the
@@ -331,11 +286,10 @@
       }
       // /api/equity and /metrics resolve independently; if any landed first,
       // carry over the fields they set so this wholesale assignment doesn't
-      // clobber the equity curve / suppressed count / regime.
+      // clobber the equity curve / suppressed count.
       if (data.live) {
         if (data.live.equitySeries) L.equitySeries = data.live.equitySeries;
         if (data.live.ordersCostSuppressed != null) L.ordersCostSuppressed = data.live.ordersCostSuppressed;
-        if (data.live.regime != null) L.regime = data.live.regime;
       }
       data.live = L;
       sources.add('huginn');
@@ -489,22 +443,6 @@
       }
     }).catch(function () { /* research stays null → empty state */ });
 
-    // ---- features / sources ← mimir ----
-    var asOf = currentAsOf();
-    var featSources = getJSON('/api/sources').then(function (j) {
-      data.features = data.features || {};
-      data.features.sources = (j && Array.isArray(j.sources)) ? j.sources : [];
-      sources.add('mimir');
-    }).catch(function () {});
-    var featAsOf = getJSON('/api/features?as_of=' + encodeURIComponent(asOf)).then(function (j) {
-      data.features = data.features || {};
-      data.features.asOf = (j && j.asOf) || asOf;
-      data.features.basis = (j && j.basis) || null;
-      data.features.features = (j && Array.isArray(j.features)) ? j.features : [];
-      sources.add('mimir');
-    }).catch(function () {});
-    var featuresP = Promise.all([featSources, featAsOf]);
-
     // ---- tca ← forseti ----
     var tcaP = getJSON('/api/tca').then(function (j) {
       if (j && j.available === false) { data.tca = { available: false, basis: j.basis || null }; return; }
@@ -517,12 +455,6 @@
       };
       sources.add('forseti');
     }).catch(function () { /* tca stays null → empty state */ });
-
-    // ---- regime ← heimdall (Gaussian HMM) ----
-    var regimeP = getJSON('/api/regime').then(function (j) {
-      data.regime = j || null;
-      if (j) sources.add('heimdall');
-    }).catch(function () { /* regime stays null → empty state */ });
 
     // ---- market impact + capacity ← forseti ----
     // A fixed reference order ($100k BTC-USDT) and assumed edge (5 bps) so the
@@ -539,7 +471,7 @@
     }).catch(function () { /* impact stays null → empty state */ });
 
     return Promise.all([liveP, metricsApplyP, alphaP, portfolioP, validationP, equityP, servicesP,
-                        researchP, featuresP, tcaP, regimeP, impactP])
+                        researchP, tcaP, impactP])
       .then(function () { return { data: data, sources: sources, demo: false }; })
       .catch(function () { return { data: data, sources: sources, demo: false }; });
   }
@@ -550,25 +482,11 @@
   // ====================================================================
   var halted = false;
   var liveHaltReason = ''; // halt_reason from the live snapshot, surfaced when halted
-  // Whether huginn's snapshot supplied a strategy regime for the top REGIME tile.
-  // When it does not (the OBI strategy leaves it empty), applyRegime falls the tile
-  // back to Heimdall's HMM regime instead of leaving it as a dash.
-  var strategyRegimeShown = false;
   // Guard so a repeatedly-clicked breaker control (e.g. a no-token HALT that the
   // user keeps retrying) logs to the console only once per auth-failure streak.
   // The on-screen halt-notice is the primary feedback; the console.warn is a
   // one-shot diagnostic that re-arms on any successful POST or token change.
   var breakerAuthWarned = false;
-
-  function regimeStyle(regime) {
-    var map = {
-      QUIET: { color: '#7787a0', bg: '#11192a', border: '#22324a' },
-      TREND: { color: C.blue, bg: '#0e1a30', border: '#23436e' },
-      'MEAN-REVERT': { color: C.amber, bg: '#1c1606', border: '#43381a' },
-      VOLATILE: { color: C.red, bg: '#1f0c0e', border: '#4a2026' }
-    };
-    return map[regime] || map.QUIET;
-  }
 
   function applyLive(L) {
     if (!L) {
@@ -604,22 +522,6 @@
     setText('open-pos', Array.isArray(L.positions) ? L.positions.length : DASH);
     setText('fills-today', isNum(L.totalFills) ? L.totalFills : DASH);
     setText('suppressed', isNum(L.ordersCostSuppressed) ? L.ordersCostSuppressed : DASH);
-
-    // regime: only when the backend actually reports it.
-    var rm = regimeStyle(L.regime);
-    var pill = $('regime-pill');
-    if (L.regime) {
-      if (pill) { pill.style.background = rm.bg; pill.style.borderColor = rm.border; }
-      var rdot = $('regime-dot'); if (rdot) rdot.style.background = rm.color;
-      setText('regime', L.regime); setColor('regime', rm.color);
-      strategyRegimeShown = true;
-    } else {
-      // No strategy regime from huginn — leave the tile for applyRegime to fill
-      // from Heimdall's HMM (or dash if Heimdall is not trained yet).
-      setText('regime', DASH); setColor('regime', C.dim);
-      if (pill) { pill.style.background = '#11192a'; pill.style.borderColor = '#22324a'; }
-      strategyRegimeShown = false;
-    }
 
     // stat tiles
     var statTiles = [
@@ -1038,41 +940,6 @@
     setText('rg-dsharpe', isNum(res.deflatedSharpe) ? nf(res.deflatedSharpe, 2) : 'n/a');
   }
 
-  // ---- (7) Feature store · Mimir ---------------------------------------
-  function applyFeatures(F) {
-    var srcBody = $('fs-sources-body'), featBody = $('fs-features-body');
-    if (!F) {
-      if (srcBody) srcBody.innerHTML = emptyRow(4, 'connecting to mimir…');
-      if (featBody) featBody.innerHTML = emptyRow(3, 'connecting to mimir…');
-      setText('fs-basis', DASH);
-      return;
-    }
-    // freshness
-    var srcs = F.sources || [];
-    if (srcBody) {
-      srcBody.innerHTML = srcs.length ? srcs.map(function (s) {
-        var lag = s.max_ingest_lag_secs;
-        var lagColor = !isNum(lag) ? C.dim : (lag > 60 ? C.amber : C.mut);
-        return '<tr style="border-top:1px solid #111d2c;font-size:12px">' +
-          '<td style="text-align:left;padding:9px 14px;color:#dbe4f0">' + esc(s.instrument || DASH) + '</td>' +
-          '<td style="text-align:right;padding:9px 8px;color:#7787a0">' + (isNum(s.count) ? nf(s.count, 0) : DASH) + '</td>' +
-          '<td style="text-align:right;padding:9px 8px;color:#9fb0c8">' + fmtTime(s.last_event_time) + '</td>' +
-          '<td style="text-align:right;padding:9px 14px;color:' + lagColor + '">' + fmtLag(lag) + '</td></tr>';
-      }).join('') : emptyRow(4, 'no sources registered');
-    }
-    // as-of features (event_time vs ingest_time → no-lookahead visible)
-    var feats = F.features || [];
-    if (featBody) {
-      featBody.innerHTML = feats.length ? feats.map(function (r) {
-        return '<tr style="border-top:1px solid #111d2c;font-size:12px">' +
-          '<td style="text-align:left;padding:9px 14px;color:#dbe4f0">' + esc(r.instrument || DASH) + '</td>' +
-          '<td style="text-align:right;padding:9px 8px;color:#9fb0c8">' + fmtTime(r.event_time) + '</td>' +
-          '<td style="text-align:right;padding:9px 14px;color:#7787a0">' + fmtTime(r.ingest_time) + '</td></tr>';
-      }).join('') : emptyRow(3, 'no features as of this instant');
-    }
-    setText('fs-basis', F.basis || 'point-in-time (event_time ≤ as_of AND ingest_time ≤ as_of)');
-  }
-
   // ---- (8) Execution TCA · Forseti -------------------------------------
   function applyTCA(T) {
     var tilesEls = ['tca-slippage', 'tca-fees', 'tca-makertaker', 'tca-shortfall'];
@@ -1109,62 +976,6 @@
           '<td style="text-align:right;padding:9px 8px;color:#9fb0c8">' + (isNum(m.totalFees) ? usd(m.totalFees) : DASH) + '</td>' +
           '<td style="text-align:right;padding:9px 14px;color:#9fb0c8">' + (isNum(m.totalNotional) ? usd(m.totalNotional, 0) : DASH) + '</td></tr>';
       }).join('') : emptyRow(5, 'no fills yet');
-    }
-  }
-
-  // HMM regime label → colour. calm→green, trending→blue, turbulent→red,
-  // choppy→amber; unknown → muted. Purely descriptive styling.
-  function hmmRegimeColor(label) {
-    var m = { calm: C.green, trending: C.blue, turbulent: C.red, choppy: C.amber };
-    return m[String(label || '').toLowerCase()] || C.mut;
-  }
-
-  function applyRegime(R) {
-    var body = $('hmm-states-body');
-    if (!R || R.trained !== true) {
-      // Untrained (warming up) or unreachable — honest placeholders.
-      setText('hmm-regime', R ? 'warming up' : DASH); setColor('hmm-regime', C.dim);
-      setText('hmm-prob', DASH); setColor('hmm-prob', C.dim);
-      setText('hmm-nstates', (R && isNum(R.nStates)) ? R.nStates : DASH);
-      setText('hmm-loglik', DASH);
-      setText('hmm-nobs', (R && isNum(R.nObservations)) ? R.nObservations : DASH);
-      if (body) body.innerHTML = emptyRow(4, R ? (R.reason || 'training…') : 'connecting to heimdall…');
-      setText('regime-basis', (R && R.reason) ? R.reason : DASH);
-      return;
-    }
-    var cur = R.currentRegime || {};
-    setText('hmm-regime', cur.label || DASH); setColor('hmm-regime', hmmRegimeColor(cur.label));
-    setText('hmm-prob', isNum(cur.probability) ? nf(cur.probability * 100, 1) + '%' : DASH); setColor('hmm-prob', C.mut);
-    setText('hmm-nstates', isNum(R.nStates) ? R.nStates : DASH); setColor('hmm-nstates', C.mut);
-    setText('hmm-loglik', isNum(R.logLikelihood) ? nf(R.logLikelihood, 1) : DASH); setColor('hmm-loglik', C.mut);
-    setText('hmm-nobs', isNum(R.nObservations) ? R.nObservations : DASH); setColor('hmm-nobs', C.mut);
-    setText('regime-basis', (R.nStates || '?') + '-state HMM · ' + (isNum(R.nObservations) ? R.nObservations : '?') +
-      ' obs · ' + (isNum(R.refits) ? R.refits : '?') + ' refits');
-
-    // Feed the top-header REGIME tile from Heimdall when huginn's strategy did
-    // not supply one, so it shows the live HMM regime instead of a dash. The HMM
-    // label is descriptive (calm/trending/turbulent/choppy), not a signal.
-    if (!strategyRegimeShown && cur.label) {
-      var hc = hmmRegimeColor(cur.label);
-      setText('regime', cur.label); setColor('regime', hc);
-      var pill2 = $('regime-pill'); if (pill2) { pill2.style.background = '#0b1626'; pill2.style.borderColor = '#22324a'; }
-      var rdot2 = $('regime-dot'); if (rdot2) rdot2.style.background = hc;
-    }
-
-    var labels = Array.isArray(R.labels) ? R.labels : [];
-    var stat = Array.isArray(R.stationary) ? R.stationary : [];
-    var sp = Array.isArray(R.stateProbs) ? R.stateProbs : [];
-    var curId = isNum(cur.id) ? cur.id : -1;
-    if (body) {
-      body.innerHTML = labels.length ? labels.map(function (lab, i) {
-        var isCur = i === curId;
-        var lc = hmmRegimeColor(lab);
-        return '<tr style="border-top:1px solid #111d2c;font-size:12px' + (isCur ? ';background:#0b1626' : '') + '">' +
-          '<td style="text-align:left;padding:9px 14px;color:#dbe4f0">' + i + (isCur ? ' ◀ now' : '') + '</td>' +
-          '<td style="text-align:left;padding:9px 8px;color:' + lc + ';font-weight:600">' + esc(lab) + '</td>' +
-          '<td style="text-align:right;padding:9px 8px;color:#9fb0c8">' + (isNum(stat[i]) ? nf(stat[i] * 100, 1) + '%' : DASH) + '</td>' +
-          '<td style="text-align:right;padding:9px 14px;color:' + (isCur ? lc : '#7787a0') + '">' + (isNum(sp[i]) ? nf(sp[i] * 100, 1) + '%' : DASH) + '</td></tr>';
-      }).join('') : emptyRow(4, 'no states');
     }
   }
 
@@ -1326,9 +1137,7 @@
     applyPortfolio(d.portfolio);
     applyValidation(d.validation);
     applyResearch(d.research);
-    applyFeatures(d.features);
     applyTCA(d.tca);
-    applyRegime(d.regime);
     applyImpact(d.impact);
     applyServices(d.services);
     // Drive the RUNNING/HALTED indicator from authoritative live breaker state
@@ -1459,7 +1268,6 @@
     setText('rg-result-status', DASH);
     setText('rg-oos-profitable', DASH); setText('rg-total-oos', DASH);
     setText('rg-pbo', DASH); setText('rg-dsharpe', DASH);
-    setText('fs-basis', DASH);
     setText('tca-slippage', DASH); setText('tca-fees', DASH);
     setText('tca-makertaker', DASH); setText('tca-shortfall', DASH);
     setText('tca-basis', DASH);
@@ -1472,10 +1280,6 @@
     if (btn) btn.addEventListener('click', onHaltClick);
     var tokenBtn = $('token-btn');
     if (tokenBtn) tokenBtn.addEventListener('click', onTokenClick);
-    // Feature store: default the as-of input to "now" and re-query on change.
-    ensureAsOfDefault();
-    var asOfEl = $('fs-asof');
-    if (asOfEl) asOfEl.addEventListener('change', tick);
     tick();
     setInterval(tick, POLL_MS);
   }

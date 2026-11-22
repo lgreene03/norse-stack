@@ -38,9 +38,10 @@ in-repository service on main on 2026-11-21) and as the sibling repositories' ow
 running but takes no rebuild, upgrade or configuration change this iteration; dependabot
 pull requests in its source repository may still merge, they are simply not built into the
 running stack. A fix the security role judges necessary overrides a freeze, under its veto
-on releasing a known-exploitable vulnerability. **Retire** means it is removed; only
-news-sentinel is removed in this pull request, and every other retirement is a
-recommendation for the owner to decide.
+on releasing a known-exploitable vulnerability. **Retire** means it is removed:
+news-sentinel was removed in the pull request that added this list (#68), and bragi,
+huginn-ai, heimdall and mimir, first recommended here for the owner to decide, were
+retired on 2026-11-22 by the owner's decision and removed in #69.
 
 ## The list
 
@@ -65,20 +66,22 @@ recommendation for the owner to decide.
 | obi-bridge | Polls Binance's REST API every 60 s and publishes `features.obi.v1` for five pairs | 20.4 MiB of 256 MiB, 0.1% | 221 MB | A CI job; licence register findings 4 and 9 | D1 (keeps the topic, frozen); huginn's only input | freeze | D1 already froze it. |
 | odin | Performance analytics and backtest-versus-live reconciliation from fills | 18.4 MiB of 256 MiB, 0.2% | 220 MB | A CI job; two alert rules, never fired | The console's portfolio and equity panels; its reconciliation is a candidate for G3.6's shortfall template on a pass | freeze | With no fill since June it reports `available: false`, and the verdict decides it. |
 | forseti | Transaction-cost analysis of fills, market impact and capacity | 17.7 MiB of 256 MiB, 0.6% | 220 MB | A CI job | The console's cost and impact panels; a candidate for G3.6's shortfall template on a pass | freeze | It has recorded no fill, and the verdict decides it. |
-| bragi | Explains each order-book-imbalance decision from `features.obi.v1` with its own 0.95 threshold | 25.2 MiB of 256 MiB, 0.2% | 220 MB | A CI job | Nothing: it explains the retired signal, and no console panel, scrape job or alert reads it | recommend retire, owner to decide | Nothing in the stack reads it, so removing it breaks nothing. |
-| huginn-ai | XGBoost model trained on fills; serves a confidence score to obi-bridge | 81.1 MiB of 512 MiB, 0.6% | 1.61 GB, the largest | A CI job with the heaviest dependencies (xgboost, scikit-learn, numpy); a scrape job; three alert rules, never fired | Nothing: NEXT_ITERATION.md puts training the model out of scope, and with no fill since June it cannot train | recommend retire, owner to decide | It reports `model_ready: false` and serves the neutral 0.5 that obi-bridge falls back to without it. |
-| heimdall | Hidden Markov model regime labels from `features.obi.v1` | 40.5 MiB of 512 MiB, 0.2% | 305 MB | A CI job | Nothing: no registered hypothesis uses regimes, and `prereg-v1` cannot gain one | recommend retire, owner to decide | Only the console's regime panel reads it. |
-| mimir | Point-in-time store of `features.obi.v1`: 404,379 rows since 2026-06-22 | 32.5 MiB of 256 MiB, 4.4% | 220 MB, and a 446.5 MB volume | A CI job; `make bench` | Nothing: H1 and H2 read manifest-pinned archives, where the loader and the seal prevent look-ahead | recommend retire, owner to decide | It stores the retired signal's features; its volume should be kept until the owner decides. |
-| news-sentinel | Classified CoinDesk and Cointelegraph headlines with a local LLM | Stopped by the owner on 2026-11-21 | 219 MB | Licence register finding 1 (Medium); a CI job | Nothing | retire, in this pull request | Its sources' terms bar automated access and AI use, and the register assigned its retirement here. |
+| bragi | Explains each order-book-imbalance decision from `features.obi.v1` with its own 0.95 threshold | 25.2 MiB of 256 MiB, 0.2% | 220 MB | A CI job | Nothing: it explains the retired signal, and no console panel, scrape job or alert reads it | retired on 2026-11-22 by the owner's decision (#69) | Nothing in the stack reads it, so removing it breaks nothing. |
+| huginn-ai | XGBoost model trained on fills; serves a confidence score to obi-bridge | 81.1 MiB of 512 MiB, 0.6% | 1.61 GB, the largest | A CI job with the heaviest dependencies (xgboost, scikit-learn, numpy); a scrape job; three alert rules, never fired | Nothing: NEXT_ITERATION.md puts training the model out of scope, and with no fill since June it cannot train | retired on 2026-11-22 by the owner's decision (#69) | It reports `model_ready: false` and serves the neutral 0.5 that obi-bridge falls back to without it. |
+| heimdall | Hidden Markov model regime labels from `features.obi.v1` | 40.5 MiB of 512 MiB, 0.2% | 305 MB | A CI job | Nothing: no registered hypothesis uses regimes, and `prereg-v1` cannot gain one | retired on 2026-11-22 by the owner's decision (#69) | Only the console's regime panel reads it. |
+| mimir | Point-in-time store of `features.obi.v1`: 404,379 rows since 2026-06-22 | 32.5 MiB of 256 MiB, 4.4% | 220 MB, and a 446.5 MB volume | A CI job; `make bench` | Nothing: H1 and H2 read manifest-pinned archives, where the loader and the seal prevent look-ahead | retired on 2026-11-22 by the owner's decision (#69); its volume is kept | It stores the retired signal's features; the owner decided to keep its volume. |
+| news-sentinel | Classified CoinDesk and Cointelegraph headlines with a local LLM | Stopped by the owner on 2026-11-21 | 219 MB | Licence register finding 1 (Medium); a CI job | Nothing | retired in #68 | Its sources' terms bar automated access and AI use, and the register assigned its retirement here. |
 
 The 21 running containers used 2,654 MiB between them. The seven kept and running use
 2,112 MiB, of which minio and muninn are 1,463; the ten frozen use 363 MiB; the four
-recommended for retirement use 179 MiB and hold 2.36 GB of images and mimir's 446.5 MB
-volume. Memory is not what makes this stack expensive. Attention is: the trading path
-draws the sibling repositories' dependabot traffic, eight in-repository Python services
-each run a CI job and must pass every ruff upgrade (ruff 0.16.0 turned all eight red at
-once on 2026-07-24), and the stack shows a trading platform that this iteration is not
-running.
+retired on 2026-11-22 used 179 MiB and hold 2.36 GB of images, and mimir's 446.5 MB
+volume is kept. Once their containers are removed, 17 run, which used 2,475 MiB in the
+same sample, and `docker-compose.yml` declares 19 services. Memory is not what makes
+this stack expensive. Attention is: the trading path draws the sibling repositories'
+dependabot traffic, the in-repository Python services (eight when this was written,
+four after #69) each run a CI job and must pass every ruff upgrade (ruff 0.16.0 turned
+all eight red at once on 2026-07-24), and the stack shows a trading platform that this
+iteration is not running.
 
 ## The recording path
 
@@ -115,7 +118,28 @@ alertmanager, tempo and redpanda-console are frozen for their own reasons, given
 table. tempo is the only one of the three worth retiring, at the planned muninn restart
 above.
 
-## Recommended for retirement, owner to decide
+## Retired on 2026-11-22 by the owner's decision
+
+The owner decided on 2026-11-22: "Retire all four." #69 removes bragi, huginn-ai,
+heimdall and mimir as recommended below: their compose blocks (with heimdall's
+`depends_on` on mimir and the `mimir-data` declaration), their directories under
+`services/`, their four CI jobs, huginn-ai's scrape job, three alert rules and two
+promtool cases, the console's regime and feature-store panels, the header's regime tile
+and their proxy routes, `make bench`, and the documents' statements that they run. The
+stale comment in huginn's compose block (finding 4) is corrected; none of the four had a
+Grafana panel. mimir's volume, `norse-stack_mimir-data`, is kept on the owner's
+decision: removing its declaration from compose does not delete it, and the compose file
+says so where mimir's block was. obi-bridge's code is frozen (D1) and still calls
+huginn-ai; reading `fetch_ml_score` confirms that the failed call is caught and falls
+back to `mlScore` 0.5 and `mlReady` 0, the same path news-sentinel's call has taken
+without slowing the poll since 2026-11-21.
+
+The pull request changes no running container. The lead stops and removes the four by
+name after the merge (`docker rm -f norse-stack-bragi-1 norse-stack-huginn-ai-1
+norse-stack-heimdall-1 norse-stack-mimir-1`), never by a whole-stack `docker compose up`,
+and leaves the volume in place. Their images remain until the owner removes them.
+
+The recommendation, as written before the decision:
 
 bragi, huginn-ai, heimdall and mimir serve neither outcome of the verdict. Each consumes
 the retired signal's feature stream or fills that no longer occur, and none of them is
@@ -146,7 +170,7 @@ The running containers should then be stopped and removed by name (for example
 `docker rm -f norse-stack-bragi-1`), never by a whole-stack `docker compose up`, which
 could recreate muninn if anything else in its configuration has changed.
 
-## news-sentinel, retired in this pull request
+## news-sentinel, retired in #68
 
 The owner stopped news-sentinel on 2026-11-21. It polled CoinDesk's and Cointelegraph's
 RSS feeds every 300 seconds and ran each headline through a local LLM, which both
@@ -196,6 +220,8 @@ how it is measured was not investigated; it goes with huginn's freeze.
 near-constant at about 0.08. huginn-ai currently reports no model (`model_ready: false`,
 no version) and serves 0.5, so the comment is stale. It is left alone because huginn's
 block is frozen, and should be corrected by whichever change decides huginn-ai.
+Resolved in #69, which retires huginn-ai and rewrites the comment; a comment change does
+not alter the service's configuration, so it recreates nothing.
 
 **5. Low, confirmed.** The image `norse-stack-huginn:pre-g08` (44.6 MB), kept from G0.8,
 is used by no container. The owner can remove it once that rollback is no longer wanted.
@@ -204,4 +230,5 @@ is used by no container. The owner can remove it once that rollback is no longer
 four to five months ago. `pip-audit` checks their pinned requirements, not the operating
 system packages in the images, and with Dependabot alerts disabled nothing reports on
 those. Retiring four of them removes most of that unseen surface; odin, forseti and
-obi-bridge keep it until the verdict.
+obi-bridge keep it until the verdict. #69 retires the four; the surface goes once their
+containers and images are removed from the machine.

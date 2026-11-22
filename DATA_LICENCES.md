@@ -25,7 +25,7 @@ Apache-2.0, so anything committed to them is published.
 | Binance market-data REST host, data-api.binance.vision | `rest-check`, `rest-sweep` | Vision terms if it is one of their "associated endpoints", otherwise the Binance Terms of Use | As above | Not licensed | Committed REST fixtures, listed in [NOTICE](NOTICE) on the associated-endpoint reading (finding 3) |
 | Binance live API (stream.binance.com, api.binance.com, fapi.binance.com) | muninn recorder; obi-bridge; huginn `cmd/fetcher` | Binance Terms of Use (live page not fetchable; UK version of 27 Jul 2023 read) | Needs an account; out of scope (D3) | Not licensed | Recordings kept local; derived files published (finding 4) |
 | OKX public WebSocket, ws.okx.com | muninn recorder | OKX API Agreement (last updated 28 Jul 2026) | Own non-commercial trading only, with an account | Forbidden (9.4(a)) | Recordings kept local; fixtures published in muninn (findings 5, 6) |
-| Fear and Greed Index, api.alternative.me | obi-bridge; huginn-ai | alternative.me usage rules (undated) | Not addressed | Allowed with prominent attribution | Used internally (finding 9) |
+| Fear and Greed Index, api.alternative.me | obi-bridge; huginn-ai until retired by G2.6 | alternative.me usage rules (undated) | Not addressed | Allowed with prominent attribution | Used internally (finding 9) |
 | CoinDesk RSS | news-sentinel, retired by G2.6 | CoinDesk Terms of Use (effective 30 Oct 2026) | Not addressed | Forbidden | Automated access barred; not read since 2026-11-21 (finding 1) |
 | Cointelegraph RSS | news-sentinel, retired by G2.6 | Cointelegraph terms (undated) | Not addressed | Forbidden | AI use needs consent; not read since 2026-11-21 (finding 1) |
 | Coinbase feed; Binance spot testnet | muninn adapter (disabled); sleipnir backend (not configured) | Not reviewed | | | Review before enabling (finding 10) |
@@ -108,8 +108,9 @@ finding 3.
 **What reads it.** muninn records Binance's public trade and depth streams from
 `wss://stream.binance.com:9443` into the `muninn-raw` bucket, a MinIO folder on the owner's
 machine (`MINIO_DATA_DIR`). obi-bridge reads `api.binance.com` and `fapi.binance.com` and
-the aggregate-trade stream to build the `features.obi.v1` events huginn paper-trades on and
-huginn-ai trains on. huginn's `cmd/fetcher` can pull aggregate trades from `api.binance.com`.
+the aggregate-trade stream to build the `features.obi.v1` events huginn paper-trades on
+(huginn-ai trained on them until G2.6 retired it on 2026-11-22, docs/CONTAINERS.md).
+huginn's `cmd/fetcher` can pull aggregate trades from `api.binance.com`.
 
 **Terms.** These public endpoints need no account, but the Binance Terms of Use bind anyone
 who accesses the Platform, which they define to include a Binance API. The current page,
@@ -170,7 +171,7 @@ few real OKX messages as test fixtures (finding 5).
 ## Fear and Greed Index (alternative.me)
 
 obi-bridge fetches `https://api.alternative.me/fng/?limit=1` and passes the value into
-`features.obi.v1`, where huginn-ai uses it as a model input. The
+`features.obi.v1`, where huginn-ai used it as a model input until G2.6 retired it. The
 [API section of the index page](https://alternative.me/crypto/fear-and-greed-index/) (read
 on 2026-11-21, no date given) allows use, commercial use included, provided the data's
 source is acknowledged prominently next to wherever the data is shown, and forbids using
@@ -319,9 +320,9 @@ technical change in the repository named.
    bind to loopback and docs/SECURITY.md already records these as placeholders; restated
    for completeness.
 9. **Informational.** alternative.me requires its source to be acknowledged next to any
-   display of its index. The stack shows the value only inside its own features and
-   explanations, on loopback; if the console or a published result ever shows it, credit
-   alternative.me beside it.
+   display of its index. The stack shows the value only inside its own features, on
+   loopback (bragi's explanations also showed it until G2.6 retired bragi); if the
+   console or a published result ever shows it, credit alternative.me beside it.
 10. **Informational.** The Coinbase market data terms and the Binance testnet terms were
     not reviewed because neither source is enabled. Add a section here before enabling
     either.

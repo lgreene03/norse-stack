@@ -5,10 +5,12 @@ It renders a dark trading console — live trading (equity curve, signed open
 positions, fills feed), the **alpha factory** (composite score + per-alpha
 contribution / confidence / IC), **portfolio construction** (dollar-neutral
 target weights, factor exposures, risk contributions), the **walk-forward /
-PBO edge verdict**, plus three research/ops panels — the **research gateway**
-(earlier walk-forward runs, read-only), the **feature store** (Mimir
-point-in-time, no-lookahead), and **execution TCA** (Forseti transaction-cost
-analysis) — and updates itself from the live services every 3s.
+PBO edge verdict**, plus two research/ops panels, the **research gateway**
+(earlier walk-forward runs, read-only) and **execution TCA** (Forseti
+transaction-cost analysis), and updates itself from the live services every 3s.
+The feature-store (Mimir) and market-regime (Heimdall) panels, and the header's
+regime tile, were removed with those services by G2.6 on 2026-11-22
+([docs/CONTAINERS.md](../docs/CONTAINERS.md)).
 
 No build step, no npm, no React. Pure static HTML + CSS + vanilla JS, served by a
 tiny stdlib Python server that also reverse-proxies the service APIs so the
@@ -34,7 +36,7 @@ python3 serve.py
 Override the port with `PORT=9000 python3 serve.py`. The proxy targets
 `127.0.0.1` by default; point it at other hosts with `HUGINN_HOST`, `ODIN_HOST`,
 `SLEIPNIR_HOST`, `MUNINN_HOST`, `REDPANDA_CONSOLE_HOST`, `RESEARCH_HOST`,
-`MIMIR_HOST`, `FORSETI_HOST` (in compose: `research`, `mimir`, `forseti`).
+`FORSETI_HOST` (in compose: `research`, `forseti`).
 
 The console binds 127.0.0.1 (set `CONSOLE_BIND` to listen elsewhere) and
 refuses, with 403, any request whose Host header is not `localhost:PORT` or
@@ -72,9 +74,6 @@ UI with no stack running.
 | `/api/portfolio`    | odin `:8086/api/portfolio`               |
 | `/api/equity`       | odin `:8086/api/equity`                  |
 | `/api/research[/*]` | research `:8094/api/research[/*]` (GET list/detail only, query forwarded, bearer token added; POST is refused with 405 because the gateway runs nothing) |
-| `/api/sources`      | mimir `:8095/api/sources`                |
-| `/api/features`     | mimir `:8095/api/features` (`?as_of=`, `?instrument=` forwarded) |
-| `/api/features/history` | mimir `:8095/api/features/history` (`?instrument=`, `?limit=` forwarded) |
 | `/api/tca`          | forseti `:8096/api/tca`                  |
 | `/api/tca/fills`    | forseti `:8096/api/tca/fills`            |
 | `/api/health/<svc>` | each service's health endpoint           |
@@ -98,10 +97,8 @@ shows stale fake numbers.
 | Portfolio          | `/api/portfolio`                         | Inverse-vol, dollar-neutral target weights + factor exposures + risk contributions, computed by Odin from recent per-instrument returns. `{available:false}` → "no portfolio run" empty state. |
 | Validation         | `/api/validation`                        | Walk-forward folds + PBO + deflated Sharpe, derived from the real artifact (see below). Undefined deflated Sharpe renders as `n/a`, not `0`. `{available:false}` → "no walk-forward run yet". |
 | Research gateway   | `/api/research/runs` (+ `/runs/{id}`)    | Read-only. There is no Run button: the gateway starts no runs (G1.2), because H1 and H2 trials run only through `research/norse_research`'s ledgered harness, and the panel says so. The recent-runs list + most-recent fold table (best_threshold / test_pnl / test_fills / sharpe) of runs earlier versions persisted refresh on the 3s cadence. PBO / deflated Sharpe render `n/a` when null. Without the token the panel stays on "connecting to research…". |
-| Feature store · Mimir | `/api/sources` + `/api/features?as_of=` | Per-instrument freshness (count, last event time, max ingest lag) from `/api/sources`, plus an **as-of lookup** (datetime input, defaults to now) showing each instrument's `event_time` vs `ingest_time` so the **no-lookahead** behavior is visible. Shows the point-in-time basis string. |
 | Execution TCA · Forseti | `/api/tca`                          | Overall tiles (avg slippage bps, total fees, maker/taker ratio, implementation shortfall) + by-instrument table + basis string. `avgSlippageBps: null` (no arrival benchmark, e.g. paper fills) renders `n/a` with the honest basis "fees + reported-slippage only", never a fabricated `0`. `{available:false}` → "no fills yet". |
 | Services           | `/api/health/<svc>`                      | huginn/sleipnir/odin `/healthz`, muninn `/actuator/health`, redpanda-console reachability. |
-| Regime             | — (no live source)                       | Rendered as `—`. The per-instrument regime exists in the feature stream but isn't surfaced as a single snapshot value; left honest rather than fabricated. |
 
 ### The validation artifact
 

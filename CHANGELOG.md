@@ -29,6 +29,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   stdlib tests in `console/tests` run in CI's validate job
 
 ### Removed
+- bragi, huginn-ai, heimdall and mimir (G2.6), retired on 2026-11-22 by the owner's
+  decision ("Retire all four"). All four served the retired order-book-imbalance signal
+  and nothing in H1 or H2 uses them. Their compose blocks, build contexts under
+  `services/` and CI jobs are gone, with huginn-ai's Prometheus scrape job, its three
+  alert rules and their promtool cases, the console's regime and feature-store panels,
+  the header's regime tile and their proxy routes, and `make bench`. obi-bridge, frozen
+  by D1, still calls huginn-ai and falls back to `mlScore` 0.5 and `mlReady` 0. mimir's
+  Docker volume is kept on the owner's decision; compose no longer declares it, which
+  does not delete it. The stack declares 19 services
 - news-sentinel (G2.6). Its two RSS sources, CoinDesk and Cointelegraph, bar automated
   access and AI use (DATA_LICENCES.md, finding 1), and the owner stopped it on
   2026-11-21. The service, its build context under `services/` and its CI job are gone;

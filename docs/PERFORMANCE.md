@@ -7,9 +7,15 @@ see [EDGE_VERDICT.md](EDGE_VERDICT.md)).
 
 Every number here is machine-dependent and, where noted, simulation-scale. The
 point is not the absolute figures but that the paths are **measured and
-regenerable**, not asserted.
+regenerable**, not asserted (the storage path below now only from a pre-retirement
+checkout).
 
 ## Storage path — Mimir point-in-time feature store
+
+**Mimir was retired on 2026-11-22 by the owner's decision (G2.6,
+[CONTAINERS.md](CONTAINERS.md)), and `services/mimir/` and `make bench` went with
+it.** This section is kept as the record of what was measured; the command below
+runs only on a checkout from before the retirement, such as commit `06a81c7`.
 
 The differentiating storage operation is a point-in-time *as-of* query
 (`event_time <= T AND ingest_time <= T`, latest-per-instrument), which is what

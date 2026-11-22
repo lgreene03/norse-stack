@@ -33,11 +33,6 @@ scrape_configs:
       - targets: ['odin:8086']
     metrics_path: /metrics
 
-  - job_name: 'huginn-ai'
-    static_configs:
-      - targets: ['huginn-ai:8091']
-    metrics_path: /metrics
-
   - job_name: 'muninn'
     static_configs:
       - targets: ['muninn:8080']

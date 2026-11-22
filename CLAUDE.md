@@ -2,7 +2,7 @@
 
 ## What Is norse-stack
 
-Meta-repository and entry point for the Norse Stack, a distributed quantitative trading infrastructure that boots as 23 containers (`docker compose config --services | wc -l`) via one-command `make bootstrap`. Which of them this iteration keeps, freezes or would retire, and what each costs, is in `docs/CONTAINERS.md` (G2.6). This repo provides the unified docker-compose, console, monitoring stack, end-to-end smoke test, and architecture documentation. The core engines (muninn, huginn, sleipnir) live in their own sibling repos, but this repo is **not** purely orchestration: the analytics, ML, research, and bridge services under `services/` are application code built directly from here.
+Meta-repository and entry point for the Norse Stack, a distributed quantitative trading infrastructure that boots as 19 containers (`docker compose config --services | wc -l`) via one-command `make bootstrap`. Which of them this iteration keeps, freezes or retires, and what each costs, is in `docs/CONTAINERS.md` (G2.6). This repo provides the unified docker-compose, console, monitoring stack, end-to-end smoke test, and architecture documentation. The core engines (muninn, huginn, sleipnir) live in their own sibling repos, but this repo is **not** purely orchestration: the analytics, research, and bridge services under `services/` are application code built directly from here.
 
 ## Commands
 
@@ -41,13 +41,11 @@ These services are application code built directly from this repo (`services/<na
 norse-stack/services/
   obi-bridge/      ← order-book-imbalance feature bridge (Muninn → Kafka)
   odin/            ← performance / risk analytics (port 8086)
-  bragi/           ← trade explainability (port 8087)
-  huginn-ai/       ← XGBoost signal-quality model, served; not a live signal by default (port 8092)
-  mimir/           ← point-in-time feature store (port 8095)
   forseti/         ← execution TCA + market impact / capacity (port 8096)
-  heimdall/        ← market-regime detector (Gaussian HMM) (port 8097)
   recording-audit/ ← daily recording gap audit, G0.15 (port 8098)
 ```
+
+bragi, huginn-ai, mimir and heimdall were retired on 2026-11-22 by the owner's decision (G2.6, `docs/CONTAINERS.md`). mimir's Docker volume, `norse-stack_mimir-data`, is kept on the owner's decision; nothing declares it any more, so never prune it.
 
 ## Ports
 
@@ -60,13 +58,9 @@ Postgres databases publish no host port; use `docker compose exec`.
 | 8083  | Huginn API         |
 | 8085  | Sleipnir API       |
 | 8086  | Odin Analytics     |
-| 8087  | Bragi Explainer    |
 | 8088  | Redpanda Console   |
-| 8092  | Huginn AI (ML)     |
 | 8094  | Research Gateway   |
-| 8095  | Mimir Feature Store|
 | 8096  | Forseti TCA        |
-| 8097  | Heimdall Regime    |
 | 8098  | Recording Audit    |
 | 9002  | MinIO API          |
 | 9003  | MinIO Console      |
@@ -91,30 +85,11 @@ Postgres databases publish no host port; use `docker compose exec`.
 - `GET /api/trades` — recent round-trip trades with P&L
 - `GET /api/reconciliation` — backtest-vs-live reconciliation: compares live realized PnL / fees / fill count against the committed `docs/RESULTS.md` expectation, models the 5 bps + 2 bps cost on live notional, and flags material divergence (e.g. live net worse than backtest predicted → a fee/fill-model gap). Also surfaced under the `reconciliation` key of `/api/analytics`.
 
-### Bragi (Trade Explainability)
-- `GET /api/decisions` — recent decision log with human-readable explanations
-- `GET /api/decisions/blocked` — only blocked trades (filter prevented execution)
-- `GET /api/decisions/trades` — only executed trades
-- `GET /api/decisions/stats` — filter effectiveness breakdown
-
-### Huginn AI (Signal-Quality Model, Served)
-Served with versioning, provenance and online retraining; the score is provenance, not a live signal in the shipped config (OBI ML gate off by default, `STRATEGY_OBI_ML_GATE`).
-- `GET /api/predict?instrument=BTC-USDT` — XGBoost confidence score for current signal
-- `GET /api/model/status` — model state, sample counts, feature importance
-- `GET /api/model/metrics` — precision, recall, F1, accuracy
-
 ### Research Gateway (read-only since G1.2, `huginn` cmd/research)
 - Runs nothing: `POST /api/research/runs` is refused with or without a token, because H1 and H2 trials run only through `research/norse_research`'s ledgered harness. Do not re-enable it without the ledgered path G1.2 describes.
 - `GET /api/research/runs` and `GET /api/research/runs/{id}` serve runs earlier versions persisted.
 - Every route but `/healthz` needs `Authorization: Bearer <token>`; the token is the untracked file `secrets/research_token`, mounted as a compose secret and read by `console/serve.py` (docs/RUNBOOK.md, section 1.1). No CORS headers; a Host other than 127.0.0.1, localhost or research on 8094 is refused.
 - `console/serve.py` binds 127.0.0.1 and refuses a Host other than `localhost:PORT` or `127.0.0.1:PORT`, because it adds the research token for its callers; `console/tests` (run in CI's validate job) holds it to that.
-
-### Mimir (Point-in-Time Feature Store)
-- `GET /api/features?as_of=<t>` — as-of query returning only data known at instant `t` (no lookahead)
-- `GET /api/features/history` — record history with event_time + ingest_time
-- `GET /api/sources` — registered data sources
-- Stamps both event_time and ingest_time; prevents lookahead bias structurally at the data layer
-- Idempotent ingestion: keyed on each feature's payload `eventId` (UNIQUE index + `INSERT OR IGNORE`), so a Kafka replay or Heimdall warm-start re-read is stored once, not duplicated
 
 ### Forseti (Execution TCA + Market Impact / Capacity)
 - `GET /api/tca` — aggregate transaction-cost analysis: slippage, maker/taker, fees, implementation shortfall
@@ -123,9 +98,3 @@ Served with versioning, provenance and online retraining; the score is provenanc
 - `GET /api/impact/schedule?size=&slices=&riskAversion=` — Almgren-Chriss optimal execution schedule (per-slice sizes trading off impact against timing risk)
 - `GET /api/capacity?edgeBps=&instrument=` — strategy capacity: the notional at which modelled impact equals an ASSUMED edge. The response labels the edge as illustrative — this simulation has no measured out-of-sample edge (PBO=1.0), so capacity is a "what-if" bound, not a live figure.
 - Computed from real fills; reports `null` slippage when there is no arrival price (e.g. paper fills) rather than fabricating a benchmark
-
-### Heimdall (Market-Regime Detection — Gaussian HMM)
-- `GET /api/regime` — current market regime via a Gaussian HMM fit with Baum-Welch (EM). Reports the causal forward-filtered state (`currentRegime` id/label/probability), full `stateProbs`, `transitionMatrix`, `stationary` distribution, `logLikelihood`, and observation counts.
-- `GET /api/regime/history` — recent regime assignments over the rolling window
-- `GET /api/regime/model` — fitted parameters (per-state means/covariances) and the deterministic label derivation
-- Consumes `features.obi.v1`, fits a `HEIMDALL_N_STATES`-state HMM (default 3) over a rolling window (default 1000 obs), and refits online. Warm-starts from Mimir's persisted feature history on boot so it is trained immediately rather than waiting for the live feed. Regime **labels** (calm / trending / turbulent / choppy) are derived from the fitted means and covariances — they are descriptive, not predictive, and carry no measured out-of-sample edge (this is a modelling homage to Renaissance/Medallion's HMM lineage, not an edge claim).

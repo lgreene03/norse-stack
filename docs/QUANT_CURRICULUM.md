@@ -112,7 +112,7 @@ Execution algorithms break large orders into smaller pieces and spread them over
 
 **How Norse Stack does it.** Odin is the performance analytics service. It computes Sharpe ratio, Sortino ratio, CVaR, and maximum drawdown. Critically, it also runs a **Monte Carlo permutation test** for strategy significance. This test randomly shuffles your trade returns thousands of times and compares your actual performance to the shuffled versions. If your real results are better than 95% or more of the random shuffles, your strategy likely has a genuine edge rather than a lucky streak.
 
-Bragi complements Odin by providing **trade explainability** -- for any given trade, it can tell you which signals contributed to the decision and by how much. This is essential for debugging strategies and understanding why a trade was taken.
+Bragi once complemented Odin with **trade explainability** -- for any given trade, it could tell you which signals contributed to the decision and by how much, which is how you debug a strategy and understand why a trade was taken. It explained the retired order-book-imbalance signal's decisions and was retired by goal G2.6 on 2026-11-22.
 
 ---
 
@@ -122,7 +122,7 @@ Bragi complements Odin by providing **trade explainability** -- for any given tr
 
 **Why it matters.** Markets are complex, nonlinear systems. A simple rule like "buy when momentum is positive" might work sometimes, but it ignores the interaction between momentum, volatility, sentiment, and dozens of other factors. ML models can capture these interactions. The risk is overfitting: a model that memorizes historical noise rather than learning real patterns.
 
-**How Norse Stack does it.** Huginn-AI uses **XGBoost**, a gradient-boosted decision tree algorithm. XGBoost is popular in quantitative finance because it handles tabular data well, is relatively interpretable compared to deep learning, and is resistant to overfitting when properly regularized. Huginn-AI's output becomes signal layer 8 -- the ML confidence score -- which feeds into Huginn's strategy logic alongside the other 9 signals. The ML model does not trade on its own; it is one voice among ten, and the strategy engine decides how much weight to give it.
+**How Norse Stack did it.** Huginn-AI used **XGBoost**, a gradient-boosted decision tree algorithm. XGBoost is popular in quantitative finance because it handles tabular data well, is relatively interpretable compared to deep learning, and is resistant to overfitting when properly regularized. Huginn-AI's output was signal layer 8, the ML confidence score, which Huginn's OBI strategy consulted only when its ML gate was switched on (it was off by default). The model never trained on this data, and goal G2.6 retired Huginn-AI on 2026-11-22, so layer 8 now reads the neutral 0.5.
 
 Obi-Bridge's signal layer 9 once used **Ollama** (a local LLM runner) to classify news headlines as bullish, bearish, or neutral for a given asset. The service behind it, news-sentinel, was stopped on 2026-11-21 and retired by goal G2.6 because its two news sources' terms bar automated access and AI use (DATA_LICENCES.md, finding 1), so layer 9 now reads 0.
 
@@ -134,7 +134,7 @@ Obi-Bridge's signal layer 9 once used **Ollama** (a local LLM runner) to classif
 
 **Why it matters in trading.** Trading systems have conflicting requirements. Market data ingestion needs to handle high throughput. Strategy computation needs low latency. Order execution needs reliability. Performance analytics can tolerate higher latency but needs access to large datasets. Trying to satisfy all of these in a single application leads to painful compromises.
 
-**How Norse Stack does it.** The Norse Stack is split into seven services, each with its own language chosen for the task:
+**How Norse Stack does it.** The Norse Stack's core is split into five services, each with its own language chosen for the task:
 
 | Service | Language | Responsibility |
 |---------|----------|---------------|
@@ -143,14 +143,12 @@ Obi-Bridge's signal layer 9 once used **Ollama** (a local LLM runner) to classif
 | Sleipnir | Go | Order execution, rate limiting, risk checks |
 | Obi-Bridge | Python | Real-time signal computation (10 layers) |
 | Odin | Python | Performance analytics |
-| Bragi | Python | Trade explainability |
-| Huginn-AI | Python | ML signal prediction |
 
 Java and Go handle the latency-sensitive, high-throughput paths (data ingestion, strategy execution, order routing). Python handles the analytically complex paths where library ecosystems (NumPy, scikit-learn, XGBoost) matter more than raw speed.
 
 Services communicate via **gRPC**, a high-performance RPC framework that uses Protocol Buffers for serialization. This is significantly faster than REST/JSON for inter-service communication. The system also exposes a gRPC API for programmatic access, so external tools and scripts can query signals, submit orders, or pull analytics.
 
-Data flows through the system in a pipeline: Binance exchange data enters through Muninn, flows to Obi-Bridge for signal computation, to Huginn for strategy decisions, and to Sleipnir for execution. Odin and Bragi operate on the output side, analyzing completed trades.
+Data flows through the system in a pipeline: Binance exchange data enters through Muninn, flows to Obi-Bridge for signal computation, to Huginn for strategy decisions, and to Sleipnir for execution. Odin operates on the output side, analyzing completed trades.
 
 ---
 

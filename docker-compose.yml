@@ -251,13 +251,12 @@ services:
       # marginal trades. 0 disables the gate.
       COST_HURDLE_K: "1.0"
       OBI_EDGE_BPS_PER_UNIT: "60"
-      # The served XGBoost model is untrained on this data (near-constant ~0.08),
-      # so it is PROVENANCE, not a live signal: the OBI ML gate is OFF by default
+      # There is no ML model any more: huginn-ai was retired by G2.6 on 2026-11-22
+      # (docs/CONTAINERS.md) without ever training on this data, and obi-bridge
+      # now always sends its fallback mlScore of 0.5. The OBI ML gate is OFF
       # (STRATEGY_OBI_ML_GATE=false) and the shipped strategy is `composite`, whose
-      # alphas never read mlScore. The floor below is therefore inert unless someone
-      # both switches to STRATEGY_NAME=obi AND enables the gate. Keep the model
-      # served (versioning/provenance) and turn the gate on only once it is trained
-      # and its out-of-sample value is demonstrated (see docs/EDGE_VERDICT.md).
+      # alphas never read mlScore, so the floor below is inert unless someone both
+      # switches to STRATEGY_NAME=obi AND enables the gate.
       STRATEGY_OBI_ML_GATE: "false"
       STRATEGY_ML_MIN_CONFIDENCE: "0.05"
       LIVE_EXECUTION: "true"
@@ -383,7 +382,7 @@ services:
       - no-new-privileges:true
     restart: unless-stopped
 
-  # ── Analytics & Explainability ───────────────────────────────────────
+  # ── Analytics ────────────────────────────────────────────────────────
 
   odin:
     build:
@@ -413,34 +412,9 @@ services:
       - no-new-privileges:true
     restart: unless-stopped
 
-  bragi:
-    build:
-      context: ./services/bragi
-      dockerfile: Dockerfile
-    depends_on:
-      redpanda:
-        condition: service_healthy
-    ports:
-      - "127.0.0.1:8087:8087"
-    environment:
-      KAFKA_BROKERS: redpanda:29092
-      FEATURES_TOPIC: features.obi.v1
-      FILLS_TOPIC: executions.fills.v1
-      OBI_THRESHOLD: "0.95"
-      PORT: "8087"
-      # CORS: defaults to "*" (permissive). Lock to a single origin in prod.
-      ACCESS_CONTROL_ALLOW_ORIGIN: ${ACCESS_CONTROL_ALLOW_ORIGIN:-*}
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8087/healthz',timeout=3)"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    mem_limit: 256m
-    cpus: "1.0"
-    pids_limit: 256
-    security_opt:
-      - no-new-privileges:true
-    restart: unless-stopped
+  # bragi was retired on 2026-11-22 by the owner's decision (G2.6,
+  # docs/CONTAINERS.md): it explained the retired order-book-imbalance signal's
+  # decisions, and no console panel, scrape job or alert read it.
 
   # ── Research & Platform Services ──────────────────────────────────────
 
@@ -479,39 +453,14 @@ services:
       - no-new-privileges:true
     restart: unless-stopped
 
-  # Mimir — point-in-time (no-lookahead) feature store. Consumes features.obi.v1
-  # and stamps BOTH event_time and ingest_time so as-of queries never leak
-  # data that hadn't physically arrived yet. SQLite on a named volume.
-  mimir:
-    build:
-      context: ./services/mimir
-      dockerfile: Dockerfile
-    depends_on:
-      redpanda:
-        condition: service_healthy
-    ports:
-      - "127.0.0.1:8095:8095"
-    environment:
-      KAFKA_BROKERS: redpanda:29092
-      FEATURES_TOPIC: features.obi.v1
-      MIMIR_PORT: "8095"
-      MIMIR_DB: /app/data/mimir.db
-      ACCESS_CONTROL_ALLOW_ORIGIN: ${ACCESS_CONTROL_ALLOW_ORIGIN:-*}
-    volumes:
-      - mimir-data:/app/data
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8095/healthz',timeout=3)"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    mem_limit: 256m
-    cpus: "1.0"
-    pids_limit: 256
-    # no read_only rootfs / cap_drop here: mimir writes SQLite to its named
-    # volume and those would break it. no-new-privileges is safe.
-    security_opt:
-      - no-new-privileges:true
-    restart: unless-stopped
+  # mimir was retired on 2026-11-22 by the owner's decision (G2.6,
+  # docs/CONTAINERS.md): it stored the retired signal's features, and H1 and H2
+  # read manifest-pinned archives instead. Its `mimir-data` entry is gone from
+  # `volumes:` below, but removing it from this file does NOT delete the Docker
+  # volume, norse-stack_mimir-data. The owner decided to keep that data: 404,379
+  # rows of features.obi.v1 since 2026-06-22, which cannot be recomputed. Once
+  # the container is removed nothing uses the volume, so `docker volume prune -a`
+  # would delete it; do not run that without the owner's say.
 
   # Forseti — execution transaction-cost analysis. Consumes executions.fills.v1
   # (+ prices.realtime.v1 for an arrival benchmark) → slippage, maker/taker,
@@ -544,71 +493,18 @@ services:
       - no-new-privileges:true
     restart: unless-stopped
 
-  # Heimdall — Gaussian-HMM market-regime detector trained with Baum-Welch (a
-  # direct Renaissance homage: Leonard Baum co-invented the algorithm at RenTech).
-  # Consumes features.obi.v1, fits a K-state HMM over a rolling window, and reports
-  # the current regime (calm/trending/turbulent) via causal forward-filtering.
-  heimdall:
-    build:
-      context: ./services/heimdall
-      dockerfile: Dockerfile
-    depends_on:
-      redpanda:
-        condition: service_healthy
-      mimir:
-        condition: service_started
-    ports:
-      - "127.0.0.1:8097:8097"
-    environment:
-      KAFKA_BROKERS: redpanda:29092
-      FEATURES_TOPIC: features.obi.v1
-      HEIMDALL_PORT: "8097"
-      HEIMDALL_N_STATES: "3"
-      MIMIR_URL: http://mimir:8095
-      ACCESS_CONTROL_ALLOW_ORIGIN: ${ACCESS_CONTROL_ALLOW_ORIGIN:-*}
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8097/healthz',timeout=3)"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    mem_limit: 512m
-    cpus: "1.0"
-    pids_limit: 256
-    security_opt:
-      - no-new-privileges:true
-    restart: unless-stopped
+  # heimdall was retired on 2026-11-22 by the owner's decision (G2.6,
+  # docs/CONTAINERS.md): no registered hypothesis uses its regime labels, and its
+  # depends_on on mimir went with it.
 
-  # ── ML & Intelligence ─────────────────────────────────────────────────
-
-  huginn-ai:
-    build:
-      context: ./services/huginn-ai
-      dockerfile: Dockerfile
-    depends_on:
-      redpanda:
-        condition: service_healthy
-    ports:
-      - "127.0.0.1:8092:8091"
-    environment:
-      KAFKA_BROKERS: redpanda:29092
-      FEATURES_TOPIC: features.obi.v1
-      FILLS_TOPIC: executions.fills.v1
-      PORT: "8091"
-      MIN_SAMPLES: "15"
-      RETRAIN_INTERVAL: "30"
-      # CORS: defaults to "*" (permissive). Lock to a single origin in prod.
-      ACCESS_CONTROL_ALLOW_ORIGIN: ${ACCESS_CONTROL_ALLOW_ORIGIN:-*}
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8091/healthz',timeout=3)"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    mem_limit: 512m
-    cpus: "1.0"
-    pids_limit: 256
-    security_opt:
-      - no-new-privileges:true
-    restart: unless-stopped
+  # huginn-ai was retired on 2026-11-22 by the owner's decision (G2.6,
+  # docs/CONTAINERS.md): its model never trained on this data. obi-bridge's code
+  # is frozen (D1) and still asks http://huginn-ai:8091 for mlScore on every
+  # poll. fetch_ml_score catches any exception, the name no longer resolving
+  # included, and falls back to mlScore 0.5 and mlReady 0, which is what it
+  # already published; the request carries a 10 s timeout. news-sentinel's
+  # missing name has taken the same path since 2026-11-21 without slowing the
+  # poll, so obi-bridge neither crashes nor blocks.
 
   # ── Observability ─────────────────────────────────────────────────────
 
@@ -736,7 +632,8 @@ volumes:
   sleipnir-data:
   pgdata-muninn:
   pgdata-huginn:
-  mimir-data:
+  # mimir-data is no longer declared: see the note where mimir's block was. The
+  # Docker volume norse-stack_mimir-data still exists and is kept.
 
 # Secret files, untracked under secrets/ (ignored by .gitignore). Each must
 # exist before `docker compose up`; `make up` creates the research token when it
