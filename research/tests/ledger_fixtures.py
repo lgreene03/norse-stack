@@ -16,17 +16,23 @@ For the seal's tests (G1.6) the world also holds a synthetic holdout manifest, w
 files sit in a separate "archive" folder standing in for data.binance.vision and never
 in the mirror until the unseal fetches them; the registration names that manifest's
 hash. The key record is derived from ``TEST_PASSPHRASE``, a passphrase that exists
-only in these tests and is never the owner's.
+only in these tests and is never the owner's; ``sign_as_owner`` signs an unseal written
+by hand with the one-time key it derives (decision D27). Each world's registration is
+synthetic, so its genesis names the world's own file hashes rather than the ones the code
+pins (``gitledger.PREREGISTRATION_SHA256``; security review of #65, L-9).
 """
 
 from __future__ import annotations
 
+import functools
+import hashlib
 import itertools
 import json
 import subprocess
 import sys
 from pathlib import Path
 
+from norse_research import lamport
 from norse_research.binance_archive import DOWNLOAD_URL, ArchiveNotFound
 from norse_research.canonical import sha256_hex
 from norse_research.gitledger import (
@@ -77,6 +83,24 @@ KEY_RECORD_TEXT = KEY_RECORD_SAMPLE.read_text()
 KEY_RECORD_DOC = json.loads(KEY_RECORD_TEXT)
 TREE_PATHS = {"harness": ["research/norse_research"], "H1": ["strategies/h1"],
               "H2": ["strategies/h2"]}
+# A signature of the right shape that verifies against nothing, for the ledgers built in
+# memory, whose replay never checks signatures (that needs git and the key record).
+SHAPED_SIGNATURE = {"preimages": ["ab" * 32] * lamport.BITS,
+                    "complements": ["cd" * 32] * lamport.BITS}
+
+
+@functools.lru_cache(maxsize=4)
+def seed_for(passphrase: str = TEST_PASSPHRASE) -> bytes:
+    """The one-time signing seed ``passphrase`` derives under the test record's salt."""
+    output = hashlib.scrypt(passphrase.encode(), salt=bytes.fromhex(KEY_RECORD_DOC["salt"]),
+                            n=KEY_RECORD_DOC["n"], r=KEY_RECORD_DOC["r"], p=KEY_RECORD_DOC["p"],
+                            dklen=KEY_RECORD_DOC["dklen"], maxmem=256 * 1024 * 1024)
+    return lamport.seed_of(output)
+
+
+def sign_as_owner(message: bytes, passphrase: str = TEST_PASSPHRASE) -> dict:
+    """The signature the seal would make of ``message`` with ``passphrase``'s key."""
+    return lamport.sign(seed_for(passphrase), message)
 
 _counter = itertools.count()
 
@@ -339,6 +363,8 @@ class World:
         self.holdout_sha256 = sha256_hex(self.holdout_manifest)
         registration_bytes = synthetic_registration_bytes(self.manifest_sha256, self.holdout_sha256)
         self.registration = Registration.from_bytes(registration_bytes)
+        self.registration_sha256 = {"docs/PREREGISTRATION.md": sha256_hex(REAL_PREREG_MD.read_bytes()),
+                                    "docs/preregistration.json": sha256_hex(registration_bytes)}
         self.ids = registered_ids(self.registration)
         n = next(_counter)
         self.paths = {"H1": f"strategies/h1/synthetic_h1_{n}.py",
@@ -374,7 +400,8 @@ class World:
 
     def write_genesis(self, **overrides) -> Entry:
         arguments = {"tree_paths": TREE_PATHS, "strategies": self.pins,
-                     "key_record": (self.prereg_commit, KEY_RECORD), **overrides}
+                     "key_record": (self.prereg_commit, KEY_RECORD),
+                     "registration_sha256": self.registration_sha256, **overrides}
         return write_genesis(self.ledger, **arguments)
 
     def write(self, rel: str, content: str | bytes) -> Path:

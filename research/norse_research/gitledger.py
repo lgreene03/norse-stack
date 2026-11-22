@@ -13,18 +13,22 @@ remote's resolved fetch and push URLs must equal the pinned URL, and no ``instea
 rewrite may be configured; so a run from a scratch clone, a mirror or a redirected
 remote is refused rather than ledgered where nobody looks (security review H1). Git
 runs with ``GIT_NO_REPLACE_OBJECTS`` set, and any ``refs/replace/`` ref is refused
-(M5). Every git command here also runs with hooks and the file system monitor turned
-off (``core.hooksPath=/dev/null``, ``core.fsmonitor=false``), and a clone that
-configures either in any scope is refused: either would run a program of the clone's
-choosing inside the unseal's push, where it could read the proof before the remote
-holds it (security review of #65, H-1). The rest of that class is closed the same way:
-the clone's own configuration (local and worktree scope, and anything they include) may
-set nothing that runs a program or redirects a read or a push, such as a credential
-helper, an askpass or editor program, a text conversion or filter, an include, or a
-transport override (``REPOSITORY_SCOPE_REFUSED``); and every command except those that
-reach the remote, or resolve how they would, runs with ``GIT_CONFIG_NOSYSTEM=1``. The
-owner's global and system configuration stay in force for the push, because its
-credential helper lives there (holdout-seal.md).
+(M5). Every git command here runs with its configuration pinned (security review of #65,
+M-3): ``GIT_CONFIG_GLOBAL=/dev/null`` and ``GIT_CONFIG_NOSYSTEM=1``, so neither the
+owner's global nor the system configuration reaches it; hooks and the file system
+monitor turned off on the command line (``core.hooksPath=/dev/null``,
+``core.fsmonitor=false``; H-1); on the commands that reach the remote, the credential
+helper reset and set to the owner's (``CREDENTIALS``); and an environment built from a
+short allowlist (``PASSED_ENVIRONMENT``), never inherited, with ``PATH`` the directory of
+the git found on the caller's ``PATH`` followed by the system's default. So no setting
+or variable an agent writes outside the clone runs a program inside a ledger command or
+redirects one (L-5, L-6). Inside the clone, a configuration that sets either hook key in
+any scope is refused, and so is one whose own scopes (local and worktree, and anything
+they include) set something that runs a program or redirects a read or a push, such as a
+credential helper, an askpass or editor program, a text conversion or filter, an include
+or a transport override (``REPOSITORY_SCOPE_REFUSED``): belt and braces now, since the
+command line overrides each. What is left is the binaries themselves, git and its
+credential helper, which the owner's user owns, as it owns the interpreter (T15).
 
 **Appending.** An append never touches the working tree, so it cannot dirty it. It
 takes a lock in the repository's git directory, fetches the remote ledger ref, checks
@@ -45,11 +49,13 @@ return series is never changed (T4, T7); the pre-registration tag still points w
 genesis says (T24); and the run rules of section 9 hold over the whole ledger (M2). A
 ``ledger-*`` tag on a commit that holds no ledger is reported, not fatal, because the
 tag ruleset makes such a tag permanent (M6). There is no ledger freeze (decision D21):
-the unseal entry (G1.6) closes development. It must name the holdout candidate the
-registered rule selects on the entries before it (``gate.check_unseal_candidate``;
-T22), its commit must differ from the candidate's only in data loading or the seal
-(section 11, item 6), and the diff it records as accepted must be that diff (security
-review round 3, T1); every sensitivity run must re-cost its hypothesis's candidate
+the unseal entry (G1.6) closes development. Its signature must verify against the key
+record genesis pins (decision D27), it must name the holdout candidate the registered
+rule selects on the entries before it (``gate.check_unseal_candidate``; T22), its commit
+must differ from the candidate's only in data loading or the seal (section 11, item 6),
+and the diff it records as accepted must be that diff, whose hash replay recomputes
+without rendering it (security review round 3, T1; review of #65, L-7); every
+sensitivity run must re-cost its hypothesis's candidate
 (``gate.check_sensitivity_entries``).
 
 Nothing here reads the clock to decide anything; it is read only for timestamps,
@@ -62,7 +68,6 @@ import argparse
 import difflib
 import fcntl
 import hashlib
-import hmac
 import json
 import os
 import re
@@ -79,6 +84,7 @@ from pathlib import Path
 from . import ledger as _ledger
 from .canonical import CanonicalError, loads_strict, sha256_hex
 from .environment import check_environment
+from .lamport import signature_error
 from .ledger import (
     ATTEMPT,
     CODE_BRANCH,
@@ -97,6 +103,7 @@ from .ledger import (
     genesis_of,
     make_entry,
     parse_ledger,
+    signed_bytes,
     unseal_of,
 )
 from .periods import HOLDOUT_START, LAST_DEVELOPMENT_MONTH, OUT_OF_SAMPLE_START
@@ -130,18 +137,43 @@ from .store import REPO_ROOT
 GENESIS_ANCHOR = "ledger-genesis-"
 RESERVED = ("ledger-genesis",)
 # The withdrawn freeze anchor's name stays refused as a milestone, so no permanent tag
-# can read as a freeze that no longer exists (security review of #65, L-4).
+# can read as a freeze that no longer exists (security review of #65, L-4), in any case,
+# since the tag ruleset makes ledger-Freeze-* as permanent as ledger-freeze-* (I-6).
 WITHDRAWN = ("ledger-freeze",)
 # Every git command runs with these first: hooks and the file system monitor would run a
 # program the clone chooses inside a ledger command (security review of #65, H-1).
 HARDENED = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
+# The owner's credential helper, the only program a ledger command may run for a
+# credential. Only the commands that reach the remote carry it: the empty value first
+# clears every helper a configuration file names, so only this one runs (review of #65,
+# M-3). On the owner's Mac it is osxkeychain, which Homebrew's git keeps in its exec path.
+CREDENTIAL_HELPER = "osxkeychain"
+CREDENTIALS = ("-c", "credential.helper=", "-c", f"credential.helper={CREDENTIAL_HELPER}")
+REMOTE_COMMANDS = frozenset({"push", "fetch", "ls-remote"})
+# The configuration every ledger git command runs with, whatever the caller's environment
+# says: no global or system configuration file (review of #65, M-3) and no replacement
+# objects (M5). Nothing a caller passes can override these.
+PINNED_CONFIGURATION = {
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_NO_REPLACE_OBJECTS": "1",
+}
+# The only variables a ledger git command inherits, besides PATH, which is rebuilt
+# (git_environment): the home folder (for ssh and the keychain), the locale, the temporary
+# folder, an ssh agent's socket and the switch that turns git's own prompt off. Nothing
+# that moves the configuration (XDG_CONFIG_HOME), routes the network (HTTPS_PROXY,
+# ALL_PROXY), changes trust (SSL_CERT_FILE, CURL_CA_BUNDLE) or loads code
+# (DYLD_INSERT_LIBRARIES) reaches git (review of #65, L-6).
+PASSED_ENVIRONMENT = (
+    "HOME", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TMPDIR", "SSH_AUTH_SOCK",
+    "GIT_TERMINAL_PROMPT",
+)
 _FALSE = frozenset({"false", "no", "off", "0"})
-# H-1's class, closed as a class rather than key by key: configuration in the clone itself
-# (the local and worktree scopes, and any file they include) that runs a program, or
-# redirects what the ledger and the seal read or where they push, is refused. Any of these
-# could run inside the unseal's push, which carries the proof. The owner's global and
-# system configuration is left alone, because the push's credential helper lives there
-# (on the owner's Mac, osxkeychain in the system scope; holdout-seal.md).
+# H-1's class, refused in the clone itself (the local and worktree scopes, and any file
+# they include): configuration that runs a program, or redirects what the ledger and the
+# seal read or where they push. The global and system scopes never reach a ledger command
+# (PINNED_CONFIGURATION), and the command line resets the credential helper and the hooks,
+# so this refusal is belt and braces (review of #65, M-3).
 REPOSITORY_SCOPES = frozenset({"local", "worktree"})
 REPOSITORY_SCOPE_REFUSED = re.compile(
     r"credential\..*"
@@ -152,10 +184,6 @@ REPOSITORY_SCOPE_REFUSED = re.compile(
     r"|diff\.external|diff\..+\.(textconv|command)|merge\..+\.driver|filter\..*"
     r"|uploadpack\.packobjectshook"
 )
-# The commands that reach the remote, or resolve how they would, read the system
-# configuration, where the owner's credential helper lives; every other ledger git command
-# runs with GIT_CONFIG_NOSYSTEM=1, so nothing in the system configuration reaches it.
-SYSTEM_SCOPE_COMMANDS = frozenset({"push", "fetch", "ls-remote", "remote", "config"})
 MILESTONE_TAG = re.compile(r"ledger-[a-z0-9][a-z0-9.-]*")
 SCRYPT_MAXMEM = 256 * 1024 * 1024
 # Configuration that would send fetches or pushes elsewhere while the URL still
@@ -170,6 +198,15 @@ TRANSPORT_OVERRIDES = (
 # The tag a new genesis entry names, the registration this code implements; replay
 # trusts the tag genesis records. A genesis may pin no other (quant review of #65, L7).
 PREREGISTRATION_TAG = "prereg-v2"
+# The same registration by content: the SHA-256 of each pre-registration file at
+# PREREGISTRATION_TAG. The genesis step refuses a tag whose files differ, so a tag created
+# or moved by someone else cannot be paired with this code (security review of #65, L-9).
+# A test holds these to docs/ in the checkout, so the registration and the code change
+# together, in one reviewed pull request, or not at all.
+PREREGISTRATION_SHA256 = {
+    "docs/PREREGISTRATION.md": "f26fa634f4c65fbbb5245dfdad9225f1198003e715624e6120c48bfbdb99b1d9",
+    "docs/preregistration.json": "736d51810d666bffaa79bf4bf4e4ee6bede23ea6487feac6552df955d0cc5079",
+}
 PREREGISTRATION_VERSION = re.compile(r"prereg-v([1-9][0-9]*)")
 LOCK_NAME = "norse-ledger.lock"
 HOLDOUT_LOCK_NAME = "norse-holdout.lock"
@@ -182,8 +219,11 @@ IDENTITY = {
     "GIT_COMMITTER_EMAIL": LEDGER_EMAIL,
 }
 REMOTE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
-# The holdout key record's contract (T25; G1.6 commits the record; genesis pins it).
-KEY_RECORD_KEYS = frozenset({"kdf", "n", "r", "p", "dklen", "salt", "verifier_sha256"})
+# The holdout key record's contract (T25; G1.6 commits the record; genesis pins it), with
+# the hash of the unseal's one-time public key beside the verifier (decision D27).
+KEY_RECORD_KEYS = frozenset(
+    {"kdf", "n", "r", "p", "dklen", "salt", "verifier_sha256", "signer_sha256"}
+)
 _RETURNS_FILE = re.compile(r"ledger/returns/[0-9a-f]{64}\.csv")
 # Section 11, item 6: a holdout run may be retried "at the commit of its selectable run
 # plus only commits that touch data loading or the seal". These are the files of data
@@ -201,6 +241,11 @@ PACKAGE_PATH = "research/norse_research"
 # changing a byte of the code, so item 6's rule covers every one in the repository, the
 # root's included (security review of #65, M-1).
 ATTRIBUTES_PATHSPEC = ":(glob)**/.gitattributes"
+# Lines of the diff the owner reviews wider than this are wrapped into pieces this wide,
+# each ending in a visible marker, after a line that flags it, so nothing can sit past the
+# right edge of a terminal or of a pager that cuts long lines (security review of #65, L-10).
+DIFF_WIDTH = 100
+WRAP_MARK = "|"
 
 
 class GitError(LedgerError):
@@ -228,6 +273,28 @@ def normal_url(url: str) -> str:
     return url[: -len(".git")] if url.endswith(".git") else url
 
 
+def git_environment(environ: Mapping[str, str] | None = None) -> tuple[str, dict[str, str]]:
+    """The git every ledger command runs, found on the caller's ``PATH``, and the
+    environment it runs with: ``PASSED_ENVIRONMENT`` from the caller, ``PATH`` rebuilt as
+    that git's directory followed by the system's default, and ``PINNED_CONFIGURATION``
+    (security review of #65, M-3 and L-6)."""
+    environ = os.environ if environ is None else environ
+    program = shutil.which("git", path=environ.get("PATH"))
+    if program is None:
+        raise GitError("no git on PATH")
+    passed = {name: environ[name] for name in PASSED_ENVIRONMENT if name in environ}
+    path = os.pathsep.join([str(Path(program).parent), os.defpath])
+    return program, {**passed, "PATH": path, **PINNED_CONFIGURATION}
+
+
+def _subcommand(args: Sequence[str]) -> str | None:
+    """The git subcommand ``args`` run, past any leading ``-c <setting>`` pairs."""
+    position = 0
+    while position + 1 < len(args) and args[position] == "-c":
+        position += 2
+    return args[position] if position < len(args) else None
+
+
 class Git:
     """A git repository, driven through the command line git runs."""
 
@@ -235,15 +302,19 @@ class Git:
         self.repo = Path(repo)
 
     def call(self, *args: str, input: bytes | None = None, env: Mapping | None = None):
-        # Replacement objects could substitute one commit or blob for another in
-        # every local check (M5); git never honours them here. Hooks and the file system
-        # monitor never run (H-1): a command-line setting overrides every file's. Only the
-        # commands that need the owner's credential helper read the system configuration.
-        scope = {} if args and args[0] in SYSTEM_SCOPE_COMMANDS else {"GIT_CONFIG_NOSYSTEM": "1"}
-        full = {**os.environ, "GIT_NO_REPLACE_OBJECTS": "1", **scope, **(env or {})}
+        # The configuration is pinned and the environment allowlisted (M-3, L-6): no
+        # global or system configuration file, no inherited variable outside
+        # PASSED_ENVIRONMENT, and no replacement objects (M5). Hooks and the file system
+        # monitor never run (H-1), and only the owner's credential helper may run, on the
+        # commands that reach the remote: a command-line setting overrides every file's.
+        # ``env`` adds what a command needs (an index, an object directory, an identity)
+        # and cannot override the pinned configuration.
+        program, base = git_environment()
+        credentials = CREDENTIALS if _subcommand(args) in REMOTE_COMMANDS else ()
         return subprocess.run(
-            ["git", *HARDENED, *args], cwd=self.repo, input=input, capture_output=True,
-            env=full, check=False,
+            [program, *HARDENED, *credentials, *args], cwd=self.repo, input=input,
+            capture_output=True, env={**base, **(env or {}), **PINNED_CONFIGURATION},
+            check=False,
         )
 
     def run(self, *args: str, input: bytes | None = None, env: Mapping | None = None) -> bytes:
@@ -337,9 +408,11 @@ class GitLedger:
 
     def check_repository(self) -> None:
         """No replacement refs, no URL rewriting, and no hooks path or file system
-        monitor, in any configuration scope; and in the clone's own configuration (local
-        and worktree, with what they include), nothing that runs a program or redirects a
-        read or a push (``REPOSITORY_SCOPE_REFUSED``)."""
+        monitor, in any configuration scope a ledger command reads; and in the clone's own
+        configuration (local and worktree, with what they include), nothing that runs a
+        program or redirects a read or a push (``REPOSITORY_SCOPE_REFUSED``). The global
+        and system scopes are never read (``PINNED_CONFIGURATION``), so nothing written
+        there is refused or obeyed (security review of #65, M-3)."""
         if self.git.text("for-each-ref", "--format=%(refname)", "refs/replace/"):
             raise RemoteNotPinned("refs/replace/ refs are refused: they substitute objects")
         found = self.git.try_text(
@@ -353,8 +426,8 @@ class GitLedger:
             raise RemoteNotPinned(
                 f"{name} is configured in the {scope} configuration ({value or 'true'}), which "
                 "is refused: a hook or a file system monitor runs a program inside the "
-                "ledger's git commands, where it could read the unseal's proof before the "
-                "remote holds it (security review of #65, H-1)"
+                "ledger's git commands, where it could read the unseal before the remote "
+                "holds it (security review of #65, H-1)"
             )
         for pattern in TRANSPORT_OVERRIDES:
             found = self.git.try_text("config", "--get-regexp", pattern)
@@ -375,9 +448,9 @@ class GitLedger:
             raise RemoteNotPinned(
                 f"the clone's own configuration sets {', '.join(refused)}, which is refused: "
                 "each runs a program inside the ledger's git commands, or redirects what they "
-                "read or where they push, where it could read the unseal's proof (security "
-                "review of #65, H-1's class). Remove it with git config --local --unset, or "
-                "--worktree --unset"
+                "read or where they push, where it could read the unseal (security review of "
+                "#65, H-1's class). Remove it with git config --local --unset, or --worktree "
+                "--unset"
             )
 
     def check_remote(self, pinned: str) -> None:
@@ -496,24 +569,30 @@ class GitLedger:
         require_in_step: bool = True,
         expected_head: str | None = None,
         attempts: int = 1,
+        sign: Callable[[bytes], Mapping] | None = None,
     ) -> Entry:
         """Append one entry, commit it, push it and read it back from the remote.
 
         ``require_in_step`` refuses unless the local head is the remote's; without
         it (for a result entry, whose open entry is already published) the local
         ledger is first fast-forwarded to the remote's. ``expected_head`` refuses
-        unless the ledger head is still the one the caller decided on (M2).
+        unless the ledger head is still the one the caller decided on (M2). ``sign``,
+        for the unseal alone, is given the entry's ``signed_bytes`` once its ``seq``,
+        ``prev`` and ``time`` are fixed, and returns its signature (decision D27).
         """
+        if sign is not None and (body.get("type") != UNSEAL or "signature" in body):
+            raise ValueError("only an unseal entry without a signature is signed here")
         for attempt in range(attempts):
             try:
-                return self._append_once(body, files or {}, require_in_step, expected_head)
+                return self._append_once(body, files or {}, require_in_step, expected_head, sign)
             except LedgerWriteError:
                 if attempt == attempts - 1:
                     raise
         raise AssertionError("unreachable")  # pragma: no cover
 
     def _append_once(
-        self, body: Mapping, files: Mapping[str, bytes], in_step: bool, expected: str | None
+        self, body: Mapping, files: Mapping[str, bytes], in_step: bool, expected: str | None,
+        sign: Callable[[bytes], Mapping] | None = None,
     ) -> Entry:
         with self._lock():
             remote = self.fetch()
@@ -540,6 +619,14 @@ class GitLedger:
             full["seq"] = len(entries)
             full["prev"] = last.hash if last else ZERO_HASH
             full["time"] = max(self.clock(), last.body["time"]) if last else self.clock()
+            if body.get("type") == UNSEAL and last is not None:
+                # The unseal's timestamp is its predecessor's, so the bytes it signs are fixed
+                # by the ledger it follows: a retry after a failed push, on the same ledger at
+                # the same commit, signs the same bytes and reveals nothing new of the
+                # one-time key (D27). The commit's own date still says when it was written.
+                full["time"] = last.body["time"]
+            if sign is not None:
+                full["signature"] = dict(sign(signed_bytes(full)))
             entry = make_entry(full)
             new_data = data + entry.line.encode("ascii") + b"\n"
             written = parse_ledger(new_data)  # the ledger as it will be verifies
@@ -646,8 +733,11 @@ class GitLedger:
     ) -> Entry:
         """The unseal's commit, built in a temporary object directory and pushed from
         there; the clone's own object store, refs and reflogs learn of it only once the
-        remote holds it. A failed push leaves nothing behind that holds the proof, so no
-        one can use it later without the owner (security review round 2, N2)."""
+        remote holds it, so a failed push leaves no unseal in the clone (security review
+        round 2, N2). While the push is in flight any process of the owner's user can read
+        that directory (security review of #65, H-2); what it finds is the signed entry,
+        which authorises nothing but itself, since the signature covers every field and
+        the key is never revealed (decision D27)."""
         with tempfile.TemporaryDirectory(prefix="norse-unseal-objects-") as tmp:
             objects = {
                 "GIT_OBJECT_DIRECTORY": tmp,
@@ -660,7 +750,9 @@ class GitLedger:
             except GitError as exc:
                 raise LedgerWriteError(
                     f"the unseal could not be pushed ({exc}); nothing of it is left in this "
-                    "clone, so run the unseal again at once, from the same terminal"
+                    "clone. Treat it as an incident: check the remote's ledger for an unseal "
+                    "entry, change nothing, and run the unseal again at once, from the same "
+                    "terminal, so it signs the same bytes (D27)"
                 ) from None
             # Pushed, so public: the loose objects join the clone's own store, which the
             # remote-tracking ref the push may have moved already points into.
@@ -793,14 +885,15 @@ class GitLedger:
         return Verified(snapshot, head, remote, tags, ignored, registration)
 
     def _check_unseal(self, snapshot: LedgerSnapshot, registration: Registration) -> None:
-        """On replay, the unseal's proof verifies, it names the candidate the registered
-        rule selects on the entries before it (T22), its commit differs from the
-        candidate's only in data loading or the seal (item 6), and the diff it records as
-        accepted is that diff (security review round 3, T1)."""
+        """On replay, the unseal's signature verifies against the key record genesis pins
+        (D27), it names the candidate the registered rule selects on the entries before it
+        (T22), its commit differs from the candidate's only in data loading or the seal
+        (item 6), and the diff it records as accepted is that diff (security review round
+        3, T1), whose hash is recomputed without rendering the diff (review of #65, L-7)."""
         unseal = unseal_of(snapshot.entries)
         if unseal is None:
             return
-        problem = unseal_proof_error(self.git, snapshot.genesis, unseal.body)
+        problem = unseal_signature_error(self.git, snapshot.genesis, unseal.body)
         if problem:
             raise VerificationError(f"entry {unseal.seq}: {problem}")
         from .gate import check_unseal_candidate  # the gate imports this module
@@ -818,7 +911,7 @@ class GitLedger:
         )
         if problem:
             raise VerificationError(f"entry {unseal.seq}: {problem}")
-        _, _, digest = seal_changes(self.git, candidate.body["commit"], unseal.body["commit"])
+        _, digest = seal_digest(self.git, candidate.body["commit"], unseal.body["commit"])
         if digest != unseal.body["accepted_diff"]:
             raise VerificationError(
                 f"entry {unseal.seq}: the unseal records accepting diff "
@@ -857,9 +950,9 @@ class GitLedger:
         checked, ignored = {}, {}
         for name, commit in sorted(tags.items()):
             tagged = self.git.blob(commit, LEDGER_PATH)
-            if tagged is None or name.startswith(WITHDRAWN):
-                # Not on a ledger commit, or the withdrawn freeze's name: reported, not
-                # fatal, and never read as a milestone (M6; L-4).
+            if tagged is None or name.lower().startswith(WITHDRAWN):
+                # Not on a ledger commit, or the withdrawn freeze's name in any case:
+                # reported, not fatal, and never read as a milestone (M6; L-4, I-6).
                 ignored[name] = commit
                 continue
             if name.startswith(RESERVED):
@@ -910,7 +1003,7 @@ class GitLedger:
         genesis step does (review M6)."""
         if not MILESTONE_TAG.fullmatch(name):
             raise ValueError(f"{name!r} is not a lower-case ledger-* milestone tag name")
-        if name.startswith(WITHDRAWN):
+        if name.lower().startswith(WITHDRAWN):
             raise LedgerError(
                 f"{name} is refused: ledger-freeze-* was the withdrawn freeze anchor (decision "
                 "D21), and a permanent tag of that shape would read as a freeze that does not "
@@ -976,35 +1069,65 @@ def holdout_commit_error(git: Git, candidate: str, commit: str, paths: Sequence[
     return None
 
 
-def seal_changes(git: Git, candidate: str, commit: str) -> tuple[list[str], str, str]:
+def seal_record(git: Git, candidate: str, commit: str) -> bytes:
+    """The raw ``diff-tree`` record of the data loading and seal files changed from the
+    candidate's commit to ``commit``: each changed file's path and its blob ids before
+    and after. It names the changed content exactly and, being plumbing, does not depend
+    on anyone's diff settings. With no change it is empty."""
+    return git.run(
+        "diff-tree", "-r", "--no-renames", "--no-abbrev", candidate, commit, "--",
+        *sorted(SEAL_AND_DATA_LOADING),
+    )
+
+
+def _record_files(raw: bytes) -> list[str]:
+    return sorted(line.split("\t", 1)[1] for line in raw.decode().splitlines() if "\t" in line)
+
+
+def seal_digest(git: Git, candidate: str, commit: str) -> tuple[list[str], str]:
     """The data loading and seal files changed from the candidate's commit to
-    ``commit``, the full diff of those changes for the owner to read, and the SHA-256 of
-    the diff's raw record (each changed file's path and its blob ids before and after),
-    which names the changed content exactly and, being plumbing, does not depend on
-    anyone's diff settings. The owner accepts that hash at the unseal, which records it,
-    and replay recomputes it (security review round 3, T1). The diff is rendered here
-    from the very blobs the record names (``render_diff``), never by git's porcelain, so
-    no attribute, filter or setting of the clone can change what the owner reads (M-1).
-    With no change the record is empty and the hash is that of no bytes."""
-    seal_files = sorted(SEAL_AND_DATA_LOADING)
-    raw = git.run(
-        "diff-tree", "-r", "--no-renames", "--no-abbrev", candidate, commit, "--", *seal_files
-    )
-    files = sorted(
-        line.split("\t", 1)[1] for line in raw.decode().splitlines() if "\t" in line
-    )
-    return files, render_diff(git, raw), hashlib.sha256(raw).hexdigest()
+    ``commit``, and the SHA-256 of their ``seal_record``, which the owner accepts at the
+    unseal, which records it, and which replay recomputes (security review round 3, T1).
+    Nothing is rendered: replay checks the hash only (security review of #65, L-7). With
+    no change the hash is that of no bytes."""
+    raw = seal_record(git, candidate, commit)
+    return _record_files(raw), hashlib.sha256(raw).hexdigest()
+
+
+def seal_changes(git: Git, candidate: str, commit: str) -> tuple[list[str], str, str]:
+    """``seal_digest``'s files and hash with, between them, the full diff of those changes
+    for the owner to read. The diff is rendered from the very blobs the record names
+    (``render_diff``), never by git's porcelain, so no attribute, filter or setting of the
+    clone can change what the owner reads (M-1). Only the unseal's refusal renders it."""
+    raw = seal_record(git, candidate, commit)
+    return _record_files(raw), render_diff(git, raw), hashlib.sha256(raw).hexdigest()
 
 
 def _shown(text: str) -> str:
-    """A line as the owner reads it: every character that is not printable (a control
-    character such as a carriage return or an escape, a format character such as a
-    bidirectional override, a line or paragraph separator) is written as its Python
-    escape, so nothing in a file can hide or rewrite a line on the terminal."""
+    """A line as the owner reads it: every character that is not printable (a tab, a
+    control character such as a carriage return or an escape, a format character such as
+    a bidirectional override, a line or paragraph separator) is written as its Python
+    escape, so nothing in a file can hide or rewrite a line on the terminal, and a line's
+    length in characters is its width on the screen for ASCII (L-10)."""
     return "".join(
-        c if c == "\t" or c.isprintable() else c.encode("unicode_escape").decode("ascii")
-        for c in text
+        c if c.isprintable() else c.encode("unicode_escape").decode("ascii") for c in text
     )
+
+
+def _fitted(line: str) -> list[str]:
+    """``line`` as printed: whole if it is at most ``DIFF_WIDTH`` characters; otherwise a
+    line that flags it, then pieces of at most ``DIFF_WIDTH`` characters, each keeping the
+    diff's sign in front and ending in ``WRAP_MARK``, so a run of padding can push nothing
+    out of sight (security review of #65, L-10)."""
+    if len(line) <= DIFF_WIDTH:
+        return [line]
+    sign, body = line[:1], line[1:]
+    pieces = [body[i : i + DIFF_WIDTH] for i in range(0, len(body), DIFF_WIDTH)]
+    flag = (
+        f"! the next line is {len(line)} characters long: shown in {len(pieces)} pieces of at "
+        f"most {DIFF_WIDTH}, each ending in {WRAP_MARK}"
+    )
+    return [flag, *(f"{sign}{piece}{WRAP_MARK}" for piece in pieces)]
 
 
 def render_diff(git: Git, raw: bytes) -> str:
@@ -1012,7 +1135,8 @@ def render_diff(git: Git, raw: bytes) -> str:
     blob ids, rendered with ``difflib`` from the blobs it names, read with ``cat-file``,
     which applies no attribute, filter or text conversion. Lines split on newlines only,
     bytes that are not UTF-8 show as escapes, and so does any character ``_shown``
-    escapes, so what the owner reads is the content the record's hash binds (M-1)."""
+    escapes, so what the owner reads is the content the record's hash binds (M-1); a line
+    wider than ``DIFF_WIDTH`` is wrapped and flagged (``_fitted``; L-10)."""
     shown = []
     for line in raw.decode().splitlines():
         meta, _, path = line.partition("\t")
@@ -1028,7 +1152,8 @@ def render_diff(git: Git, raw: bytes) -> str:
             sides.append([_shown(x) for x in blob.decode("utf-8", "backslashreplace").split("\n")])
         name = _shown(path)
         shown.append(f"{name}: {status}, mode {old_mode} -> {new_mode}, blob {old} -> {new}")
-        shown.extend(difflib.unified_diff(*sides, f"a/{name}", f"b/{name}", lineterm=""))
+        for diff_line in difflib.unified_diff(*sides, f"a/{name}", f"b/{name}", lineterm=""):
+            shown.extend(_fitted(diff_line))
     return "\n".join(shown)
 
 
@@ -1110,14 +1235,17 @@ def check_key_record(data: bytes) -> None:
     """The holdout key record, exactly (T25, review N8): a JSON object with the keys
     ``kdf`` ("scrypt"), ``n`` (a power of two, at least 2^17), ``r`` (8), ``p`` (1),
     ``dklen`` (at least 32), ``salt`` (lower-case hex, even length, at least 32
-    characters) and ``verifier_sha256`` (the lower-case hex SHA-256 of the scrypt
-    output), and nothing else; the parameters must be ones ``hashlib.scrypt`` accepts
-    within 256 MiB. G1.6 writes the record; this is the contract genesis holds it to.
+    characters), ``verifier_sha256`` (the lower-case hex SHA-256 of the scrypt output)
+    and ``signer_sha256`` (the lower-case hex SHA-256 of the one-time public key the
+    scrypt output derives, ``lamport.signer_sha256``; decision D27), and nothing else;
+    the parameters must be ones ``hashlib.scrypt`` accepts within 256 MiB. G1.6 writes
+    the record; this is the contract genesis holds it to.
 
-    The record is the commitment of a commit-reveal (G1.6 security review H1): it holds
-    a hash of the scrypt output, never the output itself, and the unseal entry reveals
-    the output as its ``proof``, which the ledger checks against this hash when the
-    entry is written and on every replay. Offline guessing still costs one scrypt per
+    The record commits to the owner's key and reveals none of it: the verifier lets the
+    seal check a typed passphrase before it signs, and the unseal entry carries a
+    signature over its own bytes, which the ledger checks against ``signer_sha256`` when
+    the entry is written and on every replay. The scrypt output itself is never written
+    anywhere (security review of #65, H-2). Offline guessing still costs one scrypt per
     guess."""
     try:
         record = loads_strict(data)
@@ -1128,7 +1256,7 @@ def check_key_record(data: bytes) -> None:
         problem = f"the keys are exactly {sorted(KEY_RECORD_KEYS)}"
     else:
         n, r, p, dklen = record["n"], record["r"], record["p"], record["dklen"]
-        salt, verifier = record["salt"], record["verifier_sha256"]
+        salt, verifier, signer = record["salt"], record["verifier_sha256"], record["signer_sha256"]
         integers = all(type(v) is int for v in (n, r, p, dklen))
         if record["kdf"] != "scrypt" or not integers:
             problem = "kdf is scrypt and n, r, p and dklen are integers"
@@ -1140,6 +1268,8 @@ def check_key_record(data: bytes) -> None:
             problem = "dklen is at least 32"
         elif not isinstance(verifier, str) or not re.fullmatch(r"[0-9a-f]{64}", verifier):
             problem = "verifier_sha256 is a lower-case hex SHA-256"
+        elif not isinstance(signer, str) or not re.fullmatch(r"[0-9a-f]{64}", signer):
+            problem = "signer_sha256 is a lower-case hex SHA-256"
         elif not _scrypt_accepts(n, r, p, dklen):
             problem = "hashlib.scrypt refuses these parameters within 256 MiB"
     if problem:
@@ -1159,16 +1289,14 @@ def pinned_key_record(git: Git, genesis: Entry) -> dict:
     return loads_strict(data)
 
 
-def unseal_proof_error(git: Git, genesis: Entry, body: Mapping) -> str | None:
-    """Why an unseal entry's ``proof`` is not the scrypt output whose SHA-256 the key
-    record genesis pins, or None (security review H1). Compared in constant time."""
+def unseal_signature_error(git: Git, genesis: Entry, body: Mapping) -> str | None:
+    """Why an unseal entry's ``signature`` is not the owner's one-time signature of its
+    ``signed_bytes``, under the public key whose SHA-256 the key record genesis pins holds
+    as ``signer_sha256``, or None (decision D27; security review of #65, H-2). It replaces
+    round 1's check of a revealed proof, which any process of the owner's user could copy
+    and reuse on another entry. Compared in constant time."""
     record = pinned_key_record(git, genesis)
-    proof = body.get("proof")
-    if not isinstance(proof, str) or not re.fullmatch(rf"[0-9a-f]{{{2 * record['dklen']}}}", proof):
-        return "its proof is not the scrypt output of the pinned key record's length"
-    if not hmac.compare_digest(sha256_hex(bytes.fromhex(proof)), record["verifier_sha256"]):
-        return "its proof does not verify against the key record genesis pins: no owner's key (T25)"
-    return None
+    return signature_error(record["signer_sha256"], signed_bytes(body), body.get("signature"))
 
 
 def tree_digests(git: Git, commit: str, tree_paths: Mapping[str, Sequence[str]]) -> dict:
@@ -1212,10 +1340,31 @@ def preregistration_tag_error(ledger: GitLedger, tag: object) -> str | None:
     if newer:
         return (
             f"the remote holds {', '.join(sorted(newer))}, newer than {tag}, which this code "
-            "implements: update the code to the newest registration before writing genesis "
-            "(quant review of #65, L7)"
+            "implements. A registration is tagged only after the code that implements it, "
+            "its tag and its content hashes, has merged, so a newer tag this code does not "
+            "name is an incident, not a reason to change the code: find out who created it "
+            "and why before anything else, and never change the code to match a tag you did "
+            "not make (security review of #65, L-9; quant review of #65, L7)"
         )
     return None
+
+
+def preregistration_content_error(
+    tag: str, files: Mapping[str, str], expected: Mapping[str, str]
+) -> str | None:
+    """Why the pre-registration files at ``tag``, by SHA-256, are not the registration
+    this code implements (``expected``, ``PREREGISTRATION_SHA256``), or None (security
+    review of #65, L-9)."""
+    differ = sorted(path for path in PREREGISTRATION_FILES if files.get(path) != expected.get(path))
+    if not differ:
+        return None
+    return (
+        f"the pre-registration at {tag} is not the registration this code implements: "
+        f"gitledger.PREREGISTRATION_SHA256 pins other content for {', '.join(differ)}. That "
+        "is an incident, not a reason to change the code: find out who created or moved "
+        f"{tag} and why before anything else; the pinned hashes change only in a reviewed "
+        "pull request that changes the registration itself (security review of #65, L-9)"
+    )
 
 
 def write_genesis(
@@ -1226,10 +1375,14 @@ def write_genesis(
     key_record: tuple[str, str],
     tag: str = PREREGISTRATION_TAG,
     remote_url: str | None = None,
+    registration_sha256: Mapping[str, str] | None = None,
 ) -> Entry:
     """Append a genesis entry pinning the pre-registration tagged ``tag`` on the
     remote, then tag it ``ledger-genesis``. Refused once any entry of another type
-    exists (section 16).
+    exists (section 16), and unless the pre-registration files at ``tag`` are, by
+    SHA-256, ``registration_sha256``: by default ``PREREGISTRATION_SHA256``, the
+    registration this code implements; only the tests' synthetic registrations pass
+    another (security review of #65, L-9).
 
     ``remote_url`` is the canonical remote every later run must use (default: the
     remote's resolved URL now). ``key_record`` is the (commit, path) of G1.6's holdout
@@ -1262,6 +1415,10 @@ def write_genesis(
         if data is None:
             raise LedgerError(f"{path} is not in {tag} ({found})")
         files[path] = sha256_hex(data)
+    expected = PREREGISTRATION_SHA256 if registration_sha256 is None else registration_sha256
+    problem = preregistration_content_error(tag, files, expected)
+    if problem:
+        raise LedgerError(problem)
     registration = Registration.from_bytes(git.blob(found, PREREGISTRATION_JSON))
     periods = period_constants()
     registered = registration.doc["periods"]

@@ -37,17 +37,52 @@ has fewer than six words or 20 characters (a word is a run of letters, whatever 
 the code cannot tell generated words from chosen ones, so generating them is the owner's part).
 It accepts the passphrase only from an interactive terminal: no option, environment variable or
 file can carry it. It derives scrypt at n 2^17, r 8, p 1 and 32 bytes over a fresh 16-byte salt
-and writes a JSON file holding exactly the seven keys the genesis step's contract names (`kdf`,
-`n`, `r`, `p`, `dklen`, `salt`, `verifier_sha256`). The last is the SHA-256 of the scrypt output,
-never the output itself: the record is a commitment, and the unseal later reveals the output. The
-command checks the file against the contract and against the passphrase once more, and prints only
-the path and the file's SHA-256, which the owner keeps beside the passphrase in the password
-manager. It never replaces an existing record. The verifier is public once committed, which is why
-the derivation is memory-hard: guessing a generated six-word passphrase against it costs one scrypt
-per guess and is out of reach, guessing a short one a person chose is not (T25). The format holds no
-field the repository's secret scan reads as a credential, so committing it needs no change to the
-scan; `research/tests/fixtures/key-record-test-passphrase-only.json`, a sample for a passphrase that
+and writes a JSON file holding exactly the eight keys the genesis step's contract names (`kdf`,
+`n`, `r`, `p`, `dklen`, `salt`, `verifier_sha256`, `signer_sha256`; the table is in
+[trial-ledger.md](trial-ledger.md)). `verifier_sha256` is the SHA-256 of the scrypt output, and
+`signer_sha256` the SHA-256 of the public key of a one-time signing key that the scrypt output
+derives (decision D27, below). Neither is the output itself, and nothing ever reveals it: the
+record is a commitment, and the unseal later proves knowledge of the passphrase by signing its
+own entry. The command checks the file against the contract and against the passphrase once
+more, and prints only the path and the file's SHA-256, which the owner keeps beside the
+passphrase in the password manager. It never replaces an existing record. Both hashes are public
+once committed, which is why the derivation is memory-hard: guessing a generated six-word
+passphrase against them costs one scrypt per guess and is out of reach, guessing a short one a
+person chose is not (T25). The format holds no field the repository's secret scan reads as a
+credential, so committing it needs no change to the scan;
+`research/tests/fixtures/key-record-test-passphrase-only.json`, a sample for a passphrase that
 exists only in the tests, is scanned on every pull request to show it.
+
+### The unseal's signature (decision D27)
+
+The owner decided on 2026-11-22 to "Adopt the signature" (security review of #65, H-2). Until
+then the unseal revealed the scrypt output as its proof. While the unseal's commit was built
+and pushed, that proof sat in loose objects in the owner's temporary folder, which every process
+of the owner's user can read, every agent session included. A copy of it could be put on another
+unseal entry, at a commit nobody reviewed, and that entry verified. Now the proof is a signature
+bound to the entry, so a copy authorises nothing but that same entry.
+
+The scheme is Lamport's one-time signature over SHA-256, written with the standard library's
+`hashlib` and `hmac` only (`research/norse_research/lamport.py`, whose docstring states it
+exactly). The scrypt output derives a seed with HMAC-SHA256 under a fixed domain string, and the
+seed derives 256 pairs of 32-byte secrets. The SHA-256 of each secret is its public half, and
+`signer_sha256` is the SHA-256 of all 512 public halves in order. The unseal entry's `signature`
+is `{"preimages": [...], "complements": [...]}`, two lists of 256 hashes of 64 lower-case hex
+characters. It signs the SHA-256 of the entry's canonical line without the signature, so it
+covers every other field: the candidate, the commit, the accepted diff hash, the previous entry's
+hash, the sequence number and the timestamp. Bit `i` of that digest chooses which secret of
+pair `i` the signature reveals, as `preimages[i]`, and `complements[i]` is the public half of the
+other secret. To verify, the code hashes each preimage, puts the two halves of each pair in
+order, and compares the SHA-256 of the result with `signer_sha256` in constant time. The
+append, `verify()` and every replay check it against the record genesis pins.
+
+One signature reveals one secret of each pair and is safe. A second signature over different
+bytes would reveal both secrets of about half the pairs, and each further one weakens the key
+fast. So the bytes are fixed by the ledger the unseal follows: its timestamp is its
+predecessor's (the ledger commit's own date still records when it was written). The owner's
+retry after a failed push, at once, on the same ledger and at the same commit, therefore signs
+the same bytes and reveals nothing new. Never sign anything else with this key. The owner's steps
+do not change: one passphrase, typed once.
 
 Commit `research/keys/holdout-key-record.json` on main through a pull request. The genesis step
 then names it (see trial-ledger.md), as `--key-record <that commit>:research/keys/holdout-key-record.json`,
@@ -60,10 +95,12 @@ pins, so straight after it the owner runs, in a terminal of their own:
 python -m norse_research.seal check-key
 ```
 
-It reads the passphrase from the terminal, checks it against the key record the genesis entry on
-the remote pins, prints that record's SHA-256 for comparison with the one kept in the password
-manager, and writes nothing. If it refuses, the genesis entry pins a record that is not the owner's,
-and a superseding genesis is still possible until the first entry of any other type (section 16).
+It reads the passphrase from the terminal, checks it against both of the commitments in the key
+record the genesis entry on the remote pins, the verifier and the signer, prints that record's
+SHA-256 for comparison with the one kept in the password manager, and writes nothing. If it
+refuses, the genesis entry pins a record that is not the owner's, or not wholly made from the
+owner's passphrase, and a superseding genesis is still possible until the first entry of any
+other type (section 16).
 
 ## What happens at the unseal (G3.2, with the owner holding the key)
 
@@ -85,9 +122,10 @@ It prints, for each hypothesis, its candidate and whether it meets DEV-1 to DEV-
 it stands (provisional until the unseal), then the pre-registration the genesis entry names, the
 holdout candidate's configuration id and hash, and the data loading and seal files changed since
 the candidate's run. It prints neither their diff nor the hash that accepts it: both come only from
-`seal unseal`, which prints the hash after the full diff, so the hash is never seen without what it
-covers (security review of #65, L-2). If no hypothesis passes development there is no holdout
-candidate, and then no unseal and no holdout run (section 11, item 3).
+`seal unseal`, which prints the hash after the full diff, and only at an interactive terminal, so
+the hash is never seen without what it covers (security review of #65, L-2 and I-7). If no
+hypothesis passes development there is no holdout candidate, and then no unseal and no holdout run
+(section 11, item 3).
 
 Then rehearse the holdout run, which also needs no key and writes nothing to the ledger:
 
@@ -107,7 +145,8 @@ the real boundary at 2026-01-01, whose data stays off disk, so a gap there is st
 
 Otherwise the owner runs, in a terminal of their own, the unseal first without `--accept-diff`,
 which prints the full diff and then its hash and refuses, and then, once every line has been read,
-with that hash:
+with that hash. Accept only a hash read in your own terminal straight after the diff, never one
+handed to you in a prepared command line:
 
 ```bash
 python -m norse_research.seal unseal --commit <the pre-registration commit> --configuration-sha256 <the candidate's hash>
@@ -132,53 +171,79 @@ loading or seal change before anything is unsealed; with nothing changed it prin
 empty diff to accept (security review round 3, T1). The diff is rendered by the seal itself, in
 Python, from the very blobs the hash names, never by git's own `git diff`: the clone's attributes,
 text conversion filters and settings, which an agent can change without leaving a trace in `git
-status`, cannot hide or alter a line, and every unprintable character (a carriage return, a
-terminal escape, a bidirectional override) is written as an escape (security review of #65, M-1).
-Read the diff it prints, not the output of a `git diff` of your own.
-Only then does it read the passphrase from the terminal and check that the SHA-256 of its scrypt
-output is the key record's verifier, in constant time (T25). A missing or wrong passphrase writes
-nothing.
+status`, cannot hide or alter a line, and every unprintable character (a tab, a carriage return,
+a terminal escape, a bidirectional override) is written as an escape (security review of #65,
+M-1). A line wider than 100 characters is flagged by the line before it and shown in pieces of at
+most 100, each ending in `|`, so padding cannot push a change past the right edge of the terminal
+or of a pager that cuts long lines (L-10). Read the diff it prints, not the output of a `git
+diff` of your own.
+
+The hash is printed only when an interactive terminal is attached, the test the passphrase prompt
+applies; elsewhere, as in an agent's shell, the refusal prints the diff and says the hash is shown
+only in a terminal (security review of #65, I-7). The alternative was to ask for the passphrase
+before showing the hash. It was not chosen because the owner would then type the passphrase twice
+for every review, once to see the hash and again to unseal, where D27 keeps it to once, and
+because it would protect nothing more: anyone can compute the hash from git's plumbing (the
+SHA-256 of `git diff-tree -r --no-renames --no-abbrev` over the seal's files). Both are speed
+bumps. The control is the owner accepting only a hash read in their own terminal straight after
+the diff.
+
+Only then does it read the passphrase from the terminal and check, in constant time, that the
+SHA-256 of its scrypt output is the key record's verifier and that the one-time public key it
+derives is the record's signer (T25; D27). A missing or wrong passphrase writes nothing.
 
 When the passphrase verifies, the unseal entry is appended through the ledger's ordinary append,
-committed, pushed and read back from the remote. It names the pre-registration, the candidate's
-configuration id, hypothesis and hash, the open and result entries of its selectable run, the
-commit the holdout runs at, the accepted diff hash, and the hashes of the holdout manifest and the
-key record, and it reveals
-the scrypt output as its `proof`. The ledger itself checks that proof against the verifier in the
-key record genesis pins, when the entry is written and on every replay, so an unseal written
-without the owner's key, by the seal, by a direct append or by git plumbing, is refused, and with
-it the re-fetch and the holdout run (security review H1). Revealing the scrypt output is safe
-because the unseal is single use (T23); a rewrite of the remote to replay it is T10's. Every git
-command the ledger and the seal run has hooks and the file system monitor turned off, and a clone
-that configures either is refused, since a hook in the clone's untracked `.git/hooks` could copy
-the proof out of the unseal's push and fail it, leaving an agent free to unseal at a commit of its
-own (security review of #65, H-1). Even so, an unseal whose push fails is an incident: before
-running it again, check the remote's ledger for an unseal entry and the clone's `.git/hooks` and
-configuration, then run it again at once from the same terminal.
+signed, committed, pushed and read back from the remote. It names the pre-registration, the
+candidate's configuration id, hypothesis and hash, the open and result entries of its selectable
+run, the commit the holdout runs at, the accepted diff hash, and the hashes of the holdout manifest
+and the key record, and it carries the one-time signature over all of that (D27, above). The ledger
+itself checks the signature against the `signer_sha256` of the key record genesis pins, when the
+entry is written and on every replay, so an unseal written without the owner's key, by the seal, by
+a direct append or by git plumbing, is refused, and with it the re-fetch and the holdout run
+(security review H1). A copy of the signed entry, taken while it is pushed, authorises nothing but
+that same entry at the commit the owner reviewed (H-2); a rewrite of the remote to replay it is
+T10's. Every git command the ledger and the seal run has hooks and the file system monitor turned
+off, and a clone that configures either is refused, since a hook in the clone's untracked
+`.git/hooks` could copy the entry out of the unseal's push and fail it (security review of #65,
+H-1). Any process of the owner's user can still fail the push, by reading the temporary objects or
+by stopping the seal, so an unseal whose push fails is an incident: before running it again, check
+the remote's ledger for an unseal entry and the clone's `.git/hooks` and configuration, change
+nothing, then run it again at once from the same terminal, so it signs the same bytes. That denial
+is detected, not prevented; it can no longer put an unseal at a commit of anyone else's.
 
-The rest of that class is closed the same way. The clone's own configuration, its local and
-worktree scopes and any file they include, may set nothing that runs a program or redirects
-what the ledger and the seal read or where they push: no credential helper, `core.sshCommand`,
-`core.askPass`, `core.editor` or `core.pager`, `sequence.editor`, `gpg` program, include, URL
-rewrite, receive or upload pack program, protocol permission, HTTP proxy or SSL override, text
-conversion, filter, external diff or merge driver, or pack-objects hook (the full list is
-`gitledger.REPOSITORY_SCOPE_REFUSED`). The ledger, the harness and the seal refuse such a clone
-before anything is written, and the unseal refuses it before the passphrase is asked for. Every
-ledger git command except those that reach the remote, or resolve how they would, also runs with
-`GIT_CONFIG_NOSYSTEM=1`. The owner's global and system configuration are left alone for the push,
-and its credential helper is not blanked there (no `-c credential.helper=`), because the push
-needs the owner's own helper, which on the owner's Mac is osxkeychain in the system configuration
-(`/opt/homebrew/etc/gitconfig`); blanking it, or ignoring the system configuration, would break
-the push. That leaves a residual: a credential helper or askpass program written into the global
-or system configuration, both of which an agent running as the owner can write on this Mac,
-would still run in the unseal's push. So, just before the unseal, the owner checks that
-`git config --show-scope --show-origin --get-regexp '^(credential\.|core\.askpass)'` lists only
-the owner's own helper. (`core.sshCommand` and the other transport overrides are refused in every
-scope already.) The unseal also refuses `GIT_ASKPASS` and `SSH_ASKPASS` in its environment, since
-git runs them to ask for a credential during the push; an editor's built-in terminal may set
-`GIT_ASKPASS`, so unseal from a plain terminal. `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_EXEC_PATH`,
-`GIT_CONFIG_PARAMETERS` and every other `GIT_*` variable outside a short allowlist are refused for
-every ledger write. Only after the
+Every ledger and seal git command runs with its configuration pinned (security review of #65,
+M-3): `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`, so nothing in the owner's global
+configuration (`~/.gitconfig`) or the system's (`/opt/homebrew/etc/gitconfig` on the owner's Mac),
+both of which an agent running as the owner can write, reaches it. The commands that reach the
+remote, and only those, carry `-c credential.helper= -c credential.helper=osxkeychain` on the command
+line: the empty value clears every helper a file names, so the owner's osxkeychain helper is the
+only credential program that can run (`gitledger.CREDENTIAL_HELPER`). Git also gets an environment
+built from a short allowlist rather than the shell's: the home folder, the locale, the temporary
+folder, an ssh agent's socket, the switch that turns git's own prompt off, and a `PATH` that is the
+directory of the git found on the shell's `PATH` followed by the system's default
+(`gitledger.PASSED_ENVIRONMENT`). So a filter, text conversion, hook, askpass or credential program
+written into either configuration file, and a variable that moves the configuration
+(`XDG_CONFIG_HOME`), routes the network (`HTTPS_PROXY`), changes trust (`SSL_CERT_FILE`) or loads
+code (`DYLD_INSERT_LIBRARIES`), never reaches a ledger command (L-5, L-6). The owner no longer needs
+to inspect the global and system configuration before the unseal. The push still works because it
+needs only osxkeychain to hold the GitHub credential: the genesis step and every run push from the
+same clone with the same pinned configuration, so a push that worked for them works at the unseal.
+
+Inside the clone, the refusals of the last round stay as belt and braces. The clone's own
+configuration, its local and worktree scopes and any file they include, may set nothing that runs
+a program or redirects what the ledger and the seal read or where they push: no credential helper,
+`core.sshCommand`, `core.askPass`, `core.editor` or `core.pager`, `sequence.editor`, `gpg`
+program, include, URL rewrite, receive or upload pack program, protocol permission, HTTP proxy or
+SSL override, text conversion, filter, external diff or merge driver, or pack-objects hook (the
+full list is `gitledger.REPOSITORY_SCOPE_REFUSED`). The ledger, the harness and the seal refuse such
+a clone before anything is written, and the unseal refuses it before the passphrase is asked for.
+The unseal also refuses `GIT_ASKPASS` and `SSH_ASKPASS` in its environment, although no ledger git
+command inherits either any more; an editor's built-in terminal may set `GIT_ASKPASS`, so unseal
+from a plain terminal. `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_EXEC_PATH`, `GIT_CONFIG_PARAMETERS` and
+every other `GIT_*` variable outside a short allowlist are refused for every ledger write. What is
+left is the binaries: `/opt/homebrew/bin/git`, `git-credential-osxkeychain` in its exec path and
+the Python interpreter all belong to the owner's user, so an agent could replace them, which is
+T15's residual. Only after the
 remote holds it are the holdout files fetched again (D17): every file the frozen holdout manifest
 pins, about 8,517 of them, each checked against its published CHECKSUM and against the manifest's
 SHA-256 and size before it is written, and then the whole manifest is verified, rows included. The
@@ -188,12 +253,14 @@ since 2026-11-11, restore that file from the encrypted offline copy into the mir
 and fetches the rest. The unseal itself is never repeated.
 
 Verification replays all of this on every later read of the ledger: a second unseal entry, an
-early unseal, one without a proof that verifies, one naming another pre-registration, key record or
-holdout manifest, one naming any configuration other than the candidate the rule selects on the
-entries before it, or one recording a diff hash other than that of the data loading and seal diff
-from the candidate's commit to its own, each fails verification, so the harness and the gate
-refuse the ledger. The ledger's append makes the same checks before it pushes the entry, so none
-of them can be broken through it.
+early unseal, one whose signature does not verify against the pinned record's signer, one naming
+another pre-registration, key record or holdout manifest, one naming any configuration other than
+the candidate the rule selects on the entries before it, or one recording a diff hash other than
+that of the data loading and seal diff from the candidate's commit to its own, each fails
+verification, so the harness and the gate refuse the ledger. Replay recomputes that hash from git's
+raw record without rendering the diff, so a large data loading change costs no more to verify
+than a small one (security review of #65, L-7). The ledger's append makes the same checks before
+it pushes the entry, so none of them can be broken through it.
 
 ## The holdout run
 
@@ -234,7 +301,8 @@ enforce it. Starting a holdout run needs no key, so an agent could still use up 
 attempts without it, by killing a run straight after its attempt entry, or by starting one from a
 second clone while the owner's is in flight, which closes the owner's attempt as abandoned and
 costs two attempts for one (security review of #65, M-2, the residual of round 3's C1). A holdout
-run started by anyone but the owner is an incident. The key record's design is unchanged.
+run started by anyone but the owner is an incident. D27 gave the key record a signing key for the
+unseal only; attempts still need no key.
 
 Section 11, item 6's file rule is applied once, at the unseal: from the candidate's selectable-run
 commit to the unseal's HEAD, only the data loading and seal modules (`seal`, `loader`, `store`,
@@ -266,8 +334,9 @@ with D15's beta-matched excess for H2 (`benchmark.beta_matched`, with a hand-com
 which section 15, item 7 asks for). DEV-2's benchmark returns come from the benchmark's last completed
 run covering the window on the same harness code as the hypothesis's selectable runs (the quant's
 reading of section 8, in gate-statistics.md); without one the gate refuses rather than call DEV-2 a
-fail, so the unseal is refused while a benchmark DEV-2 needs lacks one; no benchmark may run after
-the unseal.
+fail, so the unseal is refused while a benchmark DEV-2 needs lacks one; no benchmark run may be
+opened after the unseal, and the result of one opened before it is accepted and ignored (security
+review of #65, L-1 and I-5).
 Both candidate rules rank by the DSR's z rather than its floating-point value, which rounds to 1.0
 for strong runs; the order is the registered one. The modules that count as data loading or the seal are listed above and in
 `gitledger.SEAL_AND_DATA_LOADING`. The passphrase is normalised to Unicode NFC before derivation, so
@@ -317,16 +386,23 @@ the commit that merged them is an ancestor of the HEAD at which the unseal will 
 merge-base --is-ancestor <drafts commit> HEAD`); and the SHA-256 of each draft file at that commit is
 written in the row, so a later edit to either is visible.
 
-**Replaying the unseal depends on the gate code at verify time (L5).** Verification recomputes the
+**Replaying the unseal depends on the code at verify time (L5).** Verification recomputes the
 holdout candidate with the `gate`, `sharpe`, `cscv` and `benchmark` modules as they are when it runs,
 not as they were at the unseal. It also recomputes the accepted diff over the seal file list,
 `gitledger.SEAL_AND_DATA_LOADING`, and whether the unseal was early through `rules.py`'s budget rule
-(`rules.budget_exhausted`). A later change to any of them could make the ledger fail verification
-for good, or change the candidate replay expects; adding or removing a module in the seal file list
+(`rules.budget_exhausted`). And it runs these functions of `gitledger.py` (security review of #65,
+L-8): `holdout_commit_error`, with `PACKAGE_PATH` and `ATTRIBUTES_PATHSPEC`, for item 6's rule;
+`seal_digest` and `seal_record` for the accepted diff's hash; `seal_changes` and `render_diff`, which
+render that diff for the unseal's refusal and share the record replay hashes; and the signature
+check, `unseal_signature_error`, with `pinned_key_record`, `check_key_record`,
+`ledger.signed_bytes` and the whole of `lamport.py`. `unseal_signature_error` replaced
+`unseal_proof_error` under D27; nothing calls the old check any more. A later change to any of them
+could make the ledger fail verification for good, or pass something it would not have passed
+before, or change the candidate replay expects; adding or removing a module in the seal file list
 after the unseal would raise a false tamper alarm (security review of #65, L-3). The control is
-process: from the unseal on, those four modules, `rules.py` and the seal file list are not changed
-without a recorded defect and a security review, and G3.4 checks that they are unchanged since the
-unseal entry's commit.
+process: from the unseal on, those four modules, `rules.py`, `lamport.py`, the seal file list and
+the `gitledger.py` and `ledger.py` functions just named are not changed without a recorded defect
+and a security review, and G3.4 checks that they are unchanged since the unseal entry's commit.
 
 ## What this does not cover
 
@@ -335,5 +411,7 @@ mechanical candidate rule is what makes such a look useless. A key record substi
 (T25(c)): whoever runs the genesis step chooses the record, and `make_key_record` needs no terminal,
 so an agent could pin a record for a passphrase it knows; `check-key` straight after genesis is the
 control, and it is process, not prevention. An agent that somehow holds the passphrase can fake a
-terminal; the control is that the passphrase never reaches one. The G3.1 drafts, as above. The
-research gateway (G1.2), which runs no holdout run and must keep its run endpoint off for H1 and H2.
+terminal; the control is that the passphrase never reaches one. A process of the owner's user that
+fails the unseal's push, or stops the seal, denies the iteration's single unseal; since D27 that is
+all it can do, and it is detected, not prevented. The G3.1 drafts, as above. The research gateway
+(G1.2), which runs no holdout run and must keep its run endpoint off for H1 and H2.

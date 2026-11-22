@@ -15,10 +15,12 @@ import ast
 import copy
 import functools
 import hashlib
+import hmac
 import io
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import zipfile
@@ -32,14 +34,17 @@ from ledger_fixtures import (
     KEY_RECORD_TEXT,
     REPO,
     RESEARCH,
+    SHAPED_SIGNATURE,
     TEST_PASSPHRASE,
     Book,
     World,
     git,
     grid_world,
     lcg_returns,
+    seed_for,
+    sign_as_owner,
 )
-from norse_research import gate, gitledger, harness, ledger, rules, seal
+from norse_research import gate, gitledger, harness, lamport, ledger, rules, seal
 from norse_research.coverage import read_rows
 from norse_research.environment import EnvironmentRefused
 from norse_research.formats import DatasetSpec
@@ -138,14 +143,16 @@ def holdout_run(world, sha=None):
 
 
 @functools.lru_cache(maxsize=4)
-def proof_of(passphrase=TEST_PASSPHRASE):
-    """The scrypt output an unseal reveals, under the test record's salt."""
+def output_of(passphrase=TEST_PASSPHRASE):
+    """The scrypt output of ``passphrase`` under the test record's salt, as hex: the key
+    the seal derives its signing key from, never written anywhere (D27)."""
     return seal.derive(passphrase, KEY_RECORD_DOC)
 
 
 def unseal_body(world, cid=CANDIDATE, **changes):
-    """An unseal entry's body as the seal would write it, by hand, with the owner's
-    proof unless ``changes`` replaces it."""
+    """An unseal entry's body as the seal would write it, by hand, unsigned: the append's
+    ``sign``, ``append_unseal`` or ``hand_append`` signs it unless ``changes`` gives a
+    signature."""
     genesis = genesis_of(world)
     opened, closed = trial(world, cid)
     return {
@@ -158,20 +165,33 @@ def unseal_body(world, cid=CANDIDATE, **changes):
         "accepted_diff": accepted_diff(world, cid),
         "holdout_manifest_sha256": genesis.body["manifests"]["holdout"],
         "key_record_sha256": genesis.body["key_record"]["sha256"],
-        "proof": proof_of(),
         "commit": git(world.repo, "rev-parse", "HEAD"),
         **changes,
     }
 
 
+def append_unseal(world, body, passphrase=TEST_PASSPHRASE):
+    """The public append of an unseal, signed with ``passphrase``'s key as the seal signs."""
+    return world.ledger.append(body, sign=lambda message: sign_as_owner(message, passphrase))
+
+
+def resigned(body, passphrase=TEST_PASSPHRASE):
+    """``body``, a whole entry's, signed again over its bytes as they now stand, so a test
+    of a later layer is refused by that layer, not by the signature."""
+    return {**body, "signature": sign_as_owner(ledger.signed_bytes(body), passphrase)}
+
+
 def hand_append(world, body):
-    """Append one entry by plumbing alone, past every check of GitLedger.append."""
+    """Append one entry by plumbing alone, past every check of GitLedger.append. An
+    unseal without a signature is signed with the test key, as the seal would sign it."""
     ledger_ = world.ledger
     head = ledger_.local_head()
     data = ledger_.git.blob(head, LEDGER_PATH)
     entries = parse_ledger(data)
     full = {**body, "seq": len(entries), "prev": entries[-1].hash,
             "time": entries[-1].body["time"]}
+    if full["type"] == "unseal" and "signature" not in full:
+        full = resigned(full)
     line = ledger.make_entry(full).line
     commit = ledger_._commit(head, data + line.encode() + b"\n", {}, "by hand")
     git(world.repo, "update-ref", "refs/heads/ledger", commit)
@@ -202,14 +222,27 @@ def holdout_open_body(world, candidate_cid=CANDIDATE, configuration=None):
 
 
 def test_the_committed_sample_record_commits_to_the_test_passphrase():
-    # Computed here with hashlib alone, independently of norse_research.seal.
+    # Computed here with hashlib and hmac alone, independently of norse_research.seal and
+    # lamport, from the scheme lamport's docstring states (decision D27).
     output = hashlib.scrypt(TEST_PASSPHRASE.encode(), salt=bytes.fromhex("ab" * 16),
                             n=2**17, r=8, p=1, dklen=32, maxmem=256 * 1024 * 1024)
     assert KEY_RECORD_DOC["verifier_sha256"] == hashlib.sha256(output).hexdigest()
-    # The record holds a hash of the scrypt output, never the output (review H1).
-    assert output.hex() not in KEY_RECORD_TEXT and set(KEY_RECORD_DOC) == gitledger.KEY_RECORD_KEYS
+    domain = b"norse-stack/holdout-unseal/lamport-sha256/v1/"
+    seed = hmac.new(output, domain + b"seed", hashlib.sha256).digest()
+    public = hashlib.sha256(domain + b"public")
+    for i in range(256):
+        for bit in (0, 1):
+            secret = hmac.new(seed, domain + b"secret" + i.to_bytes(2, "big") + bytes([bit]),
+                              hashlib.sha256).digest()
+            public.update(hashlib.sha256(domain + b"leaf" + secret).digest())
+    assert KEY_RECORD_DOC["signer_sha256"] == public.hexdigest()
+    # The record holds hashes of what the scrypt output derives, never the output (review
+    # H1; review of #65, H-2), nor the seed.
+    assert output.hex() not in KEY_RECORD_TEXT and seed.hex() not in KEY_RECORD_TEXT
+    assert set(KEY_RECORD_DOC) == gitledger.KEY_RECORD_KEYS
     check_key_record(KEY_RECORD_TEXT.encode())
-    assert seal.check_key(KEY_RECORD_DOC, TEST_PASSPHRASE) == output.hex() == proof_of()
+    assert seal.check_key(KEY_RECORD_DOC, TEST_PASSPHRASE) == output.hex() == output_of()
+    assert seal.signing_seed(output_of()) == seed == seed_for()
 
 
 class _Terminal(io.StringIO):
@@ -236,9 +269,10 @@ def test_key_record_command_writes_a_record_the_genesis_step_accepts(tmp_path, m
     assert (record["kdf"], record["n"], record["r"], record["p"], record["dklen"]) == (
         "scrypt", 2**17, 8, 1, 32)
     assert len(bytes.fromhex(record["salt"])) == 16
-    proof = seal.check_key(record, passphrase)
-    assert record["verifier_sha256"] == hashlib.sha256(bytes.fromhex(proof)).hexdigest()
-    assert passphrase not in data.decode() and proof not in data.decode()
+    output = seal.check_key(record, passphrase)
+    assert record["verifier_sha256"] == hashlib.sha256(bytes.fromhex(output)).hexdigest()
+    assert record["signer_sha256"] == lamport.signer_sha256(seal.signing_seed(output))
+    assert passphrase not in data.decode() and output not in data.decode()
     assert seal.sha256_hex(data) in shown.out  # for the owner to keep beside the passphrase
     check_key_record(data)  # the validator the genesis step applies
     with pytest.raises(SealRefused, match="never replaced"):
@@ -285,8 +319,11 @@ def test_key_record_uses_scrypt_with_the_registered_parameters():
         {**good, "dklen": 16},
         {**good, "verifier_sha256": good["verifier_sha256"].upper()},
         {**good, "verifier_sha256": good["verifier_sha256"][:40]},
+        {**good, "signer_sha256": good["signer_sha256"].upper()},
+        {**good, "signer_sha256": good["signer_sha256"][:40]},
+        {k: v for k, v in good.items() if k != "signer_sha256"},  # D27's commitment
         {**good, "sha256": "0" * 64},  # no other hash of the passphrase
-        # The scrypt output itself is never in the record: it is the unseal's proof.
+        # The scrypt output itself is never in the record, nor anywhere else (D27).
         {**good, "derived_key": seal.derive(TEST_PASSPHRASE, good)},
     ]
     for record in weak:
@@ -367,7 +404,7 @@ def test_early_unseal_is_refused(tmp_path, monkeypatch):
             unseal(world, read=read, calls=fetched)
         assert read.calls == [] and fetched == [] and world.remote_ledger() == before
         with pytest.raises(VerificationError, match="early unseal"):
-            world.ledger.append(unseal_body(world))
+            append_unseal(world, unseal_body(world))
         assert world.remote_ledger() == before
         hand_append(world, unseal_body(world))
         with pytest.raises(VerificationError, match="early unseal"):
@@ -694,7 +731,7 @@ def test_a_holdout_run_at_code_changed_outside_data_loading_is_refused(ready):
     # naming the changed commit fails it.
     verified = ready.ledger.verify()
     forged = ledger.LedgerSnapshot(
-        tuple(e if e.type != "unseal" else ledger.make_entry({**e.body, "commit": head})
+        tuple(e if e.type != "unseal" else ledger.make_entry(resigned({**e.body, "commit": head}))
               for e in verified.snapshot.entries),
         verified.snapshot.series_files,
     )
@@ -714,10 +751,11 @@ def test_a_holdout_run_at_code_changed_outside_data_loading_is_refused(ready):
 def test_the_unseal_shows_the_data_loading_diff_and_needs_its_hash(tmp_path, monkeypatch):
     # Security review round 3, T1 (the reviewer's probe): a data loading change made
     # after the candidate's run, before the unseal, is allowed by item 6's file rule but
-    # must be reviewed. The unseal prints the files and the hash of their diff and
-    # refuses, before the key is asked for, unless the request accepts exactly that hash;
-    # the entry records it and replay recomputes it.
+    # must be reviewed. The unseal prints the files, their diff and, at a terminal, the
+    # hash of their diff, and refuses, before the key is asked for, unless the request
+    # accepts exactly that hash; the entry records it and replay recomputes it.
     world = a_grid_world(tmp_path, monkeypatch, loader_changed=True)
+    monkeypatch.setattr("sys.stdin", _Terminal())  # the owner's own terminal (I-7)
     try:
         candidate_commit = trial(world, CANDIDATE)[0].body["commit"]
         head = git(world.repo, "rev-parse", "HEAD")
@@ -730,14 +768,14 @@ def test_the_unseal_shows_the_data_loading_diff_and_needs_its_hash(tmp_path, mon
                 unseal(world, {**request_for(world), "accepted_diff": wrong}, read=read)
         assert read.calls == [] and world.remote_ledger() == before
         with pytest.raises(VerificationError, match="round 3, T1"):
-            world.ledger.append(unseal_body(world, accepted_diff="0" * 64))
+            append_unseal(world, unseal_body(world, accepted_diff="0" * 64))
         assert world.remote_ledger() == before
         entry = unseal(world, {**request_for(world), "accepted_diff": digest}, fetch=False)
         assert entry.body["accepted_diff"] == digest and entry.body["commit"] == head
         verified = world.ledger.verify()
         forged = ledger.LedgerSnapshot(
             tuple(e if e.type != "unseal" else ledger.make_entry(
-                {**e.body, "accepted_diff": hashlib.sha256(b"").hexdigest()})
+                resigned({**e.body, "accepted_diff": hashlib.sha256(b"").hexdigest()}))
                 for e in verified.snapshot.entries),
             verified.snapshot.series_files,
         )
@@ -781,10 +819,12 @@ def test_a_local_textconv_cannot_hide_a_line_of_the_diff_to_accept(tmp_path, mon
     # Security review of #65, M-1 (probe P4): untracked .git/info/attributes and a
     # textconv in .git/config hid a loader line from the owner's git diff, which the
     # refusal told the owner to run. A textconv in the clone's own configuration is now
-    # refused outright (H-1's class); one in the owner's global configuration, which is
-    # left alone, still cannot hide the line, since the diff is rendered from the blobs.
+    # refused outright (H-1's class); one in the owner's global configuration, which no
+    # ledger command reads (M-3) but the clone's own git diff does, still cannot hide the
+    # line, since the diff is rendered from the blobs.
     hidden = "_REBOUND = __import__('json').dumps  # hidden"
     world = a_grid_world(tmp_path, monkeypatch, loader_changed=True, loader_line=hidden)
+    monkeypatch.setattr("sys.stdin", _Terminal())  # the owner's own terminal (I-7)
     try:
         (world.repo / ".git" / "info").mkdir(exist_ok=True)
         (world.repo / ".git" / "info" / "attributes").write_text("*.py diff=quiet\n")
@@ -810,8 +850,8 @@ def test_a_local_textconv_cannot_hide_a_line_of_the_diff_to_accept(tmp_path, mon
         assert message.index(f"-{hidden}") < message.index(f"--accept-diff {digest}")
         assert "git diff" not in message
         # Nor can a character hide a line on the terminal: control and format characters
-        # are written as escapes.
-        assert gitledger._shown("ok\r# shown\x1b[8m‮") == "ok\\r# shown\\x1b[8m\\u202e"
+        # are written as escapes, and so are tabs (L-10).
+        assert gitledger._shown("ok\r# shown\x1b[8m‮\t") == "ok\\r# shown\\x1b[8m\\u202e\\t"
     finally:
         world.close()
 
@@ -895,10 +935,116 @@ def test_the_candidate_command_prints_neither_the_diff_nor_its_hash(tmp_path, mo
         world.close()
 
 
+def test_without_a_terminal_the_unseal_shows_the_diff_but_not_its_hash(tmp_path, monkeypatch):
+    # Security review of #65, I-7: an agent could run the unseal without --accept-diff,
+    # which needs no key, and read the hash to hand the owner a ready-made command line.
+    # Without an interactive terminal, the test the passphrase prompt applies, the refusal
+    # prints the diff and not the hash; at the owner's terminal it prints both.
+    world = a_grid_world(tmp_path, monkeypatch, loader_changed=True)
+    try:
+        digest, request = accepted_diff(world), {**request_for(world), "accepted_diff": None}
+        read = key()
+        monkeypatch.setattr("sys.stdin", io.StringIO(""))  # an agent's shell: no terminal
+        with pytest.raises(SealRefused) as refused:
+            unseal(world, request, read=read)
+        message = str(refused.value)
+        assert "-# as the runs had it" in message and digest not in message
+        assert "interactive terminal" in message and "I-7" in message
+        monkeypatch.setattr("sys.stdin", _Terminal())
+        with pytest.raises(SealRefused, match=rf"(?s)-# as the runs had it.*--accept-diff {digest}"):
+            unseal(world, request, read=read)
+        assert read.calls == [] and unseal_of(remote_entries(world)) is None
+    finally:
+        world.close()
+
+
+def test_a_padded_line_in_the_diff_to_accept_is_wrapped_and_flagged(tmp_path, monkeypatch):
+    # Security review of #65, L-10: a loader line padded with 400 spaces kept its rebinding
+    # past the right edge of a pager that cuts long lines. Every line wider than
+    # DIFF_WIDTH is now flagged, then shown in pieces that each end in a visible mark, and
+    # a tab is written as an escape, so its width on the screen is its length.
+    padded = "_SEAL_OK = True" + " " * 400 + "; __import__('json').dumps = repr"
+    world = a_grid_world(tmp_path, monkeypatch, loader_changed=True, loader_line=padded)
+    try:
+        candidate_commit = trial(world, CANDIDATE)[0].body["commit"]
+        head = git(world.repo, "rev-parse", "HEAD")
+        _, diff, _ = gitledger.seal_changes(world.ledger.git, candidate_commit, head)
+        lines = diff.splitlines()
+        content = [line for line in lines if line[:1] in ("+", "-", " ", "@", "!")]
+        assert max(len(line) for line in content) <= gitledger.DIFF_WIDTH + 2
+        flagged = next(i for i, line in enumerate(lines) if line.startswith("! the next line"))
+        assert f"is {1 + len(padded)} characters long" in lines[flagged]
+        pieces = lines[flagged + 1 : flagged + 6]
+        assert all(p.startswith("-") and p.endswith(gitledger.WRAP_MARK) for p in pieces)
+        assert "".join(p[1:-1] for p in pieces) == padded
+        assert "dumps = repr" in pieces[-1] and "_SEAL_OK" not in "".join(lines[flagged + 6:])
+        assert gitledger._fitted("+short") == ["+short"]
+    finally:
+        world.close()
+
+
+def test_replay_checks_the_accepted_diff_hash_without_rendering_it(tmp_path, monkeypatch):
+    # Security review of #65, L-7: replay rendered the whole data loading diff on every
+    # verify, which took 45 to 65 seconds for a large table. Replay, the append's check,
+    # an accepted unseal and the candidate command now hash the raw record only; only the
+    # unseal's refusal renders the diff.
+    world = a_grid_world(tmp_path, monkeypatch, loader_changed=True)
+    try:
+        request = request_for(world)
+
+        def no_rendering(*args, **kwargs):
+            raise AssertionError("the diff was rendered")
+
+        monkeypatch.setattr(gitledger, "render_diff", no_rendering)
+        monkeypatch.setattr(seal, "render_diff", no_rendering)
+        entry = unseal(world, request, fetch=False)
+        assert entry.body["accepted_diff"] == request["accepted_diff"]
+        assert unseal_of(world.ledger.verify().snapshot.entries).hash == entry.hash
+        assert seal.main(["--repo", str(world.repo), "candidate"]) == 0
+    finally:
+        world.close()
+
+
+def test_a_global_filter_never_runs_in_the_unseal(ready, monkeypatch):
+    # Security review of #65, M-3 (probe N2): a filter in the owner's global configuration,
+    # which an agent can write, named by an untracked .git/info/attributes, ran inside the
+    # unseal's clean-tree check before the passphrase was asked for, and nothing refused
+    # it. Every ledger git command now runs without the global or system configuration, so
+    # the clone's own git still runs the filter and no ledger command does.
+    marker = ready.tmp / "filter-ran"
+    program = ready.tmp / "clean.sh"
+    program.write_text(f"#!/bin/sh\necho ran >> {marker}\ncat\n")
+    program.chmod(0o755)
+    owner = ready.tmp / "owner-global.cfg"
+    owner.write_text(f'[filter "x"]\n\tclean = {program}\n')
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(owner))
+    (ready.repo / ".git" / "info").mkdir(exist_ok=True)
+    (ready.repo / ".git" / "info" / "attributes").write_text("*.py filter=x\n")
+    loader = ready.repo / "research" / "norse_research" / "loader.py"
+    os.utime(loader, (946684800, 946684800))  # stat-dirty, so status reads it again
+    git(ready.repo, "status", "--porcelain")
+    assert marker.exists()  # the clone's own git runs it
+    marker.unlink()
+    os.utime(loader, (946684801, 946684801))
+    ready.ledger.check_repository()
+    asked = []
+
+    def read(prompt):
+        asked.append(marker.exists())
+        return TEST_PASSPHRASE
+
+    entry = unseal(ready, read=read, fetch=False)
+    assert asked == [False] and not marker.exists()  # no ledger command ran it
+    assert unseal_of(remote_entries(ready)).hash == entry.hash
+
+
 def test_the_unseal_command_names_the_genesis_tag_and_asks_for_the_diff(ready, monkeypatch):
     # The command line's --tag defaults to the tag the genesis entry names (D21 moved the
     # default to prereg-v2, and a ledger begun under another tag must still unseal), and
-    # without --accept-diff it prints the hash to accept and refuses (T1).
+    # without --accept-diff it prints, at a terminal, the hash to accept and refuses (T1;
+    # I-7).
+    monkeypatch.setattr("sys.stdin", _Terminal())
+
     class NoNetwork:
         def __call__(self, url, max_bytes):
             raise AssertionError("no network in tests")
@@ -1011,7 +1157,7 @@ def test_second_unseal_is_refused(ready):
     assert read.calls == []
     assert [e.hash for e in remote_entries(ready) if e.type == "unseal"] == [first.hash]
     with pytest.raises(VerificationError, match="second unseal"):
-        ready.ledger.append(unseal_body(ready))
+        append_unseal(ready, unseal_body(ready))
     hand_append(ready, unseal_body(ready))
     with pytest.raises(VerificationError, match="second unseal"):
         ready.ledger.verify()
@@ -1185,22 +1331,22 @@ def test_key_record_is_read_from_the_genesis_preregistration_not_the_working_tre
 
 
 def test_an_unseal_written_without_the_key_is_refused_by_the_ledger(ready):
-    # Security review H1 (probe K1): the key is on the path that opens the holdout. The
-    # public append refuses an unseal with no proof or with a proof from another
-    # passphrase, and replay refuses one written past append by plumbing, so neither
-    # the re-fetch nor the holdout run can start.
+    # Security review H1 (probe K1), with D27's signature: the key is on the path that
+    # opens the holdout. The public append refuses an unseal with no signature, a
+    # misshapen one, or one by another passphrase's key, and replay refuses one written
+    # past append by plumbing, so neither the re-fetch nor the holdout run can start.
     before = ready.remote_ledger()
-    body = unseal_body(ready)
-    del body["proof"]
     with pytest.raises(VerificationError, match="unseal entry holds"):
-        ready.ledger.append(body)
-    for proof in (proof_of(OTHER_KEY), "ab" * 32, proof_of()[:-2] + "00"):
-        with pytest.raises(VerificationError, match="does not verify"):
-            ready.ledger.append(unseal_body(ready, proof=proof))
-    with pytest.raises(VerificationError, match="scrypt output of the pinned"):
-        ready.ledger.append(unseal_body(ready, proof=proof_of() + "00"))
+        ready.ledger.append(unseal_body(ready))
+    short = {"preimages": SHAPED_SIGNATURE["preimages"][:-1],
+             "complements": SHAPED_SIGNATURE["complements"]}
+    for signature in (short, {**SHAPED_SIGNATURE, "proof": output_of()}, output_of()):
+        with pytest.raises(VerificationError, match="signature"):
+            ready.ledger.append(unseal_body(ready, signature=signature))
+    with pytest.raises(VerificationError, match="does not verify"):
+        append_unseal(ready, unseal_body(ready), passphrase=OTHER_KEY)
     assert ready.remote_ledger() == before
-    hand_append(ready, unseal_body(ready, proof=proof_of(OTHER_KEY)))
+    hand_append(ready, unseal_body(ready, signature=SHAPED_SIGNATURE))  # shaped, not signed
     with pytest.raises(VerificationError, match="does not verify"):
         ready.ledger.verify()
     with pytest.raises(VerificationError, match="does not verify"):
@@ -1210,12 +1356,127 @@ def test_an_unseal_written_without_the_key_is_refused_by_the_ledger(ready):
     assert ready.holdout_files_in_mirror() == []
 
 
-def test_the_unseal_entry_reveals_the_proof_the_key_record_commits_to(ready):
+def test_the_unseal_entry_is_signed_by_the_key_the_record_commits_to(ready):
+    # Decision D27: the entry carries a one-time signature over its own bytes, which
+    # verifies against the record's signer_sha256, and reveals nothing of the key: neither
+    # the scrypt output nor the seed is in the entry or the ledger.
     entry = unseal(ready, fetch=False)
-    assert entry.body["proof"] == proof_of()
-    assert hashlib.sha256(bytes.fromhex(entry.body["proof"])).hexdigest() == (
-        KEY_RECORD_DOC["verifier_sha256"])
+    assert "proof" not in entry.body
+    assert lamport.signature_error(KEY_RECORD_DOC["signer_sha256"], ledger.signed_bytes(entry.body),
+                                   entry.body["signature"]) is None
+    data = ready.remote_ledger().decode()
+    assert output_of() not in data and seed_for().hex() not in data
+    assert entry.body["time"] == remote_entries(ready)[entry.seq - 1].body["time"]
     ready.ledger.verify()
+
+
+def test_a_stolen_unseal_signature_authorises_only_its_own_entry(ready, monkeypatch):
+    # Security review of #65, H-2 (probe N1): a same-user process read the unseal out of
+    # the temporary object directory while it was pushed and failed the push; an agent
+    # then appended its own unseal through the public append, at a commit nobody
+    # reviewed, with the stolen proof, and verify() passed. Here the theft and the failure
+    # are made deterministic: the push's own objects are read and the push is killed.
+    # Since D27 what is stolen is a signature over the owner's entry: the agent's unseal is
+    # refused, and the one thing the copy can still do is land the very entry the owner
+    # reviewed and signed, at the owner's commit.
+    original = gitledger.Git.run
+    stolen = []
+
+    def steal_then_fail(self, *args, **kwargs):
+        objects = kwargs.get("env") or {}
+        if args and args[0] == "push" and "GIT_OBJECT_DIRECTORY" in objects:
+            commit = args[-1].split(":", 1)[0]
+            data = original(self, "cat-file", "blob", f"{commit}:{LEDGER_PATH}", env=objects)
+            stolen.append(json.loads(data.decode().splitlines()[-1]))
+            raise gitledger.GitError("git push failed: killed by another process")
+        return original(self, *args, **kwargs)
+
+    owners_head = git(ready.repo, "rev-parse", "HEAD")
+    with monkeypatch.context() as m:
+        m.setattr(gitledger.Git, "run", steal_then_fail)
+        with pytest.raises(LedgerWriteError, match="could not be pushed"):
+            unseal(ready, fetch=False)
+    assert unseal_of(remote_entries(ready)) is None
+    (copy,) = stolen
+    assert copy["type"] == "unseal" and copy["commit"] == owners_head and "proof" not in copy
+    # The agent commits a data loading change nobody reviewed and unseals there with the
+    # stolen signature, as the probe did with the stolen proof.
+    loader = "research/norse_research/loader.py"
+    ready.write(loader, (ready.repo / loader).read_text() + "\n_REWRITE_2026 = True\n")
+    head = ready.commit("loader: not reviewed by anyone")
+    ready.push()
+    body = {k: v for k, v in copy.items() if k not in ("seq", "prev", "time")}
+    before = ready.remote_ledger()
+    with pytest.raises(VerificationError, match="does not verify"):
+        ready.ledger.append({**body, "commit": head, "accepted_diff": accepted_diff(ready)})
+    with pytest.raises(VerificationError, match="does not verify"):
+        ready.ledger.append({**body, "commit": head})
+    assert ready.remote_ledger() == before
+    # The copy unchanged is the owner's own entry: it lands recording the commit the owner
+    # reviewed, where alone the holdout can run (rules), and replay accepts it.
+    landed = ready.ledger.append(body)
+    assert landed.line == ledger.make_entry(copy).line and landed.body["commit"] == owners_head
+    assert unseal_of(ready.ledger.verify().snapshot.entries).hash == landed.hash
+
+
+def test_a_forged_or_moved_unseal_signature_is_refused(ready):
+    # Decision D27: a signature of random values, or the owner's own signature moved onto
+    # another body, or onto the same body at another place in the chain, is refused by the
+    # append before anything is pushed, and by replay when written past it.
+    before = ready.remote_ledger()
+    forged = {"preimages": [secrets.token_hex(32) for _ in range(lamport.BITS)],
+              "complements": [secrets.token_hex(32) for _ in range(lamport.BITS)]}
+    with pytest.raises(VerificationError, match="does not verify"):
+        ready.ledger.append(unseal_body(ready, signature=forged))
+    entries = remote_entries(ready)
+    owners = {**unseal_body(ready), "seq": len(entries), "prev": entries[-1].hash,
+              "time": entries[-1].body["time"]}
+    signature = sign_as_owner(ledger.signed_bytes(owners))
+    assert lamport.signature_error(KEY_RECORD_DOC["signer_sha256"], ledger.signed_bytes(owners),
+                                   signature) is None
+    for change in ({"accepted_diff": "0" * 64}, {"commit": "1" * 40},
+                   unseal_body(ready, "H1-01")):  # another candidate, whole
+        moved = {**unseal_body(ready), **change, "signature": signature}
+        with pytest.raises(VerificationError, match="does not verify"):
+            ready.ledger.append(moved)
+    elsewhere = sign_as_owner(ledger.signed_bytes({**owners, "prev": "3" * 64, "seq": 1}))
+    with pytest.raises(VerificationError, match="does not verify"):
+        ready.ledger.append(unseal_body(ready, signature=elsewhere))
+    assert ready.remote_ledger() == before
+    hand_append(ready, unseal_body(ready, signature=signature, accepted_diff="0" * 64))
+    with pytest.raises(VerificationError, match="does not verify"):
+        ready.ledger.verify()
+    with pytest.raises(VerificationError, match="does not verify"):
+        holdout_run(ready)
+
+
+def test_a_key_record_whose_signer_does_not_match_is_refused(tmp_path, monkeypatch):
+    # Decision D27: a record whose signer_sha256 is not the one its passphrase derives
+    # (here the test passphrase's verifier beside another passphrase's signer) meets the
+    # contract, which cannot tell, but check-key and the unseal refuse it before anything
+    # is signed, and an unseal signed with the test key fails replay under it.
+    mixed = {**KEY_RECORD_DOC, "signer_sha256": seal.make_key_record(
+        OTHER_KEY, salt=bytes.fromhex(KEY_RECORD_DOC["salt"]))["signer_sha256"]}
+    check_key_record(seal.key_record_bytes(mixed))
+    with pytest.raises(SealRefused, match="does not derive its signer_sha256"):
+        seal.check_key(mixed, TEST_PASSPHRASE)
+    clear_overrides(monkeypatch)
+    world = World(tmp_path, genesis=False)
+    try:
+        world.write("research/keys/mixed.json", seal.key_record_bytes(mixed))
+        commit = world.commit("a record whose signer the passphrase does not derive")
+        world.push()
+        world.write_genesis(key_record=(commit, "research/keys/mixed.json"))
+        with pytest.raises(SealRefused, match="does not derive its signer_sha256"):
+            seal.check_genesis_key(world.repo, read_key=key())
+        body = resigned({"type": "unseal", "seq": 1, "prev": "4" * 64,
+                         "time": "2026-11-22T00:00:00Z", "commit": "5" * 40})
+        problem = gitledger.unseal_signature_error(world.ledger.git, genesis_of(world), body)
+        assert problem is not None and "does not verify" in problem
+        assert lamport.signature_error(KEY_RECORD_DOC["signer_sha256"], ledger.signed_bytes(body),
+                                       body["signature"]) is None  # the honest record's
+    finally:
+        world.close()
 
 
 def test_check_key_verifies_the_genesis_record_and_writes_nothing(tmp_path, monkeypatch, capsys):
@@ -1534,8 +1795,8 @@ def test_the_attempt_rules_replay_without_git():
               "candidate": {"open": opened.hash, "result": closed.hash},
               "accepted_diff": hashlib.sha256(b"").hexdigest(),
               "holdout_manifest_sha256": genesis.body["manifests"]["holdout"],
-              "key_record_sha256": genesis.body["key_record"]["sha256"], "proof": "ab" * 32,
-              "commit": sealed_at})
+              "key_record_sha256": genesis.body["key_record"]["sha256"],
+              "signature": SHAPED_SIGNATURE, "commit": sealed_at})
     resolved = book.registration.resolve_holdout(opened.body, genesis.body["manifests"]["holdout"])
 
     def holdout_open(on, commit=sealed_at):
@@ -1686,35 +1947,47 @@ def test_the_rehearsal_fails_loudly_on_a_seal_error_and_needs_a_candidate(tmp_pa
         world.close()
 
 
-def test_a_failed_unseal_push_leaves_no_proof_in_the_clone(ready, monkeypatch):
+def test_a_failed_unseal_push_leaves_no_signature_in_the_clone(ready, monkeypatch):
     # Probe P2 (security review round 2, N2): a push that fails must not strand the
-    # owner's proof in a commit, a ref or a reflog of the clone, where anyone could use it
-    # later without the owner.
+    # owner's unseal in a commit, a ref or a reflog of the clone. Since D27 the retry also
+    # signs exactly the bytes the failed one signed, so it reveals nothing new of the
+    # one-time key, and the scrypt output is never written anywhere.
     reflog = ["reflog", "show", "--format=%H %gs", "refs/heads/ledger"]
     before = git(ready.repo, *reflog)
     original = gitledger.Git.run
+    signed = []
+    real_sign = lamport.sign
+
+    def recording(seed, message):
+        signed.append(message)
+        return real_sign(seed, message)
 
     def no_push(self, *args, **kwargs):
         if args and args[0] == "push":
             raise gitledger.GitError("git push failed: injected")
         return original(self, *args, **kwargs)
 
+    monkeypatch.setattr(lamport, "sign", recording)
     with monkeypatch.context() as m:
         m.setattr(gitledger.Git, "run", no_push)
         with pytest.raises(LedgerWriteError, match="nothing of it is left in this clone"):
             unseal(ready, fetch=False)
-    assert unseal_of(remote_entries(ready)) is None
+    assert unseal_of(remote_entries(ready)) is None and len(signed) == 1
+    first_preimage = real_sign(seed_for(), signed[0])["preimages"][0].encode()
 
     def every_object():
         return subprocess.run(["git", "cat-file", "--batch-all-objects", "--batch"],
                               cwd=ready.repo, capture_output=True, check=True).stdout
 
-    assert proof_of().encode() not in every_object()
+    assert first_preimage not in every_object()
     assert git(ready.repo, *reflog) == before
     assert "unseal" not in git(ready.repo, "log", "-g", "--all", "--format=%gs %s")
-    # When the push succeeds, the proof is public, and the search above finds it.
+    # When the push succeeds, the entry is public, and the search above finds it; the
+    # retry signed the very bytes the failed attempt signed.
     entry = unseal(ready, fetch=False)
-    assert proof_of().encode() in every_object()
+    assert signed[1] == signed[0] == ledger.signed_bytes(entry.body)
+    assert first_preimage in every_object()
+    assert output_of().encode() not in every_object()
     assert git(ready.repo, "rev-parse", "refs/heads/ledger") == git(
         ready.remote, "rev-parse", "refs/heads/ledger")
     ready.ledger.verify()
