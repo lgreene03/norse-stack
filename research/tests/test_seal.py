@@ -746,6 +746,106 @@ def test_the_unseal_shows_the_data_loading_diff_and_needs_its_hash(tmp_path, mon
         world.close()
 
 
+PRE_PUSH_HOOK = """#!/bin/sh
+echo ran >> "MARKER"
+while read lref lsha rref rsha; do
+  if [ "$rref" = "refs/heads/ledger" ]; then
+    line=$(git cat-file blob "$lsha:ledger/trials.jsonl" | tail -n 1)
+    case "$line" in *'"type":"unseal"'*) printf '%s\\n' "$line" > "CAPTURE"; exit 1;; esac
+  fi
+done
+exit 0
+"""
+
+
+def test_a_pre_push_hook_never_runs_in_the_owners_unseal(ready):
+    # Security review of #65, H-1 (the reviewer's probe P3): a pre-push hook in the
+    # clone's untracked .git/hooks, which leaves git status clean, copied the unseal
+    # out of the push and failed it, so an agent could unseal with the stolen proof at a
+    # commit of its own. Every ledger git command now runs with hooks off.
+    marker, capture = ready.tmp / "hook-ran", ready.tmp / "captured-unseal.jsonl"
+    hook = ready.repo / ".git" / "hooks" / "pre-push"
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text(PRE_PUSH_HOOK.replace("MARKER", str(marker)).replace("CAPTURE", str(capture)))
+    hook.chmod(0o755)
+    assert git(ready.repo, "status", "--porcelain") == ""
+    git(ready.repo, "push", "--quiet", "origin", "HEAD:refs/heads/hook-check")
+    assert marker.read_text() == "ran\n"  # an ordinary push in this clone runs the hook
+    entry = unseal(ready, fetch=False)
+    assert marker.read_text() == "ran\n" and not capture.exists()  # the unseal's did not
+    assert unseal_of(remote_entries(ready)).hash == entry.hash
+
+
+def test_a_local_textconv_cannot_hide_a_line_of_the_diff_to_accept(tmp_path, monkeypatch):
+    # Security review of #65, M-1 (probe P4): untracked .git/info/attributes and a
+    # textconv in .git/config hid a loader line from the owner's git diff, which the
+    # refusal told the owner to run. The diff is now rendered from the blobs themselves.
+    hidden = "_REBOUND = __import__('json').dumps  # hidden"
+    world = a_grid_world(tmp_path, monkeypatch, loader_changed=True, loader_line=hidden)
+    try:
+        (world.repo / ".git" / "info").mkdir(exist_ok=True)
+        (world.repo / ".git" / "info" / "attributes").write_text("*.py diff=quiet\n")
+        git(world.repo, "config", "diff.quiet.textconv", "grep -v hidden")
+        assert git(world.repo, "status", "--porcelain") == ""
+        candidate_commit = trial(world, CANDIDATE)[0].body["commit"]
+        head = git(world.repo, "rev-parse", "HEAD")
+        porcelain = git(world.repo, "diff", candidate_commit, head)
+        assert "hidden" not in porcelain  # the clone's own git diff hides the line
+        files, diff, digest = gitledger.seal_changes(world.ledger.git, candidate_commit, head)
+        assert files == ["research/norse_research/loader.py"] and f"-{hidden}" in diff
+        with pytest.raises(SealRefused) as refused:
+            unseal(world, {**request_for(world), "accepted_diff": None})
+        message = str(refused.value)
+        assert message.index(f"-{hidden}") < message.index(f"--accept-diff {digest}")
+        assert "git diff" not in message
+        # Nor can a character hide a line on the terminal: control and format characters
+        # are written as escapes.
+        assert gitledger._shown("ok\r# shown\x1b[8m‮") == "ok\\r# shown\\x1b[8m\\u202e"
+    finally:
+        world.close()
+
+
+def test_a_gitattributes_change_since_the_candidate_refuses_the_unseal(ready):
+    # Security review of #65, M-1 (probe P4b): a committed .gitattributes marking the
+    # package binary sat outside item 6's paths, so git showed the owner "Binary files
+    # differ". A change to any .gitattributes file, the root's or a nested one, now
+    # refuses the unseal, before the key is asked for, and fails replay.
+    candidate_commit = trial(ready, CANDIDATE)[0].body["commit"]
+    for path in (".gitattributes", "research/.gitattributes"):
+        ready.write(path, "norse_research/*.py -diff\nresearch/norse_research/*.py -diff\n")
+        head = ready.commit(f"attributes at {path}")
+        ready.push()
+        paths = genesis_of(ready).body["tree_paths"]
+        problem = gitledger.holdout_commit_error(
+            ready.ledger.git, candidate_commit, head, [*paths["harness"], *paths["H1"]]
+        )
+        assert path in problem
+        read = key()
+        with pytest.raises(SealRefused, match=re.escape(path)):
+            unseal(ready, read=read)
+        assert read.calls == [] and unseal_of(remote_entries(ready)) is None
+        git(ready.repo, "rm", "--quiet", path)
+        ready.commit(f"remove {path}")
+        ready.push()
+
+
+def test_the_candidate_command_prints_neither_the_diff_nor_its_hash(tmp_path, monkeypatch, capsys):
+    # Security review of #65, L-2: the key-free candidate command printed the hash to
+    # accept without the diff it covers. It now lists the files and points to the unseal,
+    # whose refusal shows the full diff and only then the hash.
+    world = a_grid_world(tmp_path, monkeypatch, loader_changed=True)
+    try:
+        digest = accepted_diff(world)
+        assert seal.main(["--repo", str(world.repo), "candidate"]) == 0
+        out = capsys.readouterr().out
+        named = json.loads(out[out.index("{\n"):])["holdout_candidate"]
+        assert named["seal_files_changed_since"] == ["research/norse_research/loader.py"]
+        assert "without --accept-diff" in named["diff_to_accept"]
+        assert digest not in out and "accept_diff_at_head" not in out
+    finally:
+        world.close()
+
+
 def test_the_unseal_command_names_the_genesis_tag_and_asks_for_the_diff(ready, monkeypatch):
     # The command line's --tag defaults to the tag the genesis entry names (D21 moved the
     # default to prereg-v2, and a ledger begun under another tag must still unseal), and

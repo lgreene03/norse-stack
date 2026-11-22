@@ -473,7 +473,7 @@ class World:
 
 def grid_world(tmp: Path, *, skilled: str | None = "H1-03", benchmark: bool = True,
                h2: bool = True, incomplete: bool = False, loader_changed: bool = False,
-               behaviours=None) -> World:
+               loader_line: str = "# as the runs had it", behaviours=None) -> World:
     """A world whose ledger holds every H1 and H2 configuration's selectable run, with
     ``skilled`` the one that passes development (none if None; H2's have no edge), and
     both benchmarks' runs, which DEV-2 needs, so the unseal may come (decision D21: it
@@ -483,7 +483,8 @@ def grid_world(tmp: Path, *, skilled: str | None = "H1-03", benchmark: bool = Tr
     ``incomplete`` also leaves the last H1 configuration unrun, so no hypothesis has a
     candidate. ``loader_changed`` runs the grids at a commit whose loader.py differs
     from HEAD's, so the unseal has a data loading diff to accept (security review round
-    3, T1); HEAD's package is still the code under test."""
+    3, T1), the runs' loader.py carrying ``loader_line`` at its end; HEAD's package is
+    still the code under test."""
     registration = Registration.from_bytes(REAL_PREREG_JSON.read_bytes())
     pinned = {cid: "noise" for h in ("H1", "H2") for cid in registration.order[h]}
     pinned["B-H1"] = "market"
@@ -492,7 +493,7 @@ def grid_world(tmp: Path, *, skilled: str | None = "H1-03", benchmark: bool = Tr
     world = World(tmp, behaviours={**pinned, **(behaviours or {})})
     loader = "research/norse_research/loader.py"
     if loader_changed:
-        world.write(loader, (PACKAGE / "loader.py").read_text() + "\n# as the runs had it\n")
+        world.write(loader, (PACKAGE / "loader.py").read_text() + f"\n{loader_line}\n")
         world.commit("loader: the data loading the runs used")
         world.push()
     order = list(registration.order["H1"][:-1] if incomplete else registration.order["H1"])

@@ -41,7 +41,8 @@ names on its own.
 **Unseal** (G1.6) is written at most once, before any holdout file is fetched again and
 before any holdout run, and it closes development (decision D21): N, V and the holdout
 candidate are computed on the entries before it, and no trial, benchmark or control
-entry may follow it. It names the commit and file hashes of the pre-registration tag
+run may be opened after it; the result of one opened before it may land after it, and
+is accepted and ignored. It names the commit and file hashes of the pre-registration tag
 the genesis entry names, the holdout candidate's configuration id, hypothesis and
 configuration hash, the open and result entries of its selectable run, the commit the
 code is frozen at, the SHA-256 of the data loading and seal diff the owner accepted

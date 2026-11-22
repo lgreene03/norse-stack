@@ -495,8 +495,8 @@ def admit(
     issued: RegisteredLedger | None = None,
 ) -> None:
     """Refuse a run the registered rules do not allow. Reads the ledger, never the
-    clock (T11): no trial, benchmark or control run after the unseal entry, which
-    closes development (decision D21), and a sensitivity run only of its hypothesis's
+    clock (T11): no trial, benchmark or control run is opened after the unseal entry,
+    which closes development (decision D21), and a sensitivity run only of its hypothesis's
     candidate on ``issued``, the gate's ledger, before or after the unseal (section 8)."""
     kind, h, cid = resolved.kind, resolved.hypothesis, resolved.configuration_id
     closed = after_unseal_error(snapshot.entries, kind)

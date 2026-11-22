@@ -17,9 +17,12 @@ The rules:
   hypothesis, window, costs, seed and registered parameters, with the strategy the
   genesis entry pins for it (review N7);
 * the unseal closes development (decision D21; there is no ledger freeze): after it no
-  trial, benchmark or control runs. A sensitivity run is of a hypothesis's candidate,
-  once every registered configuration of that hypothesis has a selectable run, before
-  or after the unseal; that needs the gate, so ``gate`` replays it (section 8);
+  trial, benchmark or control run is opened. The result of one opened before it may
+  still land after it; replay accepts it and the gate ignores it, since it computes on
+  the entries before the unseal (security review of #65, L-1). A sensitivity run is of
+  a hypothesis's candidate, once every registered configuration of that hypothesis has
+  a selectable run, before or after the unseal; that needs the gate, so ``gate``
+  replays it (section 8);
 * the unseal comes once (section 11, item 4; T23);
 * a holdout run comes after the unseal, runs the unseal's candidate configuration and
   nothing else, and after one completed holdout result nothing more: a run that failed
@@ -301,8 +304,10 @@ def budget_exhausted(entries: Sequence[Entry], registration: Registration, h: st
 
 
 def after_unseal_error(prior: Sequence[Entry], kind: str) -> str | None:
-    """Why a run of ``kind`` may not follow ``prior``, or None: the unseal closes
-    development, so no trial, benchmark or control follows it (decision D21)."""
+    """Why a run of ``kind`` may not be opened after ``prior``, or None: the unseal
+    closes development, so no trial, benchmark or control is opened after it (decision
+    D21). Only opens are refused: the result of a run opened before the unseal is
+    accepted after it, and the gate ignores it (L-1)."""
     if kind in (TRIAL, BENCHMARK, CONTROL) and any(e.type == UNSEAL for e in prior):
         return (
             f"a {kind} run after the unseal, which closed development (decision D21; "

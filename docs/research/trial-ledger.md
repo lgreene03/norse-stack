@@ -50,8 +50,9 @@ informative only: no trust decision reads the clock, and a test fails if code ou
   commit, manifest hash and cost basis, so each result entry holds every field G1.5 names.
 * **Unseal** (G1.6) is written at most once, when the owner's passphrase verifies, and
   closes development: there is no ledger freeze (decision D21), so no trial, benchmark or
-  control entry may follow it, and N, V and the holdout candidate are computed on the
-  entries before it. It names the pre-registration genesis names, the holdout candidate
+  control run may be opened after it, and N, V and the holdout candidate are computed on
+  the entries before it. The result of a run opened before it may still be written after
+  it; replay accepts it and the gate ignores it (security review of #65, L-1). It names the pre-registration genesis names, the holdout candidate
   the registered rule selects on those entries, the commit the holdout runs at, the hash
   of the data loading and seal diff the owner accepted since the candidate's run, and the
   hashes of the holdout manifest and the key record, and reveals the scrypt output the key

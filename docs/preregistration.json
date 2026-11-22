@@ -3,7 +3,7 @@
   "title": "Pre-registration of H1 (dated-universe trend) and H2 (funding carry), G0.7",
   "prose": "docs/PREREGISTRATION.md",
   "precedence": "This file governs wherever it and docs/PREREGISTRATION.md disagree.",
-  "status": "Signed by the owner on 2026-11-14; drafted on 2026-11-11 and revised on 2026-11-13 after the CTPO role's review (PR 52); revised on 2026-11-21 on the owner's instruction to remove the ledger freeze (D21), and on 2026-11-22 on the owner's decision to revise V after G1.7's calibration (D22), as prereg-v2. Binding only once the merged commit on main is tagged (prereg-v1, and for this revision prereg-v2; change_control).",
+  "status": "Signed by the owner on 2026-11-14; drafted on 2026-11-11 and revised on 2026-11-13 after the CTPO role's review (PR 52); revised on 2026-11-21 on the owner's instruction to remove the ledger freeze (D21), and on 2026-11-22 on the owner's decisions to revise V after G1.7's calibration and to settle three points from the reviews of that revision (D22 to D25), as prereg-v2. Binding only once the merged commit on main is tagged (prereg-v1, and for this revision prereg-v2; change_control).",
   "decisions": {
     "D3": "paper short perpetual positions approved for H2",
     "D4": "the owner alone holds the holdout key",
@@ -14,8 +14,11 @@
     "D15": "H2's second criterion is in excess of a beta-matched buy-and-hold; H1's stays volatility-matched",
     "D16": "rulesets: main cannot be force pushed or deleted and needs the research and validate checks; prereg-* and ledger-* tags cannot be updated or deleted",
     "D17": "the holdout files stay off the local mirror until the single unseal, then are fetched again and verified against the frozen holdout manifest",
-    "D21": "there is no ledger freeze: the unseal entry closes development; N, V and the holdout candidate are computed on the entries before it, and no trial, benchmark or control entry may follow it",
-    "D22": "V in SR_0 is the null variance 1/(T - 1) of the candidate's window, for DEV-1 and DEV-2, since G1.7's calibration showed the cross-trial V charges a real edge as selection noise; the calibration's detection condition is a single planted configuration at an annualised Sharpe ratio of 2.0 passing development in more than 500 of 1,000 ledgers in every single-planted family, with power at 1.5, at N = 14 and for an edge shared within one hypothesis reported; the unseal's wait for both grids, the close of development with no holdout candidate and the VOID and NOT JUDGED verdicts are confirmed unchanged"
+    "D21": "there is no ledger freeze: the unseal entry closes development; N, V and the holdout candidate are computed on the entries before it, and no trial, benchmark or control run may be opened after it; the result of one opened before it may be written after it, which replay accepts and the gate ignores",
+    "D22": "V in SR_0 is the null variance 1/(T - 1) of the candidate's window, for DEV-1 and DEV-2, since G1.7's calibration showed the cross-trial V charges a real edge as selection noise; the calibration's detection condition is that, at N = 30, in each of the four single-planted families at an annualised Sharpe ratio of 2.0, the planted hypothesis passes development in more than 500 of 1,000 ledgers (gate.calibration), with power at 1.5, at N = 14 and for an edge shared within one hypothesis reported; the unseal's wait for both grids, the close of development with no holdout candidate and the VOID and NOT JUDGED verdicts are confirmed unchanged",
+    "D23": "a hypothesis that passes development while the other hypothesis's grid is neither complete nor exhausted when the verdict is given is PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT, not FAIL, and the holdout stays sealed",
+    "D24": "if G1.7's full rerun under the revised gate does not meet the calibration condition (gate.calibration), prereg-v2 is tagged as it stands, the gate is not revised again on the strength of that result, and the iteration closes NOT JUDGED",
+    "D25": "only the owner starts holdout runs, straight after the unseal; no agent, scheduled task or second clone starts one; the code does not enforce this, so an agent could still use up the three attempts by killing a run straight after its attempt entry or by starting one from a second clone"
   },
   "data": {
     "source": "data.binance.vision",
@@ -354,7 +357,14 @@
         "pass": "SR_h > 0 and SR_h >= SR_w - 1.6448536269514722 * sqrt((1 - skewness_w * SR_w + (kurtosis_w - 1) / 4 * SR_w^2) / (304 - 1)), with skewness_w and kurtosis_w from the development window"
       }
     ],
-    "reported_not_criteria": ["family PBO over all selectable runs on their common days", "minimum track record length", "block-bootstrap intervals", "percentile among the 100 control runs", "benchmark statistics", "cost sensitivity"]
+    "reported_not_criteria": ["family PBO over all selectable runs on their common days", "minimum track record length", "block-bootstrap intervals", "percentile among the 100 control runs", "benchmark statistics", "cost sensitivity"],
+    "calibration": {
+      "condition": "no strategy is judged until both halves hold, at N = 30, in G1.7's families (#66)",
+      "no_skill": "in every one of G1.7's no-skill families separately, the gate produces a holdout candidate in at most 50 of 1,000 simulated ledgers (5%); the two serially correlated sensitivity families are reported only",
+      "detection": "in each of the four single-planted families at an annualised Sharpe ratio of 2.0 (single-H1-s2-low, single-H1-s2-high, single-H2-s2-low, single-H2-s2-high), the planted hypothesis passes development (its candidate meets DEV-1 to DEV-5) in more than 500 of the 1,000 ledgers; the minimum of the four decides; the metric is the one G1.7 committed in #66's 9ac814f, with 2.0 in place of 1.5 (D22)",
+      "reported": "power at 1.5, at N = 14 and for an edge shared within one hypothesis, with the same families",
+      "if_not_met": "prereg-v2 is tagged as it stands, the gate is not revised again on the strength of that result, and the iteration closes NOT JUDGED (D24)"
+    }
   },
   "candidate_selection": {
     "hypothesis_candidate": "the selectable run with the highest DEV-1 dsr; ties to the earlier registered configuration",
@@ -364,9 +374,10 @@
     "development_closes_without_unseal": "with no holdout candidate, development closes once each hypothesis has a selectable run of every registered configuration or has exhausted its own entries and the reserve, and neither passes development; the verdict is computed on the ledger at that point and records the ledger entry it was computed at; a later trial entry can only be a rerun with a recorded defect, and changes a published verdict only if the defect is recorded and the verdict reissued; no ledger entry marks the point"
   },
   "holdout_run": {
-    "unseal": "names the commit and file hashes of the pre-registration tag the genesis entry names and the holdout candidate's configuration hash, and is accepted only with the owner's key (D4); it closes development: N, V and the holdout candidate are computed on the entries before it, and no trial, benchmark or control entry may follow it (D21); it comes only once each hypothesis has a selectable run of every registered configuration or has exhausted its own entries and the reserve, since candidate_selection compares the two candidates and an earlier unseal would stop the other grid early",
+    "unseal": "names the commit and file hashes of the pre-registration tag the genesis entry names and the holdout candidate's configuration hash, and is accepted only with the owner's key (D4); it closes development: N, V and the holdout candidate are computed on the entries before it, and no trial, benchmark or control run may be opened after it, while the result of one opened before it may be written after it and is ignored (D21); it comes only once each hypothesis has a selectable run of every registered configuration or has exhausted its own entries and the reserve, since candidate_selection compares the two candidates and an earlier unseal would stop the other grid early",
     "simulation": "one simulation of the candidate configuration from the start of its development window through 2026-10-31, positions carried across the boundary; HOLD-1 reads only the returns of 2026-01-01 to 2026-10-31",
     "spent_by": "one holdout result entry",
+    "started_by": "the owner only, straight after the unseal; no agent, scheduled task or second clone starts a holdout run; a written rule the code does not enforce (D25)",
     "retry": "a run that fails before producing a result may be retried under the same unseal for the same configuration only, at the commit of its selectable run plus only commits that touch data loading or the seal, every attempt ledgered",
     "nothing_else_on_the_holdout": "no other configuration, benchmark, control or sensitivity run reads holdout data",
     "data": "the holdout files are fetched again at the unseal and verified against the frozen holdout manifest (D17); a file that fails verification stops the run before any return is computed",
@@ -378,14 +389,14 @@
     "VOID": "for both hypotheses, whenever the trial ledger's hash chain fails verification: the iteration is void and restarts from pre-registration, and nothing the ledger holds stands as evidence either way",
     "NOT JUDGED": "for both hypotheses, whenever the gate did not pass its calibration under G1.7, a calibration that never completed included: no strategy is judged, and no development or holdout figure is reported as evidence",
     "PASS": "the hypothesis passes development and its candidate was the holdout candidate and passes HOLD-1",
-    "PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT": "passes development but the other hypothesis's candidate was the holdout candidate",
+    "PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT": "passes development but the other hypothesis's candidate was the holdout candidate; or passes development but no unseal can happen because the other hypothesis's grid is neither complete nor exhausted when the verdict is given, so the holdout stays sealed and the verdict is computed on the ledger at that point (D23); this row precedes FAIL",
     "FAIL": "otherwise, once every registered configuration has a selectable run; and whenever the hypothesis's own entries and the reserve are exhausted without a pass",
     "NOT RUN": "not every registered configuration has a selectable run at the verdict, and the hypothesis's own entries and the reserve are not exhausted; if they are, the verdict is FAIL"
   },
   "change_control": {
     "before_the_first_entry_after_genesis": "a change needs a new tag (prereg-v2 and onward) and its reason recorded in the change log of docs/PREREGISTRATION.md",
     "after_the_first_entry_after_genesis": "no change is allowed: the first ledger entry that follows the genesis entry, of any kind (benchmark, control or trial), closes the registration",
-    "signing_and_tag": "the owner signed in conversation on 2026-11-14 and instructed an agent session to record the signature, merge the pull request and create the annotated tag prereg-v1 on the resulting commit on main (D18); the owner instructed in conversation on 2026-11-21 that the change removing the ledger freeze be tagged prereg-v2 (D21), which the lead creates on the resulting commit on main after the merge; no other agent or scheduled task creates a prereg-* tag, and any later one only on the owner's explicit instruction for that tag"
+    "signing_and_tag": "the owner signed in conversation on 2026-11-14 and instructed an agent session to record the signature, merge the pull request and create the annotated tag prereg-v1 on the resulting commit on main (D18); the owner instructed in conversation on 2026-11-21 that the change removing the ledger freeze be tagged prereg-v2 (D21), and on 2026-11-22 chose the gate revision (D22) on the terms that the full calibration is rerun before tagging; the lead creates prereg-v2 on the commit on main that holds this revision only once G1.7's full rerun under the revised gate has completed and been recorded, and creates it then whatever the rerun found: if it does not meet gate.calibration, the gate is not revised again on that result and the iteration closes NOT JUDGED (D24); no other agent or scheduled task creates a prereg-* tag, and any later one only on the owner's explicit instruction for that tag"
   },
   "benchmark_computation": "both benchmarks run through the same harness as the trials, not through norse_research.benchmark.equal_weight_buy_and_hold; DEV-2 for H1 applies norse_research.benchmark.excess_returns(r, volatility_matched(r_B, r))",
   "controls_seeds_note": "seed_first to seed_last inclusive: 100 seeds per hypothesis"

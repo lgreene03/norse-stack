@@ -380,7 +380,7 @@ def missing_benchmarks(ledger: RegisteredLedger) -> list[str]:
     for a hypothesis with selectable runs, none on those runs' harness code (quant
     review M3). A hypothesis's DEV-2, and with it any unseal that judges its candidate,
     is refused while its own is missing (since decision D22 no other hypothesis's DEV-2
-    reads it); no benchmark may run after the unseal (decision D21)."""
+    reads it); no benchmark may be opened after the unseal (decision D21)."""
     family = selectable_runs(_require(ledger))
     missing = []
     for h in HYPOTHESES:

@@ -68,7 +68,8 @@ and a superseding genesis is still possible until the first entry of any other t
 ## What happens at the unseal (G3.2, with the owner holding the key)
 
 There is no ledger freeze (decision D21, 2026-11-21): the unseal closes development. No trial,
-benchmark or control may run after it, and N, V and the holdout candidate are computed on the
+benchmark or control run may be opened after it (the result of one opened before it is still
+accepted, and the gate ignores it), and N, V and the holdout candidate are computed on the
 entries before it, so it comes once every run the owner means to make is in the ledger, after the
 G2.7 ledger audit and after both README outcomes are drafted (G3.1). It is refused until each
 hypothesis has a selectable run of every registered configuration or has exhausted its own
@@ -82,9 +83,11 @@ python -m norse_research.seal candidate
 
 It prints, for each hypothesis, its candidate and whether it meets DEV-1 to DEV-5 on the ledger as
 it stands (provisional until the unseal), then the pre-registration the genesis entry names, the
-holdout candidate's configuration id and hash, the data loading and seal files changed since the
-candidate's run and the hash of that diff at HEAD. If no hypothesis passes development there is no
-holdout candidate, and then no unseal and no holdout run (section 11, item 3).
+holdout candidate's configuration id and hash, and the data loading and seal files changed since
+the candidate's run. It prints neither their diff nor the hash that accepts it: both come only from
+`seal unseal`, which prints the hash after the full diff, so the hash is never seen without what it
+covers (security review of #65, L-2). If no hypothesis passes development there is no holdout
+candidate, and then no unseal and no holdout run (section 11, item 3).
 
 Then rehearse the holdout run, which also needs no key and writes nothing to the ledger:
 
@@ -102,10 +105,13 @@ here, fixed and committed on main, and the rehearsal run again until it passes. 
 the real boundary at 2026-01-01, whose data stays off disk, so a gap there is still G3.2's to check
 (below).
 
-Otherwise the owner runs, in a terminal of their own:
+Otherwise the owner runs, in a terminal of their own, the unseal first without `--accept-diff`,
+which prints the full diff and then its hash and refuses, and then, once every line has been read,
+with that hash:
 
 ```bash
-python -m norse_research.seal unseal --commit <the pre-registration commit> --configuration-sha256 <the candidate's hash> --accept-diff <the hash it prints>
+python -m norse_research.seal unseal --commit <the pre-registration commit> --configuration-sha256 <the candidate's hash>
+python -m norse_research.seal unseal --commit <the pre-registration commit> --configuration-sha256 <the candidate's hash> --accept-diff <the hash printed after the diff>
 ```
 
 `--tag` defaults to the tag the genesis entry names. Before it asks for the passphrase it refuses
@@ -118,12 +124,17 @@ at HEAD; period constants that differ from the genesis entry's (T20); a pre-regi
 tag or file hash other than the genesis entry's (T24); a configuration hash other than the holdout
 candidate's, which it computes by the registered rule over the ledger before the unseal (T22); a
 HEAD at which anything but data loading or the seal has changed since the candidate's selectable
-run (section 11, item 6, applied here once; the entry records that HEAD); and an accepted diff hash
-that is not the hash of the data loading and seal diff from the candidate's commit to HEAD. Without
-`--accept-diff`, or with another hash, it prints the files changed, git's summary of the change,
-the command to read it in full and the hash, and refuses, so the owner reads every data loading or
-seal change before anything is unsealed; with nothing changed it prints the hash of the empty diff
-to accept (security review round 3, T1).
+run, or any `.gitattributes` file has (section 11, item 6, applied here once; the entry records
+that HEAD); and an accepted diff hash that is not the hash of the data loading and seal diff from
+the candidate's commit to HEAD. Without `--accept-diff`, or with another hash, it prints the full
+diff of the files changed and only then the hash, and refuses, so the owner reads every data
+loading or seal change before anything is unsealed; with nothing changed it prints the hash of the
+empty diff to accept (security review round 3, T1). The diff is rendered by the seal itself, in
+Python, from the very blobs the hash names, never by git's own `git diff`: the clone's attributes,
+text conversion filters and settings, which an agent can change without leaving a trace in `git
+status`, cannot hide or alter a line, and every unprintable character (a carriage return, a
+terminal escape, a bidirectional override) is written as an escape (security review of #65, M-1).
+Read the diff it prints, not the output of a `git diff` of your own.
 Only then does it read the passphrase from the terminal and check that the SHA-256 of its scrypt
 output is the key record's verifier, in constant time (T25). A missing or wrong passphrase writes
 nothing.
@@ -137,7 +148,13 @@ the scrypt output as its `proof`. The ledger itself checks that proof against th
 key record genesis pins, when the entry is written and on every replay, so an unseal written
 without the owner's key, by the seal, by a direct append or by git plumbing, is refused, and with
 it the re-fetch and the holdout run (security review H1). Revealing the scrypt output is safe
-because the unseal is single use (T23); a rewrite of the remote to replay it is T10's. Only after the
+because the unseal is single use (T23); a rewrite of the remote to replay it is T10's. Every git
+command the ledger and the seal run has hooks and the file system monitor turned off, and a clone
+that configures either is refused, since a hook in the clone's untracked `.git/hooks` could copy
+the proof out of the unseal's push and fail it, leaving an agent free to unseal at a commit of its
+own (security review of #65, H-1). Even so, an unseal whose push fails is an incident: before
+running it again, check the remote's ledger for an unseal entry and the clone's `.git/hooks` and
+configuration, then run it again at once from the same terminal. Only after the
 remote holds it are the holdout files fetched again (D17): every file the frozen holdout manifest
 pins, about 8,517 of them, each checked against its published CHECKSUM and against the manifest's
 SHA-256 and size before it is written, and then the whole manifest is verified, rows included. The
@@ -186,6 +203,14 @@ an attempt while another is open, and the whole holdout run holds a lock on its 
 run there is refused while the first is in flight (M1). On another clone the second run closes the
 first's attempt as abandoned, and the first can then neither close its attempt nor complete. A
 completed holdout result needs its own attempt closed as returned, and there is only one.
+
+**Who starts a holdout run (decision D25).** Only the owner, and straight after the unseal; no
+agent, scheduled task or second clone starts one. This is a written rule, and the code does not
+enforce it. Starting a holdout run needs no key, so an agent could still use up the three
+attempts without it, by killing a run straight after its attempt entry, or by starting one from a
+second clone while the owner's is in flight, which closes the owner's attempt as abandoned and
+costs two attempts for one (security review of #65, M-2, the residual of round 3's C1). A holdout
+run started by anyone but the owner is an incident. The key record's design is unchanged.
 
 Section 11, item 6's file rule is applied once, at the unseal: from the candidate's selectable-run
 commit to the unseal's HEAD, only the data loading and seal modules (`seal`, `loader`, `store`,
@@ -270,10 +295,14 @@ written in the row, so a later edit to either is visible.
 
 **Replaying the unseal depends on the gate code at verify time (L5).** Verification recomputes the
 holdout candidate with the `gate`, `sharpe`, `cscv` and `benchmark` modules as they are when it runs,
-not as they were at the unseal. A later change to any of them could make the ledger fail
-verification for good, or change the candidate replay expects. The control is process: from the
-unseal on, those four modules are not changed without a recorded defect and a security review, and
-G3.4 checks that they are unchanged since the unseal entry's commit.
+not as they were at the unseal. It also recomputes the accepted diff over the seal file list,
+`gitledger.SEAL_AND_DATA_LOADING`, and whether the unseal was early through `rules.py`'s budget rule
+(`rules.budget_exhausted`). A later change to any of them could make the ledger fail verification
+for good, or change the candidate replay expects; adding or removing a module in the seal file list
+after the unseal would raise a false tamper alarm (security review of #65, L-3). The control is
+process: from the unseal on, those four modules, `rules.py` and the seal file list are not changed
+without a recorded defect and a security review, and G3.4 checks that they are unchanged since the
+unseal entry's commit.
 
 ## What this does not cover
 

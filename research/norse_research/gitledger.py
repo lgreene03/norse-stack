@@ -13,7 +13,11 @@ remote's resolved fetch and push URLs must equal the pinned URL, and no ``instea
 rewrite may be configured; so a run from a scratch clone, a mirror or a redirected
 remote is refused rather than ledgered where nobody looks (security review H1). Git
 runs with ``GIT_NO_REPLACE_OBJECTS`` set, and any ``refs/replace/`` ref is refused
-(M5).
+(M5). Every git command here also runs with hooks and the file system monitor turned
+off (``core.hooksPath=/dev/null``, ``core.fsmonitor=false``), and a clone that
+configures either in any scope is refused: either would run a program of the clone's
+choosing inside the unseal's push, where it could read the proof before the remote
+holds it (security review of #65, H-1).
 
 **Appending.** An append never touches the working tree, so it cannot dirty it. It
 takes a lock in the repository's git directory, fetches the remote ledger ref, checks
@@ -48,6 +52,7 @@ which never decrease along the chain (T11).
 from __future__ import annotations
 
 import argparse
+import difflib
 import fcntl
 import hashlib
 import hmac
@@ -117,6 +122,13 @@ from .store import REPO_ROOT
 # ledger-genesis-<hash of the first genesis entry>. There is no freeze anchor (D21).
 GENESIS_ANCHOR = "ledger-genesis-"
 RESERVED = ("ledger-genesis",)
+# The withdrawn freeze anchor's name stays refused as a milestone, so no permanent tag
+# can read as a freeze that no longer exists (security review of #65, L-4).
+WITHDRAWN = ("ledger-freeze",)
+# Every git command runs with these first: hooks and the file system monitor would run a
+# program the clone chooses inside a ledger command (security review of #65, H-1).
+HARDENED = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
+_FALSE = frozenset({"false", "no", "off", "0"})
 MILESTONE_TAG = re.compile(r"ledger-[a-z0-9][a-z0-9.-]*")
 SCRYPT_MAXMEM = 256 * 1024 * 1024
 # Configuration that would send fetches or pushes elsewhere while the URL still
@@ -128,8 +140,10 @@ TRANSPORT_OVERRIDES = (
     r"^ssh\.variant$",
     r"^http\..*(proxy|ssl).*$",
 )
-# The tag a new genesis entry names by default; replay trusts the tag genesis records.
+# The tag a new genesis entry names, the registration this code implements; replay
+# trusts the tag genesis records. A genesis may pin no other (quant review of #65, L7).
 PREREGISTRATION_TAG = "prereg-v2"
+PREREGISTRATION_VERSION = re.compile(r"prereg-v([1-9][0-9]*)")
 LOCK_NAME = "norse-ledger.lock"
 HOLDOUT_LOCK_NAME = "norse-holdout.lock"
 LEDGER_NAME = "Norse trial ledger"
@@ -156,6 +170,10 @@ SEAL_AND_DATA_LOADING = frozenset(
 # Where this package lives in the repository. The runner exports all of it to every run,
 # so item 6's diff always covers it, whatever the genesis tree paths list (review L3).
 PACKAGE_PATH = "research/norse_research"
+# Attribute files change what git shows of a diff, and how a file is checked out, without
+# changing a byte of the code, so item 6's rule covers every one in the repository, the
+# root's included (security review of #65, M-1).
+ATTRIBUTES_PATHSPEC = ":(glob)**/.gitattributes"
 
 
 class GitError(LedgerError):
@@ -191,10 +209,12 @@ class Git:
 
     def call(self, *args: str, input: bytes | None = None, env: Mapping | None = None):
         # Replacement objects could substitute one commit or blob for another in
-        # every local check (M5); git never honours them here.
+        # every local check (M5); git never honours them here. Hooks and the file system
+        # monitor never run (H-1): a command-line setting overrides every file's.
         full = {**os.environ, "GIT_NO_REPLACE_OBJECTS": "1", **(env or {})}
         return subprocess.run(
-            ["git", *args], cwd=self.repo, input=input, capture_output=True, env=full, check=False
+            ["git", *HARDENED, *args], cwd=self.repo, input=input, capture_output=True,
+            env=full, check=False,
         )
 
     def run(self, *args: str, input: bytes | None = None, env: Mapping | None = None) -> bytes:
@@ -287,9 +307,24 @@ class GitLedger:
         return fetch, push
 
     def check_repository(self) -> None:
-        """No replacement refs and no URL rewriting, in any configuration scope."""
+        """No replacement refs, no URL rewriting, and no hooks path or file system
+        monitor, in any configuration scope."""
         if self.git.text("for-each-ref", "--format=%(refname)", "refs/replace/"):
             raise RemoteNotPinned("refs/replace/ refs are refused: they substitute objects")
+        found = self.git.try_text(
+            "config", "--show-scope", "--get-regexp", r"^core\.(hookspath|fsmonitor)$"
+        )
+        for line in (found or "").splitlines():
+            scope, _, setting = line.partition("\t")
+            name, _, value = setting.partition(" ")
+            if scope == "command" or (name == "core.fsmonitor" and value.lower() in _FALSE):
+                continue  # HARDENED's own settings, or a monitor switched off
+            raise RemoteNotPinned(
+                f"{name} is configured in the {scope} configuration ({value or 'true'}), which "
+                "is refused: a hook or a file system monitor runs a program inside the "
+                "ledger's git commands, where it could read the unseal's proof before the "
+                "remote holds it (security review of #65, H-1)"
+            )
         for pattern in TRANSPORT_OVERRIDES:
             found = self.git.try_text("config", "--get-regexp", pattern)
             if found and pattern.startswith("^remote") and ".pushurl" in found:
@@ -464,6 +499,12 @@ class GitLedger:
             if genesis_of(written) is None:
                 raise VerificationError("no entry may precede the genesis entry")
             self.check_remote(written[0].body["remote"]["url"])  # the first genesis's (N5)
+            if body.get("type") == GENESIS:
+                problem = preregistration_tag_error(
+                    self, (body.get("preregistration") or {}).get("tag")
+                )
+                if problem:
+                    raise VerificationError(f"the entry is refused: {problem}")
             if body.get("type") == OPEN:
                 # The unseal closes development (D21); checked under the lock, against the
                 # remote's ledger, since another session may have unsealed meanwhile.
@@ -769,8 +810,10 @@ class GitLedger:
         checked, ignored = {}, {}
         for name, commit in sorted(tags.items()):
             tagged = self.git.blob(commit, LEDGER_PATH)
-            if tagged is None:
-                ignored[name] = commit  # not on a ledger commit: reported, not fatal (M6)
+            if tagged is None or name.startswith(WITHDRAWN):
+                # Not on a ledger commit, or the withdrawn freeze's name: reported, not
+                # fatal, and never read as a milestone (M6; L-4).
+                ignored[name] = commit
                 continue
             if name.startswith(RESERVED):
                 first = tagged.split(b"\n", 1)[0]
@@ -820,6 +863,12 @@ class GitLedger:
         genesis step does (review M6)."""
         if not MILESTONE_TAG.fullmatch(name):
             raise ValueError(f"{name!r} is not a lower-case ledger-* milestone tag name")
+        if name.startswith(WITHDRAWN):
+            raise LedgerError(
+                f"{name} is refused: ledger-freeze-* was the withdrawn freeze anchor (decision "
+                "D21), and a permanent tag of that shape would read as a freeze that does not "
+                "exist (security review of #65, L-4)"
+            )
         if name.startswith(RESERVED) and not _anchor:
             raise LedgerError(
                 f"{name} is a reserved name: the genesis step writes the anchor, which "
@@ -861,12 +910,14 @@ def _message(entry: Entry) -> str:
 def holdout_commit_error(git: Git, candidate: str, commit: str, paths: Sequence[str]) -> str | None:
     """Why a holdout run at ``commit`` is not at its candidate's commit plus only
     changes to data loading or the seal under ``paths`` and the whole package, which the
-    runner exports to every run (section 11, item 6; review L3), or None."""
+    runner exports to every run (section 11, item 6; review L3), or None. A change to any
+    ``.gitattributes`` file, the root's included, is refused too (M-1)."""
     known = git.try_text("cat-file", "-t", candidate) == "commit"
     if not known or not git.is_ancestor(candidate, commit):
         return f"the holdout run's commit {commit} does not descend from its candidate's {candidate}"
     changed = git.text(
-        "diff", "--name-only", "--no-renames", candidate, commit, "--", PACKAGE_PATH, *paths
+        "diff", "--name-only", "--no-renames", candidate, commit, "--", PACKAGE_PATH, *paths,
+        ATTRIBUTES_PATHSPEC,
     ).splitlines()
     other = sorted(p for p in changed if p not in SEAL_AND_DATA_LOADING)
     if other:
@@ -880,12 +931,14 @@ def holdout_commit_error(git: Git, candidate: str, commit: str, paths: Sequence[
 
 def seal_changes(git: Git, candidate: str, commit: str) -> tuple[list[str], str, str]:
     """The data loading and seal files changed from the candidate's commit to
-    ``commit``, git's summary of those changes for the owner to read, and the SHA-256
-    of the diff's raw record (each changed file's path and its blob ids before and
-    after), which names the changed content exactly and, being plumbing, does not depend
-    on anyone's diff settings. The owner accepts that hash at the unseal, which records
-    it, and replay recomputes it (security review round 3, T1). With no change the
-    record is empty and the hash is that of no bytes."""
+    ``commit``, the full diff of those changes for the owner to read, and the SHA-256 of
+    the diff's raw record (each changed file's path and its blob ids before and after),
+    which names the changed content exactly and, being plumbing, does not depend on
+    anyone's diff settings. The owner accepts that hash at the unseal, which records it,
+    and replay recomputes it (security review round 3, T1). The diff is rendered here
+    from the very blobs the record names (``render_diff``), never by git's porcelain, so
+    no attribute, filter or setting of the clone can change what the owner reads (M-1).
+    With no change the record is empty and the hash is that of no bytes."""
     seal_files = sorted(SEAL_AND_DATA_LOADING)
     raw = git.run(
         "diff-tree", "-r", "--no-renames", "--no-abbrev", candidate, commit, "--", *seal_files
@@ -893,10 +946,43 @@ def seal_changes(git: Git, candidate: str, commit: str) -> tuple[list[str], str,
     files = sorted(
         line.split("\t", 1)[1] for line in raw.decode().splitlines() if "\t" in line
     )
-    stat = ""
-    if files:
-        stat = git.text("diff", "--stat", "--no-color", candidate, commit, "--", *files)
-    return files, stat, hashlib.sha256(raw).hexdigest()
+    return files, render_diff(git, raw), hashlib.sha256(raw).hexdigest()
+
+
+def _shown(text: str) -> str:
+    """A line as the owner reads it: every character that is not printable (a control
+    character such as a carriage return or an escape, a format character such as a
+    bidirectional override, a line or paragraph separator) is written as its Python
+    escape, so nothing in a file can hide or rewrite a line on the terminal."""
+    return "".join(
+        c if c == "\t" or c.isprintable() else c.encode("unicode_escape").decode("ascii")
+        for c in text
+    )
+
+
+def render_diff(git: Git, raw: bytes) -> str:
+    """A unified diff of every file in ``raw``, a ``diff-tree --raw`` record with full
+    blob ids, rendered with ``difflib`` from the blobs it names, read with ``cat-file``,
+    which applies no attribute, filter or text conversion. Lines split on newlines only,
+    bytes that are not UTF-8 show as escapes, and so does any character ``_shown``
+    escapes, so what the owner reads is the content the record's hash binds (M-1)."""
+    shown = []
+    for line in raw.decode().splitlines():
+        meta, _, path = line.partition("\t")
+        old_mode, new_mode, old, new, status = meta.lstrip(":").split()
+        sides = []
+        for oid in (old, new):
+            if set(oid) == {"0"}:  # an added or a deleted file has no blob on one side
+                sides.append([])
+                continue
+            (blob,) = git.objects([oid])
+            if blob is None:
+                raise GitError(f"blob {oid} of {path} is missing")
+            sides.append([_shown(x) for x in blob.decode("utf-8", "backslashreplace").split("\n")])
+        name = _shown(path)
+        shown.append(f"{name}: {status}, mode {old_mode} -> {new_mode}, blob {old} -> {new}")
+        shown.extend(difflib.unified_diff(*sides, f"a/{name}", f"b/{name}", lineterm=""))
+    return "\n".join(shown)
 
 
 # --- the registration through the genesis entry ----------------------------------------
@@ -1059,6 +1145,32 @@ def tree_digests(git: Git, commit: str, tree_paths: Mapping[str, Sequence[str]])
     return out
 
 
+def preregistration_tag_error(ledger: GitLedger, tag: object) -> str | None:
+    """Why a genesis entry may not pin ``tag``, or None. It pins only the newest
+    registration: ``PREREGISTRATION_TAG``, the one this code implements, and only while the
+    remote holds no ``prereg-v<N>`` newer than it. So a genesis can pin neither a
+    registration the code no longer implements (``prereg-v1``'s cross-trial V and freeze
+    under ``prereg-v2``'s gate) nor one a newer registration has superseded (quant review
+    of #65, L7)."""
+    if tag != PREREGISTRATION_TAG:
+        return (
+            f"a genesis entry pins {PREREGISTRATION_TAG}, the registration this code "
+            f"implements, never {tag} (quant review of #65, L7)"
+        )
+    mine = int(PREREGISTRATION_VERSION.fullmatch(PREREGISTRATION_TAG).group(1))
+    newer = [
+        name for name in (n.removeprefix("refs/tags/") for n in ledger._remote_refs("prereg-v"))
+        if (found := PREREGISTRATION_VERSION.fullmatch(name)) and int(found.group(1)) > mine
+    ]
+    if newer:
+        return (
+            f"the remote holds {', '.join(sorted(newer))}, newer than {tag}, which this code "
+            "implements: update the code to the newest registration before writing genesis "
+            "(quant review of #65, L7)"
+        )
+    return None
+
+
 def write_genesis(
     ledger: GitLedger,
     *,
@@ -1084,6 +1196,9 @@ def write_genesis(
     git = ledger.git
     check_environment(os.environ, git.repo)
     ledger.check_repository()
+    problem = preregistration_tag_error(ledger, tag)
+    if problem:
+        raise LedgerError(problem)
     pinned = remote_url or git.text("ls-remote", "--get-url", ledger.remote)
     found = ledger._remote_refs(tag).get(f"refs/tags/{tag}")
     if found is None:

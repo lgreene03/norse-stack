@@ -22,8 +22,8 @@ typed passphrase against the record genesis pinned and writes nothing, so a reco
 substituted at genesis is found then rather than at the unseal (security review M2).
 
 **The unseal** (``unseal``, the owner, once). There is no ledger freeze (decision
-D21): the unseal closes development, so no trial, benchmark or control run may follow
-it. It is refused, before the passphrase is asked for, unless: the environment carries
+D21): the unseal closes development, so no trial, benchmark or control run may be
+opened after it (a result of one opened before it is accepted and ignored). It is refused, before the passphrase is asked for, unless: the environment carries
 no override; the local ledger head is the remote's (T23) and the ledger verifies; each
 hypothesis has a selectable run of every registered configuration or has exhausted its
 own entries and the reserve, since an unseal while the other grid can still run would
@@ -32,10 +32,11 @@ and the code running is the code at HEAD; the period constants are the genesis e
 (T20); the request names exactly the pre-registration the genesis entry names (T24); a
 holdout candidate exists on the ledger and the request names its configuration hash
 (section 11, items 1 to 3; T22); item 6's rule holds between the candidate's commit and
-HEAD (only data loading or the seal may differ); and the request accepts exactly the
-hash of that data loading and seal diff, which the refusal prints with the files it
-covers, so the owner reviews the change before anything is unsealed (security review
-round 3, T1). Every holdout run is then at exactly the commit the entry records, and
+HEAD (only data loading or the seal may differ, and no ``.gitattributes`` file); and the
+request accepts exactly the hash of that data loading and seal diff, which the refusal
+prints only after the full diff, rendered here from the blobs themselves so that no git
+attribute, filter or setting can hide a line, so the owner reviews the change before
+anything is unsealed (security review round 3, T1; review of #65, M-1). Every holdout run is then at exactly the commit the entry records, and
 the entry records the accepted hash, which replay recomputes. Then the passphrase is
 read and checked against the key record genesis pins, in constant time (T25). Only then
 is the unseal entry appended, pushed and read back from the remote, and only after
@@ -429,9 +430,9 @@ def unseal(
     )
     if problem:
         raise SealRefused(f"the unseal is refused at this commit: {problem}")
-    files, stat, digest = seal_changes(git, candidate.open_entry.body["commit"], head)
+    files, diff, digest = seal_changes(git, candidate.open_entry.body["commit"], head)
     if request["accepted_diff"] != digest:
-        raise SealRefused(diff_to_accept(candidate.open_entry.body["commit"], head, files, stat,
+        raise SealRefused(diff_to_accept(candidate.open_entry.body["commit"], head, files, diff,
                                          digest))
     record = key_record_of(git, genesis)
     proof = check_key(record, (read_key or read_passphrase)("Holdout passphrase: "))
@@ -457,9 +458,12 @@ def unseal(
     return entry
 
 
-def diff_to_accept(candidate: str, head: str, files: Sequence[str], stat: str, digest: str) -> str:
-    """What the owner reviews before the unseal: the data loading and seal files changed
-    since the candidate's run, git's summary and the hash to accept (T1)."""
+def diff_to_accept(candidate: str, head: str, files: Sequence[str], diff: str, digest: str) -> str:
+    """What the owner reviews before the unseal: the full diff of the data loading and
+    seal files changed since the candidate's run, rendered from the blobs themselves
+    (``gitledger.render_diff``), and only after it the hash to accept (T1; security
+    review of #65, M-1 and L-2). The owner is never sent to their own ``git diff``,
+    which the clone's attributes and settings could filter."""
     if not files:
         return (
             f"no data loading or seal file changed between the candidate's commit {candidate} "
@@ -468,9 +472,10 @@ def diff_to_accept(candidate: str, head: str, files: Sequence[str], stat: str, d
         )
     return (
         f"data loading or seal files changed between the candidate's commit {candidate} and "
-        f"HEAD {head}:\n{stat}\nReview them with git diff {candidate} {head} -- "
-        f"{' '.join(files)}; if each change is only data loading or the seal, unseal with "
-        f"--accept-diff {digest} (security review round 3, T1)"
+        f"HEAD {head}. Their full diff follows, rendered from the blobs themselves, so no git "
+        "attribute, filter or setting can change it, with every unprintable character written "
+        f"as an escape:\n\n{diff}\n\nIf each change is only data loading or the seal, unseal "
+        f"with --accept-diff {digest} (security review round 3, T1; review of #65, M-1)"
     )
 
 
@@ -515,10 +520,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     straight after genesis. ``rehearse [--boundary YYYY-MM]`` runs the holdout path at
     HEAD on development data only and writes nothing; the owner runs it before the
     unseal. ``candidate`` prints what the unseal must name, from the ledger as it
-    stands, without any key, with the data loading and seal diff to accept at HEAD.
+    stands, without any key, and the data loading and seal files changed since the
+    candidate's run, but neither their diff nor the hash that accepts it (L-2).
     ``unseal --commit C --configuration-sha256 H --accept-diff D`` writes the single
     unseal entry after the passphrase verifies, then fetches the holdout files again;
-    without the right ``D`` it prints the diff to review and refuses (T1). ``--tag``
+    without the right ``D`` it prints the full diff to review, then the hash, and refuses
+    (T1; M-1). ``--tag``
     defaults to the tag the genesis entry names. ``fetch-holdout`` repeats only the
     re-fetch. No option takes the passphrase: it is typed at the terminal.
     """
@@ -587,13 +594,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             "closed": issued.closed,
         }
         if chosen is not None:
+            # The file list only: the hash to accept is printed by the unseal's refusal,
+            # after the full diff it covers, never on its own (review of #65, L-2).
             head = ledger.git.text("rev-parse", "HEAD")
-            files, _, digest = seal_changes(ledger.git, chosen.open_entry.body["commit"], head)
+            files, _, _ = seal_changes(ledger.git, chosen.open_entry.body["commit"], head)
             named["holdout_candidate"] = {
                 "configuration_id": chosen.configuration_id,
                 "configuration_sha256": chosen.open_entry.body["configuration_sha256"],
                 "seal_files_changed_since": files,
-                "accept_diff_at_head": digest,
+                "diff_to_accept": "run seal unseal without --accept-diff: it shows the full "
+                                  "diff, then the hash that accepts it",
             }
         print(json.dumps(named, indent=2, sort_keys=True))
         return 0

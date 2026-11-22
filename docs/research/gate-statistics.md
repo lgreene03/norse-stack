@@ -343,7 +343,7 @@ reading: r_B is the benchmark's last completed run covering the window whose rec
 digest equals that of the hypothesis's selectable runs, which run rule 4 already requires to
 share one. A benchmark run from other harness code, such as one left from before a harness fix
 the trials were rerun for, is never compared with them, and without a matching run the gate
-refuses DEV-2 rather than calling it a fail. Because no benchmark may run after the unseal,
+refuses DEV-2 rather than calling it a fail. Because no benchmark may be opened after the unseal,
 which closes development now that there is no ledger freeze (decision D21), the unseal is
 refused while a benchmark DEV-2 needs lacks such a run (finding 3). H2's excess is
 beta matched instead of volatility matched (decision D15; `benchmark.beta_matched`).

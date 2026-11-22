@@ -320,8 +320,72 @@ def test_stray_reserved_names_never_block_the_ledger(tmp_path, monkeypatch):
         world.close()
 
 
-def test_a_superseding_genesis_cannot_move_the_pinned_remote(world):
+def test_a_freeze_shaped_milestone_is_refused(world):
+    # Security review of #65, L-4: with the freeze gone, ledger-freeze-<commit> had become
+    # an ordinary milestone name, and a ruleset-protected tag is permanent. The name is
+    # refused, and one pushed by hand is reported, never read as a milestone.
+    trial(world, "B-H1")
+    head = world.ledger.local_head()
+    with pytest.raises(LedgerError, match="withdrawn freeze anchor"):
+        world.ledger.tag_milestone(f"ledger-freeze-{head}", "looks like the old anchor")
+    assert f"ledger-freeze-{head}" not in world.ledger.milestone_tags()
+    git(world.repo, "tag", f"ledger-freeze-{head}", head)
+    git(world.repo, "push", "--quiet", "origin", f"refs/tags/ledger-freeze-{head}")
+    verified = world.ledger.verify()
+    assert f"ledger-freeze-{head}" in verified.ignored_tags
+    assert f"ledger-freeze-{head}" not in verified.tags
+
+
+def test_a_hooks_path_or_a_file_system_monitor_is_refused(world):
+    # Security review of #65, H-1 (probe P3b): core.hooksPath pointed the clone's hooks
+    # anywhere and nothing refused it. Every ledger git command runs with hooks and the
+    # file system monitor off, and a clone configuring either is refused.
+    world.ledger.check_repository()
+    for name, value in (("core.hooksPath", str(world.tmp / "elsewhere")),
+                        ("core.fsmonitor", str(world.tmp / "monitor.sh")),
+                        ("core.fsmonitor", "true")):
+        git(world.repo, "config", name, value)
+        with pytest.raises(gitledger.RemoteNotPinned, match=rf"(?i){name}.*H-1"):
+            world.ledger.check_repository()
+        with pytest.raises(gitledger.RemoteNotPinned, match="H-1"):
+            trial(world, "B-H1")
+        git(world.repo, "config", "--unset", name)
+    git(world.repo, "config", "core.fsmonitor", "false")  # switched off is no risk
+    world.ledger.check_repository()
+    assert gitledger.HARDENED == ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
+
+
+def test_genesis_pins_only_the_newest_preregistration_tag(tmp_path, monkeypatch):
+    # Quant review of #65, L7: a genesis could pin prereg-v1, whose cross-trial V and
+    # freeze the code no longer implements. It pins only the registration the code
+    # implements, and only while the remote holds no newer one, on the genesis step and
+    # through the public append alike.
+    clear_overrides(monkeypatch)
+    world = World(tmp_path, genesis=False)
+    try:
+        git(world.repo, "tag", "-a", "prereg-v1", "-m", "an older version", world.prereg_commit)
+        git(world.repo, "push", "--quiet", "origin", "refs/tags/prereg-v1")
+        with pytest.raises(LedgerError, match=r"pins prereg-v2, .* never prereg-v1"):
+            world.write_genesis(tag="prereg-v1")
+        git(world.repo, "tag", "-a", "prereg-v3", "-m", "a newer version", world.prereg_commit)
+        git(world.repo, "push", "--quiet", "origin", "refs/tags/prereg-v3")
+        with pytest.raises(LedgerError, match="holds prereg-v3, newer than prereg-v2"):
+            world.write_genesis()
+        assert world.ledger.local_head() is None  # nothing was written
+        monkeypatch.setattr(gitledger, "PREREGISTRATION_TAG", "prereg-v3")  # the code moves on
+        world.write_genesis(tag="prereg-v3")
+        genesis = dict(world.ledger.snapshot(world.ledger.local_head()).entries[0].body)
+        older = {**genesis, "preregistration": {**genesis["preregistration"], "tag": "prereg-v2"}}
+        with pytest.raises(VerificationError, match="never prereg-v2"):
+            world.ledger.append({k: v for k, v in older.items() if k not in ("seq", "prev", "time")})
+        assert len(world.ledger.verify().snapshot.entries) == 1
+    finally:
+        world.close()
+
+
+def test_a_superseding_genesis_cannot_move_the_pinned_remote(world, monkeypatch):
     # Review N5: a superseding genesis written through a mirror, pinning the mirror.
+    monkeypatch.setattr(gitledger, "PREREGISTRATION_TAG", "prereg-v3")  # the newest
     fake = world.tmp / "fake.git"
     git(world.tmp, "clone", "--quiet", "--mirror", str(world.remote), str(fake))
     clone = world.tmp / "via-fake"
@@ -511,7 +575,9 @@ def test_write_genesis_validates_its_inputs(tmp_path, monkeypatch):
         world.close()
 
 
-def test_write_genesis_is_refused_once_the_registration_is_closed(world):
+def test_write_genesis_is_refused_once_the_registration_is_closed(world, monkeypatch):
+    # Each later tag stands for code that implements it (quant review of #65, L7).
+    monkeypatch.setattr(gitledger, "PREREGISTRATION_TAG", "prereg-v3")
     world.write("docs/PREREGISTRATION.md", b"# a second version\n")
     world.commit("prereg-v3")
     world.push()
@@ -524,6 +590,7 @@ def test_write_genesis_is_refused_once_the_registration_is_closed(world):
     trial(world, "B-H1")  # the first entry of any other kind closes the registration
     git(world.repo, "tag", "-a", "prereg-v4", "-m", "third version")
     git(world.repo, "push", "--quiet", "origin", "refs/tags/prereg-v4")
+    monkeypatch.setattr(gitledger, "PREREGISTRATION_TAG", "prereg-v4")
     with pytest.raises(LedgerError, match="registration is closed"):
         write_genesis(world.ledger, **args, tag="prereg-v4")
     genesis = dict(world.ledger.snapshot(world.ledger.local_head()).entries[0].body)

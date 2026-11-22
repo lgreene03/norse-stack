@@ -651,19 +651,25 @@ look at 2026 (T21). G1.6's done-when limits unseals, not runs, and does not say 
 configuration may run.
 
 **Control.** The unseal entry names one configuration hash. There is no ledger freeze
-(decision D21): the unseal closes development, so no trial, benchmark or control entry may
-follow it, and the harness computes the candidate by the registered selection rule over
+(decision D21): the unseal closes development, so no trial, benchmark or control run may be
+opened after it (the result of one opened before it is accepted after it, and the gate
+ignores it; security review of #65, L-1), and the harness computes the candidate by the
+registered selection rule over
 the entries before it, and refuses an unseal naming anything else; replay recomputes it.
 If no trial passed development there is no candidate and no unseal, matching G3.2's "or
 none". The code may change between the candidate's run and the unseal only in data loading
-or the seal (section 11, item 6); the unseal prints the files changed and the hash of their
-diff, refuses unless the owner passes that exact hash, and records it, and replay
-recomputes it (security review round 3, T1). One result entry spends the seal. A run that
+or the seal (section 11, item 6), and no `.gitattributes` file may change; the unseal prints
+the full diff, rendered from the blobs themselves, then its hash, refuses unless the owner
+passes that exact hash, and records it, and replay recomputes it (security review round 3,
+T1; review of #65, M-1). Every ledger git command runs with hooks and the file system monitor
+off, and a clone configuring either is refused (review of #65, H-1). One result entry spends the seal. A run that
 fails may be retried under the same unseal, at the same commit, for the same configuration
 only, every attempt ledgered, until three runs have reached the unsealed stage (an attempt
 entry each); a run that fails before its attempt entry read nothing of the holdout and does
 not count (round 3, C1). **Prevented** after the unseal; a data loading or seal change made
 before it is reviewed (process): the owner reads the diff whose hash the unseal records.
+Only the owner starts holdout runs (decision D25); that rule is written, not enforced, so an
+agent could still use up the three attempts without the key (review of #65, M-2).
 
 **Tests.** `test_unseal_must_name_the_candidate_selected_by_the_registered_rule` (G1.6),
 `test_holdout_run_of_another_configuration_is_refused` (G1.6),
@@ -950,6 +956,8 @@ marks a test the goal's own done-when already names.
 | `test_trials_require_a_genesis_entry_naming_the_preregistration` | A trial entry without a genesis entry naming `prereg-v1`'s commit and file hashes refuses the run | T24 |
 | `test_preregistration_change_after_the_first_trial_is_refused` | A new genesis after the first trial fails verification | T24 |
 | `test_verifier_flags_a_tag_that_no_longer_matches_the_genesis_entry` | A `prereg-v1` tag pointing elsewhere than the genesis says is reported | T24 |
+| `test_genesis_pins_only_the_newest_preregistration_tag` | A genesis pinning any tag but the one the code implements, or while a newer `prereg-v<N>` is on the remote, is refused by the genesis step and by the append (quant review of #65, L7) | T24 |
+| `test_a_freeze_shaped_milestone_is_refused` | A `ledger-freeze-*` milestone is refused, and one pushed by hand is reported, never read as a milestone (review of #65, L-4) | T10 |
 | `test_rest_register_names_the_registered_development_manifest` | The register's `manifest_sha256` equals the genesis development manifest hash | T27 |
 | `test_every_threat_model_test_exists_and_is_not_skipped` | Every test in the G1.5 and G1.6 tables exists, is collected, and is neither skipped nor expected to fail, for each goal marked done | T28 |
 
@@ -968,12 +976,17 @@ marks a test the goal's own done-when already names.
 | `test_holdout_run_of_another_configuration_is_refused` | After an unseal, a holdout run of a different configuration hash is refused | T22 |
 | `test_second_holdout_result_after_one_unseal_is_refused` | After one holdout result entry, another holdout run is refused | T22 |
 | `test_no_candidate_means_no_unseal` | With no trial passing development, the unseal is refused | T22 |
-| `test_the_unseal_closes_development` | After the unseal no trial, benchmark or control runs, through the harness, the append or by hand; the gate computes on the entries before it; the candidate's sensitivity run still runs (D21) | T19, T22 |
+| `test_the_unseal_closes_development` | After the unseal no trial, benchmark or control run is opened, through the harness, the append or by hand; the gate computes on the entries before it; the candidate's sensitivity run still runs (D21). A result of a run opened before the unseal may land after it, and is accepted and ignored (review of #65, L-1) | T19, T22 |
 | `test_a_trial_admitted_before_the_unseal_cannot_land_after_it` | An unseal written between a trial's admission and its open entry refuses the open entry (D21; M2) | T9, T22 |
 | `test_the_unseal_waits_for_both_grids_or_their_budgets` | With one hypothesis complete and passing, the unseal is early until the other's grid is complete or its own entries and the reserve are spent (D21; G3.1 open question 10) | T20, T22 |
 | `test_the_gate_computes_on_the_entries_before_the_unseal` | N, V and the holdout candidate are the entries' before the unseal, whatever follows it, and replay checks the unseal's candidate there (D21) | T19, T22 |
 | `test_the_unseal_shows_the_data_loading_diff_and_needs_its_hash` | A data loading change since the candidate's run is printed with its diff hash, the unseal refuses without that hash, records it, and replay recomputes it (round 3, T1) | T22 |
 | `test_the_unseal_command_names_the_genesis_tag_and_asks_for_the_diff` | The command's tag defaults to the genesis entry's, and without `--accept-diff` it prints the hash and refuses | T22, T24 |
+| `test_a_pre_push_hook_never_runs_in_the_owners_unseal` | A pre-push hook in the clone's `.git/hooks`, which an ordinary push runs, never runs in the unseal's push, so it cannot copy the proof out and fail the push (review of #65, H-1) | T22, T25 |
+| `test_a_hooks_path_or_a_file_system_monitor_is_refused` | A clone configuring `core.hooksPath` or `core.fsmonitor` is refused by the ledger and by the harness (review of #65, H-1) | T22, T25 |
+| `test_a_local_textconv_cannot_hide_a_line_of_the_diff_to_accept` | A local attributes file and text conversion that hide a loader line from the clone's `git diff` do not hide it from the diff the unseal prints, before the hash (review of #65, M-1) | T22 |
+| `test_a_gitattributes_change_since_the_candidate_refuses_the_unseal` | A changed `.gitattributes`, at the root or nested, refuses the unseal before the key is asked for (review of #65, M-1) | T22 |
+| `test_the_candidate_command_prints_neither_the_diff_nor_its_hash` | The key-free `candidate` command lists the changed files only and points to the unseal for the diff and its hash (review of #65, L-2) | T22 |
 | `test_the_holdout_reaches_its_unsealed_stage_at_most_three_times` | Three runs that reach the unsealed stage and fail, then no more, at the harness and on replay (round 3, C1) | T22 |
 | `test_holdout_runs_that_fail_before_the_unsealed_stage_do_not_count` | More failures before the attempt entry than the cap still leave the holdout run possible (round 3, C1) | T22 |
 | `test_second_unseal_is_refused` | Spec. A second unseal on the same ledger is refused | T23 |
