@@ -131,8 +131,10 @@ def seal_engine() -> list[str]:
     stops it at run time instead. Every module of the engine and ``formats`` becomes a
     ``FrozenModule``, every class in them refuses class-attribute changes
     (``formats.EngineClass``), and their module-level tables are read-only in the
-    source. Undoing any of it needs a dunder attribute or a forbidden builtin, which the
-    source check refuses. Returns the names of the sealed modules."""
+    source. Undoing any of it needs a dunder attribute, a forbidden builtin or one of
+    the standard library helpers that write by string name (``update_wrapper``,
+    ``wraps``, ``global_enum``), all of which the source check refuses. Returns the
+    names of the sealed modules."""
     from . import formats
     from . import sim as _engine  # noqa: F401  imports every engine module before sealing
 
@@ -145,15 +147,25 @@ def seal_engine() -> list[str]:
 
 
 class DataView:
-    """What a strategy receives: rows through the registered loader, and each series'
-    archived coverage from the manifests the loader holds (G1.9), nothing else. Both are
-    the loader's, so a fix to either is a data-loading fix (section 11, item 6)."""
+    """What a strategy receives: rows through the registered loader, the series the
+    manifests the loader holds pin, and each series' archived coverage from them
+    (G1.9), nothing else. All three are the loader's, so a fix to any is a data-loading
+    fix (section 11, item 6)."""
 
-    __slots__ = ("_coverage", "_load")
+    __slots__ = ("_coverage", "_list_series", "_load")
 
     def __init__(self, loader) -> None:
         self._load = loader.load if loader is not None else None
         self._coverage = loader.coverage if loader is not None else None
+        self._list_series = loader.list_series if loader is not None else None
+
+    def list_series(self) -> tuple[str, ...]:
+        """Every series name this run's committed manifests pin, sorted, as a tuple:
+        the development manifest's in a development run, and the holdout manifest's
+        beside them in the holdout run (no holdout file is read)."""
+        if self._list_series is None:
+            raise LookupError("this run was given no dataset store")
+        return self._list_series()
 
     def load(self, series: str, start, end, accept_recorded_gaps: bool = False):
         if self._load is None:

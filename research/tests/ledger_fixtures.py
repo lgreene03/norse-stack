@@ -145,6 +145,8 @@ def crosses_gap(config, data):
     last = int(datetime(2025, 12, 31, tzinfo=utc).timestamp()) * 1000
     if data.coverage("spot/klines/XUSDT/1d") != [(first, last)]:
         raise AssertionError("coverage is not the manifest's one run")
+    if data.list_series() != ("spot/klines/XUSDT/1d",):
+        raise AssertionError("the listed series are not the manifest's")
     return run(config, data)
 
 

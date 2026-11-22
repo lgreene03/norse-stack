@@ -123,6 +123,13 @@ that spans a month with no pinned file. In the holdout run it joins the holdout
 manifest's part without reading a holdout file. The runner's `DataView` exposes it, so
 strategies never commit span constants.
 
+The loader also lists the series its manifests pin (`list_series`), a tuple of names
+sorted alphabetically, from the manifests' keys alone: the development manifest's in a
+development run, and the holdout manifest's beside them in the holdout run, which
+includes pairs first archived in 2026 (their coverage starts in the holdout). The
+`DataView` exposes it as `list_series()`, so a strategy ranks over the pinned series
+rather than a committed list.
+
 Every result carries the manifest's SHA-256 and the files read.
 
 ## Archive rows against the REST API

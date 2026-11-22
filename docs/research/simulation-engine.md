@@ -301,7 +301,13 @@ run and is crossed. In the holdout run the loader holds the holdout manifest bes
 development one, so the coverage runs on into the holdout from that manifest's metadata
 without reading a holdout file, and in a rehearsal it is the development coverage. No
 strategy commits a span constant, and a wrong span is a fix to the loader, which section
-11, item 6 permits between a candidate's selectable run and its holdout run.
+11, item 6 permits between a candidate's selectable run and its holdout run. The same
+holds for which series exist: `DataView.list_series()` returns every series the run's
+manifests pin, sorted, as a tuple, so H1's ranking over every pinned spot daily series
+needs no committed list. In the holdout run that list also holds pairs first archived
+in 2026; their coverage starts in the holdout, so a strategy that skips a series with
+no coverage before a decision ranks the development months exactly as its development
+run did (section 11, item 5).
 
 The gaps a run crossed reach its ledger entry (finding 4; section 5: "a gap the
 committed manifest records is crossed and listed in the run's ledger entry"). The loader

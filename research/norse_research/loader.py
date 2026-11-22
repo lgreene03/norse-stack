@@ -179,6 +179,19 @@ class DatasetLoader:
         """The recorded gaps this loader's loads crossed, sorted, without repeats."""
         return [list(g) for g in sorted(self._crossed)]
 
+    def list_series(self) -> tuple[str, ...]:
+        """Every series the manifests this loader holds pin, sorted by name, from their
+        keys alone: no data file is opened. A development run lists the development
+        manifest's series; the holdout run lists those and the holdout manifest's, among
+        them pairs first archived in 2026, which have no development rows (their
+        ``coverage`` starts in the holdout); a rehearsal lists the development series.
+        Strategies take the series to rank from here rather than committing a list, so a
+        listing error is a data-loading fix (section 11, item 6)."""
+        names = set(self.manifest.datasets)
+        if self.holdout is not None:
+            names |= set(self.holdout.datasets)
+        return tuple(sorted(names))
+
     def coverage(self, series: str) -> list[tuple[int, int]]:
         """Each archived run of ``series`` this loader can read, as (first, last) times in
         ms, from the committed manifests' metadata alone: no data file is opened, so the

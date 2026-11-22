@@ -1,4 +1,5 @@
 import json
+import shutil
 from datetime import UTC, datetime
 
 import pytest
@@ -179,8 +180,8 @@ def ms(*args):
 @pytest.fixture
 def covered(tmp_path):
     """A pair that skips two whole months (as FTTUSDT skips 2022-12 to 2023-08), one with a
-    bar missing inside a pinned month, funding settled with millisecond jitter, and a pair
-    that runs from development into the holdout."""
+    bar missing inside a pinned month, funding settled with millisecond jitter, a pair
+    that runs from development into the holdout, and one first archived in the holdout."""
     store = ArchiveStore(tmp_path / "mirror")
     suspended = DatasetSpec.from_name("spot/klines/SUSDT/1d")
     early = months_between("2025-06", "2025-07")
@@ -193,6 +194,7 @@ def covered(tmp_path):
         make_series(store, "spot/klines/GUSDT/4h", "2025-11", "2025-12", drop={dropped}),
         make_series(store, "um/fundingRate/XUSDT", "2025-11", "2025-12"),
         make_series(store, "spot/klines/XUSDT/1d", "2025-10", "2026-01"),
+        make_series(store, "spot/klines/NUSDT/1d", "2026-01", "2026-01"),
     ]
     manifests = {}
     for period in (DEVELOPMENT, HOLDOUT):
@@ -253,3 +255,26 @@ def test_the_loader_records_every_recorded_gap_a_load_crosses(covered):
                     accept_recorded_gaps=True)
     (gap,) = manifests[DEVELOPMENT].datasets["spot/klines/GUSDT/4h"]["gaps"]
     assert loader.crossed_gaps() == [["spot/klines/GUSDT/4h", *gap]]
+
+
+def test_the_loader_lists_the_series_its_manifests_pin_without_reading_a_file(covered):
+    """What a strategy ranks over comes from the committed manifests, not a committed
+    list (the strategies' H1 ranking covers every pinned spot daily series)."""
+    store, manifests = covered
+    shutil.rmtree(store.root)  # no data file, holdout or development, is read
+    development = DatasetLoader(manifests[DEVELOPMENT], store)
+    listed = development.list_series()
+    assert listed == ("spot/klines/GUSDT/4h", "spot/klines/SUSDT/1d", "spot/klines/XUSDT/1d",
+                      "um/fundingRate/XUSDT")
+    assert isinstance(listed, tuple)  # immutable, as everything a DataView hands out
+    # The holdout run adds what only the holdout manifest pins: a pair first archived in
+    # 2026, whose coverage starts in the holdout.
+    holdout = DatasetLoader(manifests[DEVELOPMENT], store, holdout=manifests[HOLDOUT])
+    assert holdout.list_series() == ("spot/klines/GUSDT/4h", "spot/klines/NUSDT/1d",
+                                     "spot/klines/SUSDT/1d", "spot/klines/XUSDT/1d",
+                                     "um/fundingRate/XUSDT")
+    assert holdout.coverage("spot/klines/NUSDT/1d") == [(ms(2026, 1, 1), ms(2026, 1, 31))]
+    # The rehearsal's two manifests are both cut from the development one.
+    before, after, boundary = rehearsal_split(manifests[DEVELOPMENT], "2025-11")
+    rehearsal = DatasetLoader(before, store, holdout=after, boundary_ms=boundary)
+    assert rehearsal.list_series() == listed
