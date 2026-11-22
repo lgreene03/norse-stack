@@ -21,8 +21,8 @@ Apache-2.0, so anything committed to them is published.
 
 | Source | Used by | Governing terms | Live trading on it | Publishing it | Status |
 |---|---|---|---|---|---|
-| Binance public data archive, data.binance.vision | `research/norse_research` (mirror, manifests, `verify`); huginn `cmd/fetcher` | Binance Vision Dataset Terms v1.0 (26 Aug 2026), which license the Datasets under CC BY-NC-SA 4.0 | Forbidden (clause 4.2) | Only non-commercially, with attribution, under CC BY-NC-SA 4.0 (clause 4.5) | Use complies; committed fixtures and derived files lack the notice (findings 2, 3) |
-| Binance market-data REST host, data-api.binance.vision | `rest-check`, `rest-sweep` | Vision terms if it is one of their "associated endpoints", otherwise the Binance Terms of Use | As above | Not licensed | Committed REST fixtures (finding 3) |
+| Binance public data archive, data.binance.vision | `research/norse_research` (mirror, manifests, `verify`); huginn `cmd/fetcher` | Binance Vision Dataset Terms v1.0 (26 Aug 2026), which license the Datasets under CC BY-NC-SA 4.0 | Forbidden (clause 4.2) | Only non-commercially, with attribution, under CC BY-NC-SA 4.0 (clause 4.5) | Use complies; committed fixtures and derived files carry the notice in [NOTICE](NOTICE) since 2026-11-22 (findings 2, 3) |
+| Binance market-data REST host, data-api.binance.vision | `rest-check`, `rest-sweep` | Vision terms if it is one of their "associated endpoints", otherwise the Binance Terms of Use | As above | Not licensed | Committed REST fixtures, listed in [NOTICE](NOTICE) on the associated-endpoint reading (finding 3) |
 | Binance live API (stream.binance.com, api.binance.com, fapi.binance.com) | muninn recorder; obi-bridge; huginn `cmd/fetcher` | Binance Terms of Use (live page not fetchable; UK version of 27 Jul 2023 read) | Needs an account; out of scope (D3) | Not licensed | Recordings kept local; derived files published (finding 4) |
 | OKX public WebSocket, ws.okx.com | muninn recorder | OKX API Agreement (last updated 28 Jul 2026) | Own non-commercial trading only, with an account | Forbidden (9.4(a)) | Recordings kept local; fixtures published in muninn (findings 5, 6) |
 | Fear and Greed Index, api.alternative.me | obi-bridge; huginn-ai | alternative.me usage rules (undated) | Not addressed | Allowed with prominent attribution | Used internally (finding 9) |
@@ -77,9 +77,10 @@ redistributed.
 The fetcher keeps to ten requests a second and the REST check to four. The project does not
 present itself as endorsed by Binance.
 
-**Where it does not yet comply.** Binance Vision data and files derived from it are
-committed to this public Apache-2.0 repository without the attribution and licence notice
-clause 4.5 asks for (finding 2). Attribution is given here:
+**The notice.** Binance Vision data and files derived from it are committed to this
+public Apache-2.0 repository (finding 2). Since 2026-11-22 the repository's
+[NOTICE](NOTICE) lists each of them and offers them under CC BY-NC-SA 4.0, not
+Apache-2.0, with the attribution clause 4.5 asks for. Attribution is also given here:
 
 > Binance market data in this repository is from Binance Vision (data.binance.vision),
 > provided by Binance under the Binance Vision Dataset Terms and CC BY-NC-SA 4.0
@@ -87,8 +88,9 @@ clause 4.5 asks for (finding 2). Attribution is given here:
 > are unmodified archive files, or hashes, row counts, bar times and volume ranks computed
 > from them.
 
-Whether those files are offered under CC BY-NC-SA 4.0 rather than the repository's
-Apache-2.0 licence, or removed, is the owner's decision (finding 2).
+Offering them under CC BY-NC-SA 4.0 states the licence they already carry rather than
+granting a new one; replacing the two zip fixtures with synthetic ones remains open if the
+owner would rather publish no Binance data at all (finding 2).
 
 ## Binance market-data REST host (data-api.binance.vision)
 
