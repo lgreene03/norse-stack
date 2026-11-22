@@ -118,7 +118,7 @@ def test_the_genesis_step_accepts_the_pins_and_each_id_resolves_as_registered(
 @pytest.mark.parametrize("cid", [c for c in sorted(PINS) if c.startswith(("H1", "B-H1"))])
 def test_each_h1_configuration_builds_the_registered_strategy(cid):
     config = syn.configuration(cid, "2021-06-01", "2021-06-01")
-    strategy = trend.strategy_for(config, {})
+    strategy = trend.strategy_for(config, {}, {})
     if cid == "B-H1":
         assert isinstance(strategy, trend.MonthEndEqualWeight)
         return
@@ -200,7 +200,9 @@ def run(configuration, data_view):
                                             for i in range(170 * 3)]
     spot_only = {n: r for n, r in rows.items() if not n.startswith("um/klines")}
     if configuration["hypothesis"] == "H1":
-        return trend.simulate(configuration, Market.from_rows(spot_only, window.end))
+        listed = {n.split("/")[2]: r[0].open_time for n, r in spot_only.items()
+                  if n.endswith("/1d")}
+        return trend.simulate(configuration, Market.from_rows(spot_only, window.end), listed)
     return carry.simulate(configuration, Market.from_rows(rows, window.end))
 '''
 
@@ -257,17 +259,20 @@ def test_the_strategies_run_inside_the_runner_on_a_frozen_configuration(tmp_path
 DROPPED = syn.ms(2025, 12, 1)  # BTC spot's 15-minute bar opening at the first decision
 
 
-def synthetic_store(tmp_path) -> ArchiveStore:
+def synthetic_store(tmp_path, spot_daily_from: str = "2025-11") -> ArchiveStore:
     """A synthetic mirror and development manifest for BTC and ETH, November and December
-    2025, every price 1 and every funding rate 0.0001 (synthetic_store.put), with one
-    15-minute bar of BTC spot missing, which the manifest records as a gap."""
+    2025 (spot daily bars from ``spot_daily_from``), every price 1 and every funding rate
+    0.0001 (synthetic_store.put), with one 15-minute bar of BTC spot missing, which the
+    manifest records as a gap."""
     store = ArchiveStore(tmp_path / "mirror")
     series = []
     for coin in carry.CONTROL_DRAW_ORDER:
         for name in (f"spot/klines/{coin}/1d", f"spot/klines/{coin}/15m",
                      f"um/klines/{coin}/1d", f"um/klines/{coin}/15m", f"um/fundingRate/{coin}"):
             drop = (DROPPED,) if name == "spot/klines/BTCUSDT/15m" else ()
-            series.append(make_series(store, name, "2025-11", "2025-12", drop=drop))
+            first = spot_daily_from if name.startswith("spot/") and name.endswith("/1d") else (
+                "2025-11")
+            series.append(make_series(store, name, first, "2025-12", drop=drop))
     (tmp_path / "manifest.json").write_bytes(dumps(build(store, DEVELOPMENT, series)))
     return store
 
@@ -292,9 +297,29 @@ def test_h2_runs_through_the_registered_loader_and_reports_the_gaps_it_crossed(t
     assert [gap[0] for gap in result["crossed_gaps"]] == ["spot/klines/BTCUSDT/15m"]
 
 
-def test_h1_refuses_inside_the_runner_until_the_data_view_lists_its_series(tmp_path):
-    store = synthetic_store(tmp_path)
-    config = syn.configuration("H1-01", "2025-12-01", "2025-12-10")
+@pytest.mark.parametrize("cid", ["B-H1", "H1-01"])
+def test_h1_runs_through_the_registered_loader_on_the_series_the_manifest_lists(
+        tmp_path, cid):
+    """H1's pinned ``run`` itself, in the runner, on the registered loader over a
+    synthetic store: the pairs it ranks come from ``DataView.list_series`` (the manifest's
+    keys) and their runs from ``DataView.coverage``. Spot daily bars from 2025-06 give BTC
+    and ETH a close 120 days before 2025-12-01 (D13), so B-H1 buys a fifth of each, its
+    BTC fill crossing the recorded gap, which comes back as ``crossed_gaps``; with every
+    price 1 no H1-01 vote is above zero, so H1-01 holds cash and crosses nothing. The same
+    call in this process gives the same returns and gaps."""
+    store = synthetic_store(tmp_path, spot_daily_from="2025-06")
+    config = syn.configuration(cid, "2025-12-01", "2025-12-10")
     result = in_runner(tmp_path, syn.MODULES["H1"], config, store_root=store.root,
                        manifest="research/manifests/synthetic.json")
-    assert not result["ok"] and "data seam" in result["error"]
+    assert result["ok"], result
+    loader = DatasetLoader(Manifest.load(tmp_path / "manifest.json"), store)
+    with inside_ledger_entry("e" * 64):
+        expected = trend.run(config, DataView(loader))
+    assert [list(pair) for pair in expected] == result["returns"]
+    assert result["crossed_gaps"] == loader.crossed_gaps()
+    assert len(expected) == 10
+    if cid == "B-H1":
+        assert expected[0][1] < 0.0 and all(value == 0.0 for _, value in expected[1:])
+        assert [gap[0] for gap in result["crossed_gaps"]] == ["spot/klines/BTCUSDT/15m"]
+    else:
+        assert all(value == 0.0 for _, value in expected) and result["crossed_gaps"] == []

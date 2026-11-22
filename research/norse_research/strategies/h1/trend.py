@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+from norse_research.formats import DatasetSpec
 from norse_research.sim import (
     DAY_MS,
     FOUR_HOURS_MS,
@@ -63,6 +64,9 @@ GRID_KINDS = ("trial", "sensitivity", "holdout")
 # but the holdout run reads past it; section 8: C-H1 draws over development bars only.
 DEVELOPMENT_END = "2026-01-01"
 
+# Section 6, The universe, step 1: "Rank USDT spot symbols", a pair read as G0.6's
+# universe.base_asset reads one, by the quote at the end of its symbol.
+QUOTE = "USDT"
 # Section 6, The universe, step 1: "over the 30 daily bars closing at the month end".
 RANK_DAYS = 30
 # Section 6, step 2 and decision D13: "a daily close 120 days before the month-end close".
@@ -104,47 +108,63 @@ CANDIDATES = (
 
 def run(configuration, data_view):
     """The daily net returns of one registered H1 configuration, B-H1 or C-H1, over the
-    resolved configuration's window, in the shape the runner hands to the harness."""
-    market = load_market(configuration, data_view, pinned_series(data_view))
-    return simulate(configuration, market)
+    resolved configuration's window, in the shape the runner hands to the harness.
 
-
-def pinned_series(data_view):
-    """THE DATA SEAM. The name of every series the run's manifests pin (both manifests
-    for the holdout run, section 11, item 5), which section 6, step 1 needs: it ranks
-    "USDT spot symbols ... delisted symbols included", every pinned spot daily series.
-
-    It must come from the data-loading layer, never from a list committed here, as the
-    spans do (quant review of G1.9, finding 3). The runner's ``DataView`` gives each
-    named series' coverage and rows but no listing of the names, so until it does no H1
-    run can load data, and none can be ledgered by accident. ``load_market`` below takes
-    the names as an argument and is tested on synthetic data."""
-    raise SimulationError(
-        "the data seam is open: the DataView lists no series, and H1 ranks every pinned "
-        "spot daily series (docs/research/strategies.md, The data seam)"
-    )
+    The series come from ``data_view.list_series()``, every series the run's committed
+    manifests pin (both manifests in the holdout run), so no list of pairs is committed
+    here and a listing error is a data-loading fix (section 11, item 6)."""
+    names = series_needed(configuration, data_view.list_series())
+    listed = listed_pairs(data_view, names)
+    market = load_market(configuration, data_view, names)
+    return simulate(configuration, market, listed)
 
 
 def series_needed(configuration: Mapping, names) -> list[str]:
-    """The series a run of ``configuration`` reads, from the names the data layer offers.
+    """The series a run of ``configuration`` reads, from the names the data layer lists,
+    each parsed by ``DatasetSpec.from_name``.
 
-    Every spot daily series: section 6, step 1 ranks "USDT spot symbols ... delisted
-    symbols included", and the daily bars also define instruments (section 4) and marks
-    (section 5). Every spot 15-minute series, read lazily for fills (section 5, Fills).
-    Spot four-hour series for H1-06 (section 6, Four-hour bars), and the perpetuals'
-    funding for H1-07 (section 6, Funding filter)."""
+    Spot klines of USDT pairs only (section 6, step 1: "Rank USDT spot symbols"): every
+    daily series, since step 1 ranks them all, "delisted symbols included", and the daily
+    bars also define instruments (section 4) and marks (section 5); every 15-minute
+    series, read lazily for fills (section 5, Fills); and every four-hour series for
+    H1-06 (section 6, Four-hour bars). The perpetuals' funding for H1-07 (section 6,
+    Funding filter). Nothing else the manifests pin is read."""
     parameters = configuration["parameters"]
-    four_hour = parameters.get("bar") == "4h"
+    # Section 6, Four-hour bars: H1-06 reads its signal at four-hour closes; the universe
+    # is ranked on daily bars at every bar (step 1: "the 30 daily bars").
+    intervals = {"1d", "15m", parameters.get("bar", "1d")}
     filtered = parameters.get("funding_filter") is not None
     out = []
     for name in sorted(names):
-        parts = name.split("/")
-        if parts[:2] == ["spot", "klines"] and parts[3] in ("1d", "15m"):
+        spec = DatasetSpec.from_name(name)
+        if spec.market == "spot" and spec.kind == "klines":
+            if spec.interval in intervals and is_usdt_pair(spec.symbol):
+                out.append(name)
+        elif spec.market == "um" and spec.kind == "fundingRate" and filtered:
             out.append(name)
-        elif parts[:2] == ["spot", "klines"] and parts[3] == "4h" and four_hour:
-            out.append(name)
-        elif parts[:2] == ["um", "fundingRate"] and filtered:
-            out.append(name)
+    return out
+
+
+def is_usdt_pair(symbol: str) -> bool:
+    """Section 6, step 1: a USDT spot symbol, read as G0.6's ``universe.base_asset``
+    reads one (a base asset followed by the quote)."""
+    return symbol.endswith(QUOTE) and len(symbol) > len(QUOTE)
+
+
+def listed_pairs(data_view, names) -> dict[str, int]:
+    """Each listed spot daily pair, by symbol, with the open time of its first archived
+    bar, from ``data_view.coverage`` (the committed manifests' metadata, both manifests
+    in the holdout run, read without opening a data file).
+
+    ``month_end_ranking`` ranks a pair only at decisions after that bar has closed. In
+    the holdout run the listing also holds pairs first archived in 2026, whose coverage
+    starts in the holdout, so no development month end ranks them (section 11, item 5:
+    the holdout run's returns to 2025-12-31 equal the development run's exactly)."""
+    out = {}
+    for name in names:
+        spec = DatasetSpec.from_name(name)
+        if spec.market == "spot" and spec.kind == "klines" and spec.interval == "1d":
+            out[spec.symbol] = min(first for first, _ in data_view.coverage(name))
     return out
 
 
@@ -158,16 +178,20 @@ def load_market(configuration: Mapping, data_view, names) -> Market:
     return Market.from_view(data_view, series_needed(configuration, names), window.end)
 
 
-def simulate(configuration: Mapping, market: Market) -> list[tuple[str, float]]:
-    """The run on a market already read (the batch driver, ``backtest``)."""
+def simulate(configuration: Mapping, market: Market,
+             listed: Mapping[str, int]) -> list[tuple[str, float]]:
+    """The run on a market already read (the batch driver, ``backtest``); ``listed`` is
+    ``listed_pairs`` of the same names."""
     rows = {name: series.rows for name, series in market.series.items()}
-    return run_backtest(strategy_for(configuration, rows), configuration, market)
+    return run_backtest(strategy_for(configuration, rows, listed), configuration, market)
 
 
-def strategy_for(configuration: Mapping, rows: Mapping[str, Sequence]):
-    """The strategy object for a resolved configuration. ``rows`` holds the run's daily
-    (and four-hour and funding) series by name; only their names are used, except by
-    C-H1, which draws one random number per development daily bar of the candidates."""
+def strategy_for(configuration: Mapping, rows: Mapping[str, Sequence],
+                 listed: Mapping[str, int]):
+    """The strategy object for a resolved configuration. ``listed`` holds the pairs the
+    universe ranks, each with its first archived open (``listed_pairs``). ``rows`` holds
+    the run's daily (and four-hour and funding) series by name; only C-H1 reads it, to
+    draw one random number per development daily bar of the candidates."""
     cid, kind = configuration["id"], configuration["kind"]
     window = Window.from_configuration(configuration)
     if kind != "holdout" and window.end > day_ms(DEVELOPMENT_END):
@@ -175,15 +199,14 @@ def strategy_for(configuration: Mapping, rows: Mapping[str, Sequence]):
         # sensitivity run, ever reads holdout data"; section 3 ends development trading
         # at the last development close.
         raise SimulationError(f"a {kind} run ends at {DEVELOPMENT_END} at the latest")
-    symbols = [n.split("/")[2] for n in rows if _is_spot_daily(n)]
     if cid in GRID:
         if kind not in GRID_KINDS:
             raise SimulationError(f"{cid} runs as a trial, sensitivity or holdout run")
-        return Trend(configuration["parameters"], symbols)
+        return Trend(configuration["parameters"], listed)
     if cid == BENCHMARK:
         if kind != "benchmark":
             raise SimulationError(f"{cid} runs as a benchmark")
-        return MonthEndEqualWeight(symbols)
+        return MonthEndEqualWeight(listed)
     if cid == CONTROL:
         if kind != "control" or configuration["base"] != CONTROL_BASE:
             raise SimulationError(f"{cid} runs as a control on {CONTROL_BASE}")
@@ -193,7 +216,7 @@ def strategy_for(configuration: Mapping, rows: Mapping[str, Sequence]):
             for s in CANDIDATES if spot_series(s, "1d") in rows
         }
         flipped = SignFlipped(sign_flips(daily, configuration["seed"]))
-        return Trend(configuration["parameters"], symbols, flipped)
+        return Trend(configuration["parameters"], listed, flipped)
     raise SimulationError(f"{cid} is not an H1 configuration, benchmark or control")
 
 
@@ -206,27 +229,39 @@ def is_month_end(t: int) -> bool:
     return t % DAY_MS == 0 and iso_day(t).endswith("-01")
 
 
-def month_end_universe(history, symbols: Sequence[str], size: int) -> list[Instrument]:
-    """Section 6, The universe, steps 1 to 3, at the month-end decision ``history.now``.
+def month_end_ranking(history, listed: Sequence[tuple[str, int]]) -> list[str]:
+    """Section 6, The universe, step 1, at the month-end decision ``history.now``: the
+    ten largest listed pairs by quote volume over the 30 daily bars closing at the month
+    end, "exactly as rank_month_ends computes it" (the engine's ``rank_top``, which first
+    removes the 27 stablecoin and fiat bases). Only the bars in that 30-day window are
+    passed, which ``rank_month_ends`` would read anyway.
 
-    Step 1 ranks every spot pair the run holds by quote volume over the 30 daily bars
-    closing at the month end, "exactly as rank_month_ends computes it" (the engine's
-    ``rank_top``, which first removes the 27 stablecoin and fiat bases and takes the ten
-    largest). Only the bars in that 30-day window are passed, which ``rank_month_ends``
-    would read anyway. Steps 2 and 3 (exclusions by category, D14; the month-end bar and
-    a close 120 days back, D13; the first five, cash for a missing one) are the engine's
-    ``select_universe``."""
+    ``listed`` pairs each symbol with its first archived open (``listed_pairs``). A pair
+    whose archive starts at or after the decision has no bar closed by then and is skipped
+    before ranking: only the holdout run lists such pairs, and skipping them keeps every
+    development month's ranking identical to the development run's (section 11, item
+    5). ``rank_month_ends`` would leave them out anyway, since it never ranks a pair with
+    no volume in the window; the skip makes that hold by the manifests' metadata."""
     t = history.now
-    month = month_of_decision(t)
     first_open = t - RANK_DAYS * DAY_MS
     volumes = {}
-    for symbol in symbols:
+    for symbol, first_archived in listed:
         name = spot_series(symbol, "1d")
-        if not history.has(name):
+        if first_archived >= t or not history.has(name):
             continue
         view = history.series(name)
         volumes[symbol] = quote_volumes(view[view.index_after(first_open - 1):])
-    ranked = rank_top(volumes, month)
+    return rank_top(volumes, month_of_decision(t))
+
+
+def month_end_universe(history, listed: Sequence[tuple[str, int]],
+                       size: int) -> list[Instrument]:
+    """Section 6, The universe, steps 1 to 3, at the month-end decision ``history.now``.
+    Step 1 is ``month_end_ranking``; steps 2 and 3 (exclusions by category, D14, as
+    preregistration.json classifies the candidates; the month-end bar and a close 120
+    days back, D13; the first five, cash for a missing one) are the engine's
+    ``select_universe``."""
+    ranked = month_end_ranking(history, listed)
     return select_universe(history, ranked, slots=size, history_days=ELIGIBILITY_DAYS)
 
 
@@ -241,7 +276,7 @@ class Trend:
     is traded to it only outside the band. ``flipped`` (C-H1 only) replaces the closes
     the votes read with section 8's sign-flipped series; nothing else changes."""
 
-    def __init__(self, parameters: Mapping, symbols: Sequence[str],
+    def __init__(self, parameters: Mapping, listed: Mapping[str, int],
                  flipped: SignFlipped | None = None) -> None:
         bar = parameters["bar"]
         if bar not in BARS_PER_DAY:
@@ -277,7 +312,9 @@ class Trend:
         if flipped is not None and bar != "1d":
             raise SimulationError("C-H1 is H1-01, on daily bars")
         self.flipped = flipped
-        self.symbols = tuple(sorted(symbols))
+        # Section 6, step 1: the listed pairs the universe ranks, with their first
+        # archived opens (``listed_pairs``).
+        self.listed = tuple(sorted(listed.items()))
         self.members: list[Instrument] = []
 
     def decide(self, history, book):
@@ -286,7 +323,7 @@ class Trend:
         if is_month_end(t):
             # Section 6, Rebalancing: "the universe changes only monthly"; Four-hour bars:
             # "the universe updated only at the month-end 00:00 decision".
-            members = month_end_universe(history, self.symbols, self.slots)
+            members = month_end_universe(history, self.listed, self.slots)
         targets = {}
         for instrument in members:
             if not history.live(instrument):
@@ -385,13 +422,13 @@ class MonthEndEqualWeight:
 
     interval = "1d"
 
-    def __init__(self, symbols: Sequence[str]) -> None:
-        self.symbols = tuple(sorted(symbols))
+    def __init__(self, listed: Mapping[str, int]) -> None:
+        self.listed = tuple(sorted(listed.items()))
 
     def decide(self, history, book):
         if not is_month_end(history.now):
             return None
-        members = month_end_universe(history, self.symbols, UNIVERSE_SIZE)
+        members = month_end_universe(history, self.listed, UNIVERSE_SIZE)
         return Decision(weights={m: 1.0 / UNIVERSE_SIZE for m in members}, band=0.0)
 
 
@@ -449,8 +486,3 @@ class SignFlipped:
             sign = -1.0 if flips[bar.open_time] else 1.0
             path.append(path[-1] * (1.0 + sign * r))
         return path[index - start]
-
-
-def _is_spot_daily(name: str) -> bool:
-    parts = name.split("/")
-    return len(parts) == 4 and parts[:2] == ["spot", "klines"] and parts[3] == "1d"

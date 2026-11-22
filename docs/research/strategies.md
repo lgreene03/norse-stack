@@ -5,7 +5,9 @@ Owner: technical. Written 2026-11-21. The code is in
 hypothesis, and the tests are `test_strategies_h1.py`, `test_strategies_h2.py` and
 `test_strategy_pins.py` in [research/tests](../../research/tests), run by CI's `research` job.
 Everything here was computed on synthetic data. No strategy, and no part of one, has been run
-on market data, development or holdout, and nothing opened the dataset store.
+on market data, development or holdout, and nothing opened the dataset store; where a test
+needs the registered loader, it reads a synthetic mirror and synthetic manifests in a
+temporary directory.
 
 These modules are what the genesis entry pins: one module and function for every registered
 id. They implement sections 3 to 9 of [PREREGISTRATION.md](../PREREGISTRATION.md) as the
@@ -42,8 +44,8 @@ fifth, halves, BTC and ETH) are named in code with their section.
 ## The configurations
 
 **H1-01 to H1-08** (section 6). At each month-end decision, the universe is ranked from every
-spot daily series the run holds by quote volume over the 30 daily bars closing at the month
-end, through the engine's `rank_top` (G0.6's `rank_month_ends`, stablecoin and fiat bases
+spot daily USDT series the run's manifests list (`DataView.list_series()`, below) by quote
+volume over the 30 daily bars closing at the month end, through the engine's `rank_top` (G0.6's `rank_month_ends`, stablecoin and fiat bases
 removed, the ten largest), and selected by `select_universe` (D14's exclusions, D13's 120-day
 close and the month-end bar, the first five, cash for a missing one). At every decision each
 live member's signal is the mean of its votes, one per registered lookback, each 1 when its
@@ -112,12 +114,24 @@ and empty 15-minute bars, a missing four-hour bar, a funding gap and a missing d
 klines. A run whose data stops at a date returns exactly the first days of a longer run, the
 rule section 11, item 5 applies at 2026-01-01. Each module also runs in the runner's fresh
 interpreter under its audit hook, on the frozen configuration the runner passes, and returns
-exactly what it returns in process. H2's pinned `run` itself runs there on the registered
-loader over a synthetic store and manifest, taking every series' runs from
-`DataView.coverage`, and the recorded gap its fill search crosses comes back as the result's
-`crossed_gaps`.
+exactly what it returns in process. H1's and H2's pinned `run` each run there on the
+registered loader over a synthetic store and manifest, H1's taking the pairs it ranks from
+`DataView.list_series()` and both taking every series' runs from `DataView.coverage`, and
+the recorded gap a fill search crosses comes back as the result's `crossed_gaps`.
 
-## The data seam
+H1's listing is tested on synthetic manifests: a synthetic mirror with a development and a
+holdout manifest, read through the registered loader and the runner's `DataView`. H1-01's
+ranking and universe at six month ends, from 2025-09 to 2026-02, equal the ones worked out by
+hand (a stablecoin, a leveraged token, a pair quoted in BTC, a pair too young for D13 until
+2026-01-01, a pair that stops trading, a volume that doubles). A pair pinned only by the
+holdout manifest, first archived on 2026-01-01, is listed and loaded in the holdout run, yet
+no decision before 2026-01-01 ranks it, names it or trades it. H1-01's development rankings,
+universes, decisions and returns to 2025-12-31 are the same in the development run, whose
+listing lacks that pair, as in the holdout run, whose listing holds it. A unit test shows the
+skip itself: a pair listed as first archived at the decision is not ranked, though its rows
+are there.
+
+## The data: listing, spans and crossed gaps
 
 The quant's review of G1.9 (finding 3) requires each series' spans, its archived runs split
 where whole months are missing, to come from the data-loading layer and not from constants in
@@ -134,35 +148,57 @@ runner returns them beside the returns and the harness writes them to the result
 ETH's spot and perpetual bars and their funding), so `run` builds its market straight from
 those names through the data view.
 
-**H1 still has one open seam.** Section 6, step 1 ranks "USDT spot symbols ... delisted symbols
-included", every pinned spot daily series, so H1 needs the names of the series the run's
-manifests pin, both manifests for the holdout run so that holdout month ends rank over the
-holdout's daily series. The `DataView` gives a named series' coverage and rows but no listing
-of names, and committing the list would be the same kind of constant the spans were.
-`pinned_series(data_view)` in `trend.py` is the one function that needs it; until the data
-view lists the pinned series it refuses with a message naming this section, so no H1, B-H1 or
-C-H1 run can load data, or be ledgered, by accident. Everything after it, `load_market(
-configuration, data_view, names)` and `simulate`, is tested on synthetic rows through a
-stand-in `DataView`. The alternative reading, ranking only the 115 candidates (which agree
-by construction, since they are the union of every top ten), would not need the listing; it
-is a change to choice 1 below and is left to the lead.
+**H1 is wired end to end too.** Section 6, step 1 ranks "USDT spot symbols ... delisted
+symbols included", so H1 needs the name of every series the run's manifests pin, both
+manifests in the holdout run so that holdout month ends rank over the holdout's daily series.
+The engine provides it: `DataView.list_series()` returns every series name the run's
+committed manifests pin, sorted, from their keys alone (the development manifest's in a
+development run, both manifests' in the holdout run, the development series in a rehearsal).
+No list of pairs is committed in `trend.py`, and a listing error is a data-loading fix
+(section 11, item 6). H1's `run` builds the universe from the listing in four steps:
 
-What each configuration reads: H1 reads every spot daily series (619 in the development
-manifest, for the ranking), every spot 15-minute series lazily for fills, every spot
-four-hour series for H1-06 and every perpetual's funding for H1-07. H2 reads BTC's and ETH's
-spot and perpetual daily and 15-minute series and their funding; B-H2 only the spot. Memory
-for H1-06, which holds 107 four-hour series whole, has not been measured, since that would need
-the real data.
+1. `series_needed` parses each listed name with `DatasetSpec.from_name` and keeps the spot
+   klines of USDT pairs at the intervals the configuration reads (daily always, 15-minute
+   lazily for fills, four-hour for H1-06) and, for H1-07, every perpetual's funding. Nothing
+   else the manifests pin is read.
+2. `listed_pairs` takes each listed spot daily pair's first archived open from
+   `DataView.coverage`, the manifests' metadata, without opening a data file.
+3. At each month-end decision, `month_end_ranking` skips any pair whose first archived bar
+   opens at or after the decision (no bar of it has closed by then), sums each other pair's
+   quote volume over the 30 daily bars closing at the month end, and ranks them through the
+   engine's `rank_top` (G0.6's `rank_month_ends`, the 27 stablecoin and fiat bases removed,
+   the ten largest).
+4. The engine's `select_universe` drops D14's excluded categories exactly as
+   preregistration.json classifies the candidates (ETHBULL, ETHBEAR, PAXG, XAUT and SNDKB),
+   applies D13 (the month-end bar and a close 120 days before it) and takes the first five,
+   cash for a missing one.
+
+Pairs first archived in 2026 are listed only in the holdout run, and their coverage starts in
+the holdout, so step 3 never ranks them at a development month end: the development months'
+ranking, decisions and returns are the same whether or not they are listed, as section 11,
+item 5 requires. `rank_month_ends` would leave them out anyway, since it never ranks a pair
+with no volume in the window; the skip makes it hold by the manifests' metadata rather than by
+the rows.
+
+What each configuration reads: H1 reads every spot daily USDT series the listing names (619 in
+the development manifest, which by its metadata hold 702,301 rows in 23,459 files, loaded
+whole by every H1, B-H1 and C-H1 run), every spot 15-minute series lazily for fills (107),
+every spot four-hour series for H1-06 (107) and every perpetual's funding for H1-07 (102). H2
+reads BTC's and ETH's spot and perpetual daily and 15-minute series and their funding; B-H2
+only the spot. Memory and time for the 619 daily series, and for H1-06's 107 four-hour series
+held whole, have not been measured, since that would need the real data.
 
 ## Choices made
 
 Where the registration was ambiguous or silent, the modules resolve it as follows. Each is a
 reading of the registration, not a new parameter.
 
-1. **The ranking covers every spot daily series the run holds,** as section 6, step 1 reads
-   ("USDT spot symbols ... delisted symbols included"), not only the 115 candidates. The two
-   agree by construction, since the candidates are the union of every top ten, but the
-   literal reading does not rest on that.
+1. **The ranking covers every spot daily USDT series the run's manifests list,** taken from
+   `DataView.list_series()`, as section 6, step 1 reads ("USDT spot symbols ... delisted
+   symbols included"), not only the 115 candidates. The two agree by construction, since the
+   candidates are the union of every top ten and the manifests pin the daily series of every
+   USDT pair G0.6 ranked (datasets.md: 749 pairs, 619 of them in the development manifest),
+   but the literal reading does not rest on that.
 2. **Only the bars in the 30-day window are passed to the ranking.** `rank_month_ends` reads
    only those, so the result is the same; it keeps the monthly ranking cheap.
 3. **A lookback is read in calendar time,** t minus L days, at both bars, as section 6 says of
@@ -188,8 +224,8 @@ reading of the registration, not a new parameter.
    file; they are the registered set, not a span. Eight of them (CHIP, FOGO, NIGHT, RE, SENT,
    SNDKB, XAUT, ZAMA) have no development bars and take no draws. By the coverage metadata
    the other 107 hold the 158,821 bars G1.9's vectors use, and the development manifest pins
-   all of their daily series; n is counted from the bars the run loads, so the seam must
-   supply every one of them.
+   all of their daily series; n is counted from the bars the run loads, and the listing
+   supplies every one of them.
 7. **C-H2's shift moves rates, not times.** Each settlement keeps its `calc_time` and interval,
    so the trailing interval and when a value is known are the real rule's; M counts the
    development settlements, those before 2026-01-01.
@@ -212,3 +248,28 @@ reading of the registration, not a new parameter.
     norse_research.sim import ...` and `Funding` as `from norse_research.formats import
     Funding`, read no private attribute, subclass nothing from the package, and never
     assign to or delete anything they import; both pass the source check's round 3 rules.
+    `trend.py` also imports `DatasetSpec` from `norse_research.formats`, to parse the
+    listed names, and passes the rules of #61's final engine (1d02908).
+14. **A pair is ranked at a month end only once its first archived bar has closed.**
+    `listed_pairs` takes each pair's first archived open from `DataView.coverage`, and
+    `month_end_ranking` skips a pair whose archive starts at or after the decision, before
+    any of its rows is read. This changes no ranking, since `rank_month_ends` never ranks a
+    pair with no volume in the window, but it makes the development months' ranking
+    independent of the holdout listing by the manifests' metadata (section 11, item 5)
+    rather than by the rows.
+15. **A USDT pair is a spot symbol ending in USDT after a base,** as G0.6's
+    `universe.base_asset` reads one; any other spot series the manifests list is neither
+    loaded nor ranked. The development manifest lists no other quote, so this changes
+    nothing today; without it such a series would stop every run, since `rank_top` refuses
+    a pair not quoted in USDT.
+16. **A pair outside the 115 candidates that reached a top ten would be eligible, as an
+    unclassified candidate is.** The registration classifies only the candidates
+    (preregistration.json, `exclusions.classified_candidates` and
+    `unclassified_candidates_are`) and states that every top ten falls within them (section
+    6, step 1); it says nothing of any other pair. H1 applies D14 exactly as registered,
+    through the engine's `select_universe`, and adds no guard naming the candidates, which
+    would put a committed list back into the universe rule. Such a pair could not be traded
+    unseen: none has 15-minute bars pinned, so the engine stops the run at its first fill
+    ("has no recorded span"); held at a signal of zero, it would keep its slot in cash for
+    the month. The alternative, stopping the run whenever a selected member is not one of the
+    115, is the lead's to choose.

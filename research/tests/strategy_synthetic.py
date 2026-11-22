@@ -5,19 +5,28 @@ or drawn from a seeded ``random.Random``, and nothing opens the dataset store. T
 configurations are resolved from the real docs/preregistration.json exactly as the
 harness resolves them, with the strategy module's committed declarations, and then
 given a synthetic window, so a test runs each configuration's registered parameters.
+``listing_world`` writes a synthetic mirror and synthetic development and holdout
+manifests into a temporary directory, for the registered loader to list and read.
 """
 
 from __future__ import annotations
 
+import hashlib
 import random
 from collections import namedtuple
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-from norse_research.formats import Funding, Kline
+from conftest import make_zip
+from norse_research.formats import DatasetSpec, Funding, Kline
 from norse_research.harness import Strategy
+from norse_research.manifest import Manifest, build, write
+from norse_research.periods import DEVELOPMENT, HOLDOUT
 from norse_research.registration import Registration
 from norse_research.sources import strategy_declarations
+from norse_research.store import ArchiveStore
+from norse_research.strategies.h1 import trend
+from synthetic_store import make_series
 
 RESEARCH = Path(__file__).resolve().parent.parent
 REPO = RESEARCH.parent
@@ -240,7 +249,8 @@ def h2_market(seed: int = 5, fill_from: int = ms(2021, 1, 25)) -> dict:
 
 
 class FakeView:
-    """Stands in for the runner's ``DataView`` over synthetic rows. ``coverage`` gives
+    """Stands in for the runner's ``DataView`` over synthetic rows. ``list_series`` lists
+    every series name, sorted, as the runner's lists the manifests'; ``coverage`` gives
     one run per series at the manifests' precision (a bar's open exactly, a settlement's
     minute), and ``load`` serves rows in range; both record what was asked."""
 
@@ -248,6 +258,9 @@ class FakeView:
         self.rows = rows
         self.covered: set[str] = set()
         self.loaded: set[str] = set()
+
+    def list_series(self) -> tuple[str, ...]:
+        return tuple(sorted(self.rows))
 
     @staticmethod
     def _key(series: str):
@@ -272,6 +285,13 @@ class FakeView:
         return namedtuple("Loaded", "rows gaps")(rows, [])
 
 
+def listed(rows: dict) -> dict[str, int]:
+    """H1's listed pairs for ``rows`` (``trend.listed_pairs`` through a stand-in view):
+    each spot daily pair with the open of its first row."""
+    view = FakeView(rows)
+    return trend.listed_pairs(view, view.list_series())
+
+
 def truncated(rows: dict, end: int) -> dict:
     """Every row stamped before ``end``: what a run whose data stops there would read,
     as a development run's data stops at 2026-01-01 (section 11, item 5)."""
@@ -284,3 +304,82 @@ def truncated(rows: dict, end: int) -> dict:
 
 def last_day(first_day: str, days: int) -> str:
     return (date.fromisoformat(first_day) + timedelta(days=days - 1)).isoformat()
+
+
+# --- synthetic manifests for H1's listing ---------------------------------------------
+
+# symbol: (first day archived, last day archived or None for 2026-02-28, daily quote
+# volume, from 2025-10-01 on, daily drift). Every pair but NEW is in the development
+# manifest; every pair still trading in 2026 is in the holdout manifest too. USDC is
+# removed before ranking and ETHBULL is a leveraged token (D14); DELTA's volume rises on
+# 2025-10-01; ECHO stops trading on 2025-11-15 (D12); LATE is first archived on
+# 2025-09-01, so it has no close 120 days back (D13) until 2026-01-01; NEW is first
+# archived on 2026-01-01, in the holdout alone; ALPHABTC is not a USDT pair (section 6).
+LISTING_SPEC = {
+    "ALPHAUSDT": ("2025-03-01", None, 9e6, 9e6, 0.004),
+    "BRAVOUSDT": ("2025-03-01", None, 8e6, 8e6, -0.002),
+    "CHARLIEUSDT": ("2025-03-01", None, 7e6, 7e6, 0.002),
+    "DELTAUSDT": ("2025-03-01", None, 6e6, 1.2e7, 0.003),
+    "ECHOUSDT": ("2025-03-01", "2025-11-15", 5e6, 5e6, 0.001),
+    "FOXUSDT": ("2025-03-01", None, 4e6, 4e6, 0.002),
+    "USDCUSDT": ("2025-03-01", None, 1e9, 1e9, 0.0),
+    "ETHBULLUSDT": ("2025-03-01", None, 5e8, 5e8, 0.0),
+    "LATEUSDT": ("2025-09-01", None, 2e7, 2e7, 0.003),
+    "NEWUSDT": ("2026-01-01", None, 1e8, 1e8, 0.005),
+    "ALPHABTC": ("2025-03-01", None, 1e15, 1e15, 0.0),
+}
+LISTING_END = ms(2026, 3, 1)
+LISTING_FILLS_FROM = ms(2025, 9, 1)
+LISTING_FILLED = ("ALPHAUSDT", "BRAVOUSDT", "CHARLIEUSDT", "DELTAUSDT", "ECHOUSDT",
+                  "FOXUSDT", "LATEUSDT")
+
+
+def _put_bars(store: ArchiveStore, spec: DatasetSpec, bars: list[tuple[int, float, float]]):
+    """Monthly archive files of ``bars`` (open time, price, quote volume), each beside
+    its CHECKSUM, as synthetic_store.put writes them; returns the months written."""
+    by_month: dict[str, list[str]] = {}
+    step = spec.step_ms
+    for t, price, quote in bars:
+        by_month.setdefault(iso(t)[:7], []).append(
+            f"{t},{price},{price},{price},{price},{quote / price},{t + step - 1},{quote},1,"
+            f"{quote / price / 2},{quote / 2},0")
+    for month, lines in by_month.items():
+        data = make_zip(spec.file_name(month)[:-4] + ".csv", "\n".join(lines) + "\n")
+        path = store.path(spec.key(month))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        digest = hashlib.sha256(data).hexdigest()
+        path.with_name(path.name + ".CHECKSUM").write_text(f"{digest}  {path.name}\n")
+    return sorted(by_month)
+
+
+def listing_world(root: Path, seed: int = 7) -> tuple[ArchiveStore, dict[str, Manifest]]:
+    """A synthetic mirror of ``LISTING_SPEC``'s daily bars (closes on a seeded random walk,
+    flat quote volumes), 15-minute bars from 2025-09-01 for the pairs a universe can hold
+    (each priced at its day's close), and one perpetual's daily bars and funding, which
+    H1-01 must not read; with a development and a holdout manifest built from it."""
+    rng = random.Random(seed)
+    store = ArchiveStore(root / "mirror")
+    series = []
+    for symbol, (first_day, last, quote, quote_from_october, drift) in LISTING_SPEC.items():
+        first = ms(*map(int, first_day.split("-")))
+        end = LISTING_END if last is None else ms(*map(int, last.split("-"))) + DAY
+        daily_bars, fill_bars, close = [], [], 100.0 * (1 + rng.random())
+        for t in range(first, end, DAY):
+            close *= 1.0 + rng.gauss(drift, 0.03)
+            daily_bars.append((t, close, quote if t < ms(2025, 10, 1) else quote_from_october))
+            if symbol in LISTING_FILLED and t >= LISTING_FILLS_FROM:
+                fill_bars += [(t + q * M15, close, 1e4) for q in range(96)]
+        spec = DatasetSpec.from_name(f"spot/klines/{symbol}/1d")
+        series.append((spec, _put_bars(store, spec, daily_bars)))
+        if fill_bars:
+            spec = DatasetSpec.from_name(f"spot/klines/{symbol}/15m")
+            series.append((spec, _put_bars(store, spec, fill_bars)))
+    series.extend(make_series(store, name, "2025-09", "2026-02")
+                  for name in ("um/klines/ALPHAUSDT/1d", "um/fundingRate/ALPHAUSDT"))
+    manifests = {}
+    for period in (DEVELOPMENT, HOLDOUT):
+        path = root / f"{period}.json"
+        write(build(store, period, series), path)
+        manifests[period] = Manifest.load(path)
+    return store, manifests

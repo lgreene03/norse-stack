@@ -5,7 +5,8 @@ worked out by hand from the synthetic inputs (the arithmetic is in each test, ne
 the engine's code), the controls' random numbers against the vectors numpy itself
 generated (fixtures/numpy-rng-vectors.json), and the strategy against both drivers and
 against section 11, item 5's rule that a longer run's returns start with a shorter
-run's. No market data is read and the dataset store is never opened.
+run's. No market data is read and the dataset store is never opened: the registered
+loader reads only a synthetic mirror and synthetic manifests in a temporary directory.
 """
 
 from __future__ import annotations
@@ -18,6 +19,9 @@ from pathlib import Path
 import pytest
 import strategy_synthetic as syn
 from norse_research.formats import Funding
+from norse_research.loader import DatasetLoader, inside_ledger_entry
+from norse_research.periods import DEVELOPMENT, HOLDOUT, inside_unsealed_run
+from norse_research.runner import DataView
 from norse_research.sim import (
     Costs,
     Instrument,
@@ -80,7 +84,7 @@ def h1(cid="H1-01", first="2021-06-01", last="2021-06-01", **kw):
 
 
 def build(cid, rows, **kw):
-    return trend.strategy_for(h1(cid, **kw), rows)
+    return trend.strategy_for(h1(cid, **kw), rows, syn.listed(rows))
 
 
 # --- section 6, Signal ------------------------------------------------------------------
@@ -289,7 +293,7 @@ def universe_rows(volumes, first_days=None, last_days=None, quote_outside=None):
 
 def members(rows):
     probe, _ = one_day(rows, trend.strategy_for(syn.configuration(
-        "B-H1", "2021-06-01", "2021-06-01"), rows))
+        "B-H1", "2021-06-01", "2021-06-01"), rows, syn.listed(rows)))
     return probe.decisions[0][1]
 
 
@@ -364,7 +368,8 @@ def test_b_h1_trades_to_one_fifth_at_month_ends_only():
     rows["spot/klines/A1USDT/15m"] = syn.fills(JUNE, JUNE + 32 * D, 100.0)
     rows["spot/klines/A2USDT/15m"] = syn.fills(JUNE, JUNE + 2 * D, 50.0) + syn.fills(
         syn.ms(2021, 7, 1), syn.ms(2021, 7, 2), 75.0)
-    strategy = trend.strategy_for(syn.configuration("B-H1", "2021-06-01", "2021-07-01"), rows)
+    strategy = trend.strategy_for(syn.configuration("B-H1", "2021-06-01", "2021-07-01"), rows,
+                                  syn.listed(rows))
     probe, result = one_day(rows, strategy, days=31)
     assert [syn.iso(t) for t, d in probe.decisions if d is not None] == [
         "2021-06-01", "2021-07-01"]
@@ -406,12 +411,12 @@ def test_c_h1_votes_on_the_flipped_series_and_sizes_on_actual_prices():
         100.0, [0.005] * 150 + [0.0]))}
     days = {b.open_time for b in rows["spot/klines/AAAUSDT/1d"]}
     params = h1("C-H1", seed=0)["parameters"]
-    flipped = trend.Trend(params, ["AAAUSDT"], trend.SignFlipped({"AAAUSDT": dict.fromkeys(
-        days, True)}))
+    flipped = trend.Trend(params, syn.listed(rows), trend.SignFlipped({
+        "AAAUSDT": dict.fromkeys(days, True)}))
     probe, _ = one_day(rows, flipped)
     assert weights_of(probe.decisions[0][1]) == {"AAAUSDT": 0.0}
-    kept = trend.Trend(params, ["AAAUSDT"], trend.SignFlipped({"AAAUSDT": dict.fromkeys(
-        days, False)}))
+    kept = trend.Trend(params, syn.listed(rows), trend.SignFlipped({
+        "AAAUSDT": dict.fromkeys(days, False)}))
     probe, _ = one_day(rows, kept)
     assert weights_of(probe.decisions[0][1]) == {"AAAUSDT": pytest.approx(0.2, rel=1e-15)}
 
@@ -447,8 +452,8 @@ def test_c_h1_draws_over_the_candidates_development_bars_only():
     rows = {f"spot/klines/{s}/1d": syn.daily(first, [100.0] * 20)
             for s in ("BTCUSDT", "ETHUSDT", "AAAUSDT")}
     config = syn.configuration("C-H1", "2025-12-20", "2025-12-31", seed=3)
-    control = trend.strategy_for(config, rows)
-    development = {s: [b for b in rows[f"spot/klines/{s}/1d"] if b.open_time < syn.ms(2026, 1, 1)]
+    control = trend.strategy_for(config, rows, syn.listed(rows))
+    development ={s: [b for b in rows[f"spot/klines/{s}/1d"] if b.open_time < syn.ms(2026, 1, 1)]
                    for s in ("BTCUSDT", "ETHUSDT")}
     assert control.flipped.flips == trend.sign_flips(development, 3)
     assert {len(v) for v in control.flipped.flips.values()} == {12}
@@ -468,9 +473,11 @@ def test_batch_and_paper_give_identical_orders(market_rows, cid):
     lapses, skips, marks and returns (G1.9's two drivers; section 5)."""
     config = syn.configuration(cid, "2021-06-01", "2021-07-31")
     window = Window.from_configuration(config)
-    batch = backtest(trend.strategy_for(config, market_rows),
+    listed = syn.listed(market_rows)
+    batch = backtest(trend.strategy_for(config, market_rows, listed),
                      Market.from_rows(market_rows, window.end), window, COSTS)
-    paper = paper_run(trend.strategy_for(config, market_rows), market_rows, window, COSTS)
+    paper = paper_run(trend.strategy_for(config, market_rows, listed), market_rows, window,
+                      COSTS)
     for name in ("orders", "fills", "lapses", "accruals", "skips", "marks", "returns"):
         assert getattr(batch, name) == getattr(paper, name), name
     assert batch.orders and len(batch.returns) == 61
@@ -483,7 +490,8 @@ def test_the_synthetic_market_exercises_the_rules(market_rows):
     # above proves less than it seems.
     config = syn.configuration("H1-01", "2021-06-01", "2021-07-31")
     window = Window.from_configuration(config)
-    probe = Probe(trend.strategy_for(config, market_rows))
+    listed = syn.listed(market_rows)
+    probe = Probe(trend.strategy_for(config, market_rows, listed))
     result = backtest(probe, Market.from_rows(market_rows, window.end), window, COSTS)
     universes = {syn.iso(t): symbols for t, symbols in probe.universes}
     assert "HHHUSDT" in universes["2021-06-01"]
@@ -492,7 +500,7 @@ def test_the_synthetic_market_exercises_the_rules(market_rows):
         assert not {"USDCUSDT", "ETHBULLUSDT", "GGGUSDT"} & set(universes[month]), month
     assert any(lapse.order.symbol == "BBBUSDT" for lapse in result.lapses)
     filtered = syn.configuration("H1-07", "2021-06-01", "2021-07-31")
-    base, funded = (backtest(trend.strategy_for(c, market_rows),
+    base, funded = (backtest(trend.strategy_for(c, market_rows, listed),
                              Market.from_rows(market_rows, window.end), window, COSTS)
                     for c in (config, filtered))
     assert base.returns != funded.returns, "the funding filter binds somewhere"
@@ -506,64 +514,233 @@ def test_a_longer_run_starts_with_the_shorter_runs_returns(market_rows, cid):
     short = syn.configuration(cid, "2021-06-01", "2021-07-10")
     long = syn.configuration(cid, "2021-06-01", "2021-08-10")
     end = Window.from_configuration(short).end
-    first = trend.simulate(short, Market.from_rows(syn.truncated(market_rows, end), end))
+    cut = syn.truncated(market_rows, end)
+    first = trend.simulate(short, Market.from_rows(cut, end), syn.listed(cut))
     second = trend.simulate(long, Market.from_rows(
-        market_rows, Window.from_configuration(long).end))
+        market_rows, Window.from_configuration(long).end), syn.listed(market_rows))
     assert len(first) == 40 and second[:40] == first
 
 
-# --- the seam, the guards and what each run loads ---------------------------------------
+# --- the listing, the guards and what each run loads ------------------------------------
 
 
-def test_the_data_seam_is_closed_until_the_data_view_lists_the_pinned_series(market_rows):
-    # The DataView gives a named series' coverage and rows but no listing of names, and
-    # section 6, step 1 ranks every pinned spot daily series, so H1 refuses to load.
-    view = syn.FakeView(market_rows)
-    with pytest.raises(SimulationError, match="data seam"):
-        trend.run(h1(), view)
-    assert view.covered == set() and view.loaded == set()
+def test_a_pair_is_ranked_only_once_its_coverage_starts_before_the_decision():
+    # Section 6, step 1 over the data view's listing: a pair whose archive starts at or
+    # after the decision has no bar closed by then and is skipped before ranking. Here
+    # A1, the largest, is listed as first archived at the 2021-06-01 decision itself
+    # (its rows say otherwise, so only the listing can leave it out): A2 to A6 are the
+    # universe. Listed as first archived a day earlier, A1 ranks first again.
+    rows = universe_rows({f"A{i}USDT": 1e9 - i * 1e7 for i in range(1, 7)})
+    config = syn.configuration("B-H1", "2021-06-01", "2021-06-01")
+    for first_archived, expected in ((JUNE, range(2, 7)), (JUNE - D, range(1, 6))):
+        listed = {**syn.listed(rows), "A1USDT": first_archived}
+        probe, _ = one_day(rows, trend.strategy_for(config, rows, listed))
+        assert weights_of(probe.decisions[0][1]) == {f"A{i}USDT": 0.2 for i in expected}
 
 
 @pytest.mark.parametrize(("cid", "extra"), [
     ("H1-01", set()), ("H1-06", {"4h"}), ("H1-07", {"funding"}), ("B-H1", set()),
     ("C-H1", set())])
 def test_each_configuration_loads_only_the_series_it_reads(market_rows, cid, extra):
-    """Given the names, each run takes every series' runs from the data view's coverage
-    and loads only what its rules read, 15-minute bars lazily for fills."""
+    """The pinned ``run`` takes its series from the data view's listing, each parsed by
+    ``DatasetSpec``: spot klines of USDT pairs (daily, 15-minute lazily for fills,
+    four-hour for H1-06) and funding for H1-07, each read from its coverage, and nothing
+    else the manifests pin. A spot pair quoted in BTC with the largest volume, and a
+    perpetual's klines, are listed and never read."""
     config = syn.configuration(cid, "2021-06-01", "2021-06-05",
                                seed=0 if cid == "C-H1" else None)
-    view = syn.FakeView(market_rows)
-    market = trend.load_market(config, view, list(market_rows))
-    kinds = {"4h" if n.endswith("/4h") else "funding" if "fundingRate" in n else n[-2:]
-             for n in market.series}
-    assert kinds == {"1d"} | extra
-    assert view.covered >= set(market.series)
-    assert all(n.endswith("/1d") or n.endswith("/4h") or "fundingRate" in n
-               for n in view.loaded), "15-minute bars are read lazily, for fills"
-    if cid != "C-H1":  # the synthetic pairs are not pinned candidates, so they draw no signs
-        expected = trend.simulate(config, Market.from_rows(market_rows, market.horizon))
-        assert trend.simulate(config, market) == expected and len(expected) == 5
-        assert any(n.endswith("/15m") for n in view.loaded)
+    offered = {**market_rows,
+               "spot/klines/AAABTC/1d": syn.daily(syn.H1_FIRST, [1.0] * syn.H1_DAYS,
+                                                  [1e15] * syn.H1_DAYS),
+               "um/klines/AAAUSDT/1d": syn.daily(syn.H1_FIRST, [100.0] * syn.H1_DAYS)}
+    view = syn.FakeView(offered)
+    names = trend.series_needed(config, view.list_series())
+    wanted = {n for n in market_rows if n.startswith("spot/") and n.endswith(("/1d", "/15m"))}
+    if "4h" in extra:
+        wanted |= {n for n in market_rows if n.endswith("/4h")}
+    if "funding" in extra:
+        wanted |= {n for n in market_rows if "/fundingRate/" in n}
+    assert set(names) == wanted
+    market = trend.load_market(config, view, names)
+    assert view.covered == wanted
+    assert view.loaded == {n for n in wanted if not n.endswith("/15m")}, (
+        "15-minute bars are read lazily, for fills")
+    if cid == "C-H1":  # the synthetic pairs are not pinned candidates, so they draw no signs
+        with pytest.raises(SimulationError, match="not a pinned candidate"):
+            trend.run(config, syn.FakeView(offered))
+        return
+    got = trend.simulate(config, market, trend.listed_pairs(view, names))
+    assert any(n.endswith("/15m") for n in view.loaded)
+    assert trend.run(config, syn.FakeView(offered)) == got
+    expected = trend.simulate(config, Market.from_rows(market_rows, market.horizon),
+                              syn.listed(market_rows))
+    assert got == expected and len(expected) == 5
+
+
+# --- the listing on synthetic manifests, through the registered loader --------------------
+
+ENTRY, UNSEAL = "e" * 64, "f" * 64
+HOLDOUT_START = syn.ms(2026, 1, 1)
+
+# syn.LISTING_SPEC's ten largest at each month end, worked out from its flat volumes over
+# the 30 daily bars closing then: USDC is removed before ranking; ALPHABTC is not a USDT
+# pair; LATE is first archived on 2025-09-01 and NEW on 2026-01-01, so neither is ranked
+# at the decision on its first day; DELTA's volume doubles from 2025-10-01; ECHO's last bar
+# is 2025-11-15 (15 bars of 5e6 in November's window, below FOX's 30 of 4e6), and it has
+# no volume after.
+RANKINGS = {
+    "2025-09-01": ["ETHBULLUSDT", "ALPHAUSDT", "BRAVOUSDT", "CHARLIEUSDT", "DELTAUSDT",
+                   "ECHOUSDT", "FOXUSDT"],
+    "2025-10-01": ["ETHBULLUSDT", "LATEUSDT", "ALPHAUSDT", "BRAVOUSDT", "CHARLIEUSDT",
+                   "DELTAUSDT", "ECHOUSDT", "FOXUSDT"],
+    "2025-11-01": ["ETHBULLUSDT", "LATEUSDT", "DELTAUSDT", "ALPHAUSDT", "BRAVOUSDT",
+                   "CHARLIEUSDT", "ECHOUSDT", "FOXUSDT"],
+    "2025-12-01": ["ETHBULLUSDT", "LATEUSDT", "DELTAUSDT", "ALPHAUSDT", "BRAVOUSDT",
+                   "CHARLIEUSDT", "FOXUSDT", "ECHOUSDT"],
+    "2026-01-01": ["ETHBULLUSDT", "LATEUSDT", "DELTAUSDT", "ALPHAUSDT", "BRAVOUSDT",
+                   "CHARLIEUSDT", "FOXUSDT"],
+    "2026-02-01": ["ETHBULLUSDT", "NEWUSDT", "LATEUSDT", "DELTAUSDT", "ALPHAUSDT",
+                   "BRAVOUSDT", "CHARLIEUSDT", "FOXUSDT"],
+}
+# Steps 2 and 3: ETHBULL dropped by category (D14); LATE has no close 120 days before a
+# month end until 2026-01-01 (2026-01-01 less 121 days is 2025-09-02), NEW none at all
+# (D13); ECHO has no month-end bar on 2025-12-01; the first five remaining.
+UNIVERSES = {
+    "2025-09-01": ["ALPHAUSDT", "BRAVOUSDT", "CHARLIEUSDT", "DELTAUSDT", "ECHOUSDT"],
+    "2025-10-01": ["ALPHAUSDT", "BRAVOUSDT", "CHARLIEUSDT", "DELTAUSDT", "ECHOUSDT"],
+    "2025-11-01": ["DELTAUSDT", "ALPHAUSDT", "BRAVOUSDT", "CHARLIEUSDT", "ECHOUSDT"],
+    "2025-12-01": ["DELTAUSDT", "ALPHAUSDT", "BRAVOUSDT", "CHARLIEUSDT", "FOXUSDT"],
+    "2026-01-01": ["LATEUSDT", "DELTAUSDT", "ALPHAUSDT", "BRAVOUSDT", "CHARLIEUSDT"],
+    "2026-02-01": ["LATEUSDT", "DELTAUSDT", "ALPHAUSDT", "BRAVOUSDT", "CHARLIEUSDT"],
+}
+
+
+class ListingProbe:
+    """Runs a strategy and records, at each decision, the pairs its decision names and, at
+    each month end, the ranking (section 6, step 1) and the universe it chose."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.interval = inner.interval
+        self.named = {}
+        self.rankings = {}
+        self.universes = {}
+
+    def decide(self, history, book):
+        decision = self.inner.decide(history, book)
+        t = history.now
+        self.named[t] = set() if decision is None else {i.symbol for i in decision.weights}
+        if trend.is_month_end(t):
+            self.rankings[syn.iso(t)] = trend.month_end_ranking(history, self.inner.listed)
+            self.universes[syn.iso(t)] = [m.symbol for m in self.inner.members]
+        return decision
+
+
+def probed_run(config, view):
+    """``trend.run``'s steps on ``view``, with a probe around the strategy."""
+    names = trend.series_needed(config, view.list_series())
+    listed = trend.listed_pairs(view, names)
+    market = trend.load_market(config, view, names)
+    rows = {name: series.rows for name, series in market.series.items()}
+    probe = ListingProbe(trend.strategy_for(config, rows, listed))
+    result = backtest(probe, market, Window.from_configuration(config),
+                      Costs.from_configuration(config))
+    return {"listing": view.list_series(), "names": names, "listed": listed,
+            "probe": probe, "result": result}
+
+
+@pytest.fixture(scope="module")
+def listing_runs(tmp_path_factory):
+    """H1-01 twice on the synthetic manifests, each through the registered loader and the
+    runner's DataView: as a trial to 2025-12-31 on the development manifest alone, and as
+    the holdout run to 2026-02-28 on both (section 11, item 5), whose listing adds NEW."""
+    store, manifests = syn.listing_world(tmp_path_factory.mktemp("listing"))
+    trial = syn.configuration("H1-01", "2025-09-01", "2025-12-31")
+    holdout = syn.configuration("H1-01", "2025-09-01", "2026-02-28", kind_override="holdout")
+    with inside_ledger_entry(ENTRY):
+        development = probed_run(trial, DataView(DatasetLoader(manifests[DEVELOPMENT], store)))
+        pinned = trend.run(trial, DataView(DatasetLoader(manifests[DEVELOPMENT], store)))
+        with inside_unsealed_run(UNSEAL):
+            both = DatasetLoader(manifests[DEVELOPMENT], store, holdout=manifests[HOLDOUT])
+            holdout_run = probed_run(holdout, DataView(both))
+    return {"development": development, "pinned": pinned, "holdout": holdout_run}
+
+
+def test_the_universe_on_given_dates_is_ranked_from_the_listed_series(listing_runs):
+    """Section 6, steps 1 to 3, at each month end of both runs, from what the manifests
+    list: the ranking and the universe worked out by hand above, and each month-end
+    decision naming exactly its universe (the 2025-12 month-end universe from 2026-01-01
+    in the holdout run, section 11, item 5)."""
+    development, holdout = listing_runs["development"], listing_runs["holdout"]
+    assert holdout["probe"].rankings == RANKINGS
+    assert holdout["probe"].universes == UNIVERSES
+    dev_months = [m for m in RANKINGS if m < "2026"]
+    assert development["probe"].rankings == {m: RANKINGS[m] for m in dev_months}
+    assert development["probe"].universes == {m: UNIVERSES[m] for m in dev_months}
+    for run in (development, holdout):
+        for month, members in run["probe"].universes.items():
+            assert run["probe"].named[syn.ms(*map(int, month.split("-")))] == set(members)
+    # Only spot klines of USDT pairs, and for H1-01 no four-hour bars or funding, are read:
+    # ALPHABTC (the largest volume of all) and the perpetual's series are listed only.
+    for run in (development, holdout):
+        assert {"spot/klines/ALPHABTC/1d", "um/klines/ALPHAUSDT/1d",
+                "um/fundingRate/ALPHAUSDT"} <= set(run["listing"])
+        assert all(n.startswith("spot/klines/") and "USDT/" in n and n.endswith(("/1d", "/15m"))
+                   for n in run["names"])
+    assert sum(r != 0.0 for _, r in development["result"].returns) > 100, "it traded"
+
+
+def test_a_pair_archived_only_in_the_holdout_never_enters_a_development_decision(
+        listing_runs):
+    """NEW is pinned by the holdout manifest alone, from 2026-01-01. The holdout run lists
+    and loads it, its coverage starts at the holdout, and no decision before 2026-01-01
+    ranks it, names it or trades it; once a bar of it has closed it is ranked (2026-02-01)."""
+    development, holdout = listing_runs["development"], listing_runs["holdout"]
+    new = "spot/klines/NEWUSDT/1d"
+    assert set(holdout["listing"]) - set(development["listing"]) == {new}
+    assert new in holdout["names"] and holdout["listed"]["NEWUSDT"] == HOLDOUT_START
+    assert "NEWUSDT" not in development["listed"]
+    before = {t: named for t, named in holdout["probe"].named.items() if t < HOLDOUT_START}
+    assert len(before) == 122 and not any("NEWUSDT" in named for named in before.values())
+    assert [m for m, ranked in holdout["probe"].rankings.items() if "NEWUSDT" in ranked] == [
+        "2026-02-01"]
+    assert not any(o.symbol == "NEWUSDT" for o in holdout["result"].orders)
+
+
+def test_the_development_months_rank_the_same_whether_or_not_holdout_pairs_are_listed(
+        listing_runs):
+    """Section 11, item 5: the holdout run, whose listing holds NEW, ranks every
+    development month end exactly as the development run, whose listing does not, and
+    decides and returns exactly the same to 2025-12-31. The pinned ``run`` returns what
+    the probed run returns."""
+    development, holdout = listing_runs["development"], listing_runs["holdout"]
+    dev, hold = development["probe"], holdout["probe"]
+    assert dev.rankings == {m: r for m, r in hold.rankings.items() if m < "2026"}
+    assert dev.universes == {m: u for m, u in hold.universes.items() if m < "2026"}
+    assert dev.named == {t: n for t, n in hold.named.items() if t < HOLDOUT_START}
+    returns = development["result"].returns
+    assert len(returns) == 122 and holdout["result"].returns[:122] == returns
+    assert listing_runs["pinned"] == returns
 
 
 def test_only_the_holdout_run_reads_past_the_development_period():
     rows = {}
     past = syn.configuration("H1-01", "2025-12-01", "2026-01-01")
     with pytest.raises(SimulationError, match="at the latest"):
-        trend.strategy_for(past, rows)
-    assert isinstance(trend.strategy_for({**past, "kind": "holdout"}, rows), trend.Trend)
+        trend.strategy_for(past, rows, {})
+    assert isinstance(trend.strategy_for({**past, "kind": "holdout"}, rows, {}), trend.Trend)
     for cid in ("B-H1", "C-H1"):
         config = syn.configuration(cid, "2025-12-01", "2026-01-01",
                                    seed=0 if cid == "C-H1" else None)
         with pytest.raises(SimulationError, match="at the latest"):
-            trend.strategy_for(config, rows)
+            trend.strategy_for(config, rows, {})
 
 
 def test_a_configuration_runs_only_as_its_registered_kind():
     rows = {}
     with pytest.raises(SimulationError, match="benchmark"):
-        trend.strategy_for({**h1("B-H1"), "kind": "trial"}, rows)
+        trend.strategy_for({**h1("B-H1"), "kind": "trial"}, rows, {})
     with pytest.raises(SimulationError, match="trial, sensitivity or holdout"):
-        trend.strategy_for({**h1("H1-01"), "kind": "control"}, rows)
+        trend.strategy_for({**h1("H1-01"), "kind": "control"}, rows, {})
     with pytest.raises(SimulationError, match="not an H1 configuration"):
-        trend.strategy_for({**h1("H1-01"), "id": "H2-01"}, rows)
+        trend.strategy_for({**h1("H1-01"), "id": "H2-01"}, rows, {})
