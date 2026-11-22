@@ -105,7 +105,12 @@ execution price. The figures come only from the resolved configuration's `costs`
 the registration sets to a fee of 10 bps and slippage of 2 bps a side for every trial,
 benchmark and control, and to the sensitivity total less 2 bps plus 2 bps for a
 sensitivity run. The engine has no default, so huginn's old 5 plus 2 bps cannot reach a
-run. Tests show a round trip on one leg costs 24 bps and a carry round trip 48 bps.
+run through it. That holds for `run_backtest`, which reads the costs and the window from
+the configuration it is given. The pinned function's returns are taken on trust, and so
+are any costs and window it passes to `backtest` itself: the engine is not on the path
+between the strategy and the ledger, and changing any of them needs code visible in the
+committed diff (security review of PR 61, round 4, L4). Tests show a round trip on one
+leg costs 24 bps and a carry round trip 48 bps.
 
 **Marks (section 5).** Equity at each 00:00 is cash plus each spot position at its daily
 close plus each perpetual position's unrealised profit or loss at the perpetual's own
@@ -342,7 +347,24 @@ before the strategy's module runs: every module of `norse_research.sim` and
 its namespace through `__dict__`, every class in them is an `EngineClass` whose class
 attributes cannot change once sealed, and their module-level tables are read-only
 (`MappingProxyType`) in the source. An engine changed by any of those routes therefore
-fails its run, and the run is ledgered as failed. Applying the review showed that a
+fails its run, and the run is ledgered as failed. Round 4 of the review found routes past
+the seal that need none of them, each confirmed in the runner: the engine's own
+`formats.build`, which wrote into a sealed module; the builtins module, reachable as
+`enum.bltns`; string annotations, which `typing` and `functools` evaluate; and frames,
+reached from a generator's `gi_frame`, which led to the engine's live run, the runner's
+payload and the audit hook's own state. `build` now gives attributes only to the
+engine's own frozen objects while they are built. The allowlist holds only
+`__future__`, `collections.abc`, `math`, `datetime` and the engine, and a test walks
+every attribute path the check accepts from them, failing on any route to the
+builtins, a frame or code object, or a helper that evaluates text. The check refuses
+the frame names, and the runner's audit hook refuses the four ways in to a frame and
+every use of the garbage collector. The metaclass refuses a subclass of an engine class
+made outside the engine, or made at all once the engine is sealed, under any name and
+by any route (`type`, `__build_class__`, a class statement). The loader's zip reader is
+held under private names. A `str.format` field name still walks attributes inside a
+string, dunders and closure cells included, so it can show a view's rows not yet known;
+in a backtest the strategy already holds those rows in the market it built, and nothing
+read that way changes the run. Applying the review showed that a
 dunder in the strategy's source is not the only way past a seal: `functools.update_wrapper`,
 `functools.wraps` and `enum.global_enum` take attribute or module names as strings and
 write into what they find, and each replaced the fill price in a sealed run. The sealed

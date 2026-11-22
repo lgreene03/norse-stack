@@ -4,6 +4,7 @@ data contract against the development manifest."""
 
 from __future__ import annotations
 
+import ast
 import json
 import shutil
 import subprocess
@@ -184,15 +185,31 @@ def test_the_engine_is_reachable_through_the_strategy_allowlist():
                               "norse_research.strategies.h1.example") != []
 
 
+# The standard library the engine binds names from. A strategy reaches these only as the
+# names the engine binds, and test_strategy_reach.py walks every such path (security
+# review of PR 61, round 4): the engine may use more than strategies may import, so
+# long as nothing it hands out reaches further.
+ENGINE_STDLIB = frozenset({"__future__", "bisect", "collections.abc", "dataclasses", "datetime",
+                           "heapq", "itertools", "math"})
+
+
 def test_the_engine_imports_nothing_a_strategy_may_not():
-    """The engine sits behind the allowlist, so it reaches only the allowlist itself,
-    its own modules and the pure universe ranking (G0.6): no store, loader, path,
-    socket or process module a strategy could reach through it (threat T13)."""
+    """The engine reaches only a fixed set of the standard library, bound by name, its
+    own modules, ``formats`` and the pure universe ranking (G0.6): no store, loader,
+    path, socket or process module a strategy could reach through it (threat T13)."""
     for path in sorted((PACKAGE / "sim").glob("*.py")):
         name = f"norse_research.sim.{path.stem}" if path.stem != "__init__" else "norse_research.sim"
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                raise AssertionError(f"{path.name}: binds a whole module, {node.names[0].name}")
+            if isinstance(node, ast.ImportFrom) and not node.level:
+                assert node.module in ENGINE_STDLIB, f"{path.name}: from {node.module}"
         problems = disallowed_imports(path.read_text(), name, path.stem == "__init__",
                                       ["research/norse_research/sim"])
         problems = [p for p in problems if "norse_research.universe" not in p]
+        problems = [p for p in problems
+                    if not any(f"from {m} import" in p for m in ENGINE_STDLIB)]
         # The engine's own classes build on formats.Frozen and EngineClass; the rule
         # against subclassing a class from this package is about strategies (E1).
         problems = [p for p in problems if "imported from this package" not in p]

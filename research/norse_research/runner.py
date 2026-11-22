@@ -13,13 +13,15 @@ Before the strategy module is executed, an audit hook is installed: the process 
 read the interpreter's own library, the committed code it was given, and the dataset
 files the registered manifest pins, read-only, and nothing else; it may open no socket
 and start no process. The strategy's module-level code runs under the hook too. The
-hook deters accidents, not intent: committed strategy code that reaches the hook's
-state through frames or the garbage collector can disable it (security review round 3,
-R1), so it is not a sandbox, and the control against a deliberate escape is that the
-code is committed, recorded in the ledger and reviewed (threat T13). Also before the
-strategy module runs, the engine it may import is sealed (``seal_engine``): its
-modules, classes and tables cannot be changed for the run. The result goes back over
-standard output as one JSON line, the last.
+hook refuses frames (``gi_frame``, ``cr_frame``, ``ag_frame``, ``tb_frame``) and the
+garbage collector too, since both reached the engine's live run, the runner's payload
+and the hook's own state (security review round 3, R1; PR 61, round 4, M1), and the
+source check refuses those names before anything runs. It is still not a sandbox:
+Python cannot be sealed from inside itself, and the control against a deliberate
+escape is that the code is committed, recorded in the ledger and reviewed (threat
+T13). Also before the strategy module runs, the engine it may import is sealed
+(``seal_engine``): its modules, classes and tables cannot be changed for the run. The
+result goes back over standard output as one JSON line, the last.
 
 For the holdout run alone (G1.6), the payload also names the committed holdout
 manifest and the unseal entry: the loader is then given the holdout manifest, its
@@ -48,6 +50,10 @@ _BLOCKED_EVENTS = (
     "glob.", "pty.", "fcntl.", "mmap.", "syslog.",
 )
 RESULT_PREFIX = "norse-strategy-result "
+# The four ways in to a frame; each raises ``object.__getattr__`` before it returns
+# (security review of PR 61, round 4, M1). From a frame, ``f_back``, ``f_locals``,
+# ``f_globals`` and ``f_builtins`` raise nothing, so the way in is what is refused.
+FRAME_ENTRIES = frozenset({"gi_frame", "cr_frame", "ag_frame", "tb_frame"})
 
 
 class StrategyIOBlocked(PermissionError):
@@ -63,7 +69,10 @@ def _normal(path) -> str | None:
 
 def install_tripwire(roots: list[str], files: set[str]) -> None:
     """Allow read-only opens under ``roots`` and of exactly ``files``; refuse every
-    other file, socket and process event for the rest of this process."""
+    other file, socket and process event, every way in to a frame and every use of the
+    garbage collector, for the rest of this process. Frames and ``gc`` reached the
+    engine's live run, the runner's payload and this hook's own file set (security
+    review of PR 61, round 4, M1)."""
     prefixes = tuple(os.path.normpath(r).rstrip(os.sep) + os.sep for r in roots)
 
     def allowed(path) -> bool:
@@ -71,6 +80,10 @@ def install_tripwire(roots: list[str], files: set[str]) -> None:
         return text is not None and (text in files or text.startswith(prefixes))
 
     def hook(event: str, args: tuple) -> None:
+        if event == "object.__getattr__" and args[1] in FRAME_ENTRIES:
+            raise StrategyIOBlocked(f"a strategy run may not reach a frame ({args[1]})")
+        if event.startswith("gc."):
+            raise StrategyIOBlocked(f"a strategy run may not use {event}")
         if event == "open":
             path, mode, flags = args
             read_only = mode in ("r", "rb") or (
@@ -131,10 +144,11 @@ def seal_engine() -> list[str]:
     stops it at run time instead. Every module of the engine and ``formats`` becomes a
     ``FrozenModule``, every class in them refuses class-attribute changes
     (``formats.EngineClass``), and their module-level tables are read-only in the
-    source. Undoing any of it needs a dunder attribute, a forbidden builtin or one of
-    the standard library helpers that write by string name (``update_wrapper``,
-    ``wraps``, ``global_enum``), all of which the source check refuses. Returns the
-    names of the sealed modules."""
+    source. Undoing any of it needs a dunder attribute, a forbidden builtin, a frame or
+    one of the standard library helpers that write by string name, which the source
+    check refuses and, for frames and the garbage collector, the audit hook refuses
+    too; ``formats.build`` writes only to the engine's own frozen objects while they
+    are built. Returns the names of the sealed modules."""
     from . import formats
     from . import sim as _engine  # noqa: F401  imports every engine module before sealing
 

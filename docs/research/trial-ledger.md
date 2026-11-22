@@ -78,9 +78,12 @@ committed at HEAD (the package, the hypothesis's strategy paths and the manifest
 reads the daily returns back over a pipe. In that process an audit hook, installed before
 the strategy's module-level code runs, lets it read the interpreter's own library, the
 committed code it was given and the dataset files the registered manifest pins, read-only,
-and nothing else: no other file, socket or process. The hook deters accidents, not intent:
-the round 3 security review (R1) showed that committed strategy code reaching the hook's
-state through frames or the garbage collector can disable it, so the control against a
+and nothing else: no other file, socket or process. The round 3 security review (R1)
+showed that committed strategy code reaching the hook's state through frames or the
+garbage collector could disable it; since PR 61's round 4 the hook also refuses the four
+ways in to a frame (`gi_frame`, `cr_frame`, `ag_frame`, `tb_frame`) and every use of the
+garbage collector, and the source check refuses the frame names. It is still not a
+sandbox, since Python cannot be sealed from inside itself, so the control against a
 deliberate escape remains that the code is committed, ledgered and reviewed (T13).
 Nothing survives from one run to the next.
 

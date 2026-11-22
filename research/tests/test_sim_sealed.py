@@ -126,8 +126,6 @@ PROBE_RUN = '\n\ndef run(configuration, data_view):\n    return [("2021-03-01", 
 # Legitimate use: constructing engine objects, calling engine functions, reading its
 # tables and changing only what the strategy owns.
 USES_THE_ENGINE = '''
-from dataclasses import dataclass, field
-
 from norse_research.formats import INTERVAL_MS, Kline
 from norse_research.sim import (
     Costs,
@@ -140,9 +138,9 @@ from norse_research.sim import (
 )
 
 
-@dataclass
 class Mine:
-    seen: list = field(default_factory=list)
+    def __init__(self):
+        self.seen = []
 
 
 class Strategy:
@@ -526,3 +524,177 @@ def test_a_book_view_holds_no_reference_to_the_live_book():
                    or v is marks for v in values)
     assert {type(v).__name__ for v in values} == {"float", "mappingproxy", "frozenset"}
     assert Instrument("X", 0) not in view._carry  # a frozenset, not a live dict
+
+
+# --- security review of PR 61, round 4: its probes, as refusing tests -----------------
+
+FRAMES = """
+
+def caller_frame(depth):
+    box = []
+
+    def step():
+        yield box[0].gi_frame.f_back
+
+    box.append(step())
+    frame = next(box[0])
+    for _ in range(depth):
+        frame = frame.f_back
+    return frame
+
+
+class Wrapped:
+    def __init__(self, *args, **kwargs):
+        self.inner = Scripted(*args, **kwargs)
+        self.interval = self.inner.interval
+"""
+
+EVIL_RUN = """
+
+def run_evil(configuration, data_view):
+    return run_backtest(golden_strategy(Evil), configuration,
+                        Market.from_rows(golden_rows(), HORIZON))
+"""
+
+FILLED = "\n\ndef run_evil(configuration, data_view):\n    return run(configuration, data_view)\n"
+
+GOLDEN_TO_EVIL = """
+
+def run_evil(configuration, data_view):
+    if LEAK != b"HOLDOUT-STAND-IN":
+        raise AssertionError("not read")
+    return [("2021-03-01", 99.0), ("2021-03-02", 99.0), ("2021-03-03", 99.0)]
+"""
+
+SEALED_OUT = "StrategyIOBlocked"
+# name: (source, refused by the source check, the refusal the runner gives, or None if
+# only the source check refuses it)
+ROUND_4 = {
+    "E1 formats.build on a sealed engine module": (
+        "from norse_research.formats import build\nfrom norse_research.sim import execution\n\n"
+        "build(execution, vwap=lambda bar: 1.0)\n" + FILLED,
+        False, "build gives attributes to the engine's own frozen objects only"),
+    "E2 formats.build on an engine value object": (
+        "from norse_research.formats import build\nfrom norse_research.sim import Costs, Window,"
+        " backtest\n" + """
+
+def run_evil(configuration, data_view):
+    costs = Costs.from_configuration(configuration)
+    build(costs, fee_bps=0.0)
+    return backtest(golden_strategy(), Market.from_rows(golden_rows(), HORIZON),
+                    Window.from_configuration(configuration), costs).returns
+""", False, "build gives attributes to the engine's own frozen objects only"),
+    "F1 frames: the engine's book": (FRAMES + """
+
+class Evil(Wrapped):
+    def decide(self, history, book):
+        caller_frame(2).f_locals["self"].book.cash += 0.25
+        return self.inner.decide(history, book)
+""" + EVIL_RUN, True, SEALED_OUT),
+    "F2 frames: the engine's costs": (FRAMES + """
+from norse_research.sim import Costs
+
+
+class Evil(Wrapped):
+    def decide(self, history, book):
+        caller_frame(2).f_locals["self"].costs = Costs(0, 0)
+        return self.inner.decide(history, book)
+""" + EVIL_RUN, True, SEALED_OUT),
+    "F3 frames: a local of the engine's frame": (FRAMES + """
+
+class Evil(Wrapped):
+    def decide(self, history, book):
+        locals_ = caller_frame(2).f_locals
+        locals_["equity"] = locals_["equity"] * 1.5
+        return self.inner.decide(history, book)
+""" + EVIL_RUN, True, SEALED_OUT),
+    "B1 a frame's builtins: the fill price": (
+        "from norse_research.sim import execution\n\nB = (lambda: (yield))().gi_frame.f_builtins\n"
+        "B['getattr'](execution.execute_bar, '__globals__')['vwap'] = lambda bar: 1.0\n" + FILLED,
+        True, SEALED_OUT),
+    "B2 a frame's builtins: the engine unsealed": (
+        "from norse_research import formats\nfrom norse_research.sim import model\n\n"
+        "B = (lambda: (yield))().gi_frame.f_builtins\n"
+        "B['getattr'](formats.build, '__globals__')['_engine_sealed'] = False\n" + FILLED,
+        True, SEALED_OUT),
+    "B3 enum.bltns: the fill price": (
+        "import enum\n\nfrom norse_research.sim import execution\n\n"
+        "enum.bltns.getattr(execution.execute_bar, '__globals__')['vwap'] = lambda bar: 1.0\n"
+        + FILLED, True, None),
+    "B5 the garbage collector: the tripwire's own file set": (
+        "import enum\n\nSTANDIN = '@STANDIN@'\n_b = enum.bltns\n_gc = _b.eval(\"__import__('gc')\")\n"
+        "for _f in _gc.get_objects():\n"
+        "    if _b.getattr(_f, '__qualname__', '') == 'install_tripwire.<locals>.allowed':\n"
+        "        for _cell in _b.getattr(_f, '__closure__'):\n"
+        "            if _b.isinstance(_cell.cell_contents, set):\n"
+        "                _cell.cell_contents.add(STANDIN)\n"
+        "LEAK = _b.open(STANDIN, 'rb').read()\n" + GOLDEN_TO_EVIL, True, SEALED_OUT),
+    "T1 typing.get_type_hints: a string annotation evaluated": (
+        "import typing\n\nfrom norse_research.sim import execution\n\n\nclass Note:\n"
+        "    hint: \"getattr(execution.execute_bar, '__globals__').__setitem__('vwap', "
+        "lambda b: 1.0)\"\n\n\ntry:\n    typing.get_type_hints(Note)\nexcept TypeError:\n"
+        "    pass\n" + FILLED, True, None),
+    "T2 functools.singledispatch: a string annotation evaluated": (
+        "import functools\n\nfrom norse_research.sim import execution\n\n\n"
+        "@functools.singledispatch\ndef describe(x):\n    return x\n\n\n@describe.register\n"
+        "def _(x: \"getattr(execution.execute_bar, '__globals__').__setitem__('vwap', "
+        "lambda b: 1.0)\"):\n    return x\n" + FILLED, True, None),
+    "M1 frames at module level: the runner's payload": (FRAMES + """
+
+_runner = caller_frame(2)
+_runner.f_locals["payload"]["configuration"]["costs"]["fee_bps_per_side"] = 0
+""" + FILLED, True, SEALED_OUT),
+    "M2 frames: the tripwire's file set, then open()": (FRAMES + """
+
+STANDIN = "@STANDIN@"
+B = (lambda: (yield))().gi_frame.f_builtins
+caller_frame(2).f_locals["files"].add(STANDIN)
+LEAK = B["open"](STANDIN, "rb").read()
+""" + GOLDEN_TO_EVIL, True, SEALED_OUT),
+    "A1 a subclass of an engine class through an alias": (
+        "from norse_research.sim import Costs, Window, backtest\n\nK = Costs\n\n\nclass Free(K):\n"
+        "    def fee(self, quantity, price):\n        return 0.0\n" + """
+
+def run_evil(configuration, data_view):
+    return backtest(golden_strategy(), Market.from_rows(golden_rows(), HORIZON),
+                    Window.from_configuration(configuration), Free(10, 2)).returns
+""", False, "subclassed only by the engine"),
+    "A2 __build_class__ builds a subclass of an engine class": (
+        "from norse_research.sim import Costs\n\n\ndef body():\n    pass\n\n\n"
+        "Sub = __build_class__(body, 'Sub', Costs)\n" + FILLED, True, "subclassed only by the engine"),
+    "Z1 formats.ZipFile, the loader's parser": (
+        "from norse_research import formats\n\nZ = formats.ZipFile\n" + FILLED,
+        False, "has no attribute 'ZipFile'"),
+}
+
+
+def round_4_source(name: str, standin: Path) -> str:
+    from test_sim_engine import RUNNER_STRATEGY
+
+    source, _, _ = ROUND_4[name]
+    return RUNNER_STRATEGY + source.replace("@STANDIN@", str(standin))
+
+
+@pytest.mark.parametrize("name", sorted(ROUND_4))
+def test_a_round_4_probe_is_refused(name, code_root, tmp_path):
+    """Each route of the review, confirmed in the runner at 1d02908, is refused: by the
+    source check before anything runs, by the runner as it runs, or both (``build``'s
+    target check, the audit hook on frames and the garbage collector, the metaclass on
+    subclasses, the private name of the loader's zip reader)."""
+    standin = tmp_path / "standin.bin"
+    standin.write_bytes(b"HOLDOUT-STAND-IN")
+    source = round_4_source(name, standin)
+    _, by_source, refusal = ROUND_4[name]
+    problems = disallowed_imports(source, "norse_research.strategies.probe", False,
+                                  ["research/norse_research/strategies"])
+    if by_source:
+        assert problems, f"{name}: the source check accepted it"
+    if refusal is not None:
+        configuration = {
+            "window": {"first_return_day": "2021-03-01", "last_return_day": "2021-03-03",
+                       "days": 3},
+            "costs": {"fee_bps_per_side": 10, "slippage_bps_per_side": 2},
+        }
+        result = run_in_runner(code_root, tmp_path, source, configuration, function="run_evil")
+        assert result["ok"] is False, f"{name}: ran, {result.get('returns')}"
+        assert refusal in result["error"], result["error"]

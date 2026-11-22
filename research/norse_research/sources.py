@@ -8,8 +8,9 @@ genesis step read it as text:
   modules inside that hypothesis's own paths (security review N12), may not name
   ``open``, ``eval``, ``getattr``, ``setattr``, ``type`` and their kind at all, called or
   not (security review of PR 61, round 2), and may not touch a dunder attribute or a
-  name such as ``sys``, ``modules``, ``mro`` or ``attrgetter`` through which a module it
-  may not import, or a class's bases, could be reached (L4, N9);
+  name such as ``sys``, ``modules``, ``mro``, ``attrgetter`` or ``gi_frame`` through which
+  a module it may not import, a class's bases or a frame could be reached (L4, N9; PR
+  61, round 4);
 * nothing a module imports may be changed or reached behind: no assignment to or
   deletion of an imported name's attributes or items, no subclass of a class from this
   package, and no ``import norse_research.<x>`` or bare ``norse_research``, which would
@@ -24,9 +25,12 @@ genesis step read it as text:
   what enters the configuration hash is read from the committed text (M4, N1, N4).
 
 Python cannot be sandboxed from inside itself: this stops accidents and makes evasion
-visible in the diff, and the runner stands behind it twice, with its audit hook for
-files, sockets and processes, and by sealing the engine, so that an engine module,
-class or table changed through a name this check cannot follow fails the run.
+visible in the diff, and the runner stands behind it, with its audit hook for files,
+sockets, processes, frames and the garbage collector, and by sealing the engine, so
+that an engine module, class or table changed through a name this check cannot follow
+fails the run. What a string can name is not parsed here: ``str.format`` field names
+walk attributes, dunders and closure cells included, and read what they reach (round 4,
+L1), which can show the rows a strategy already holds but not change the run.
 """
 
 from __future__ import annotations
@@ -37,11 +41,15 @@ from typing import Any
 
 from .ledger import LedgerError
 
+# What strategies need, and nothing that reaches more (security review of PR 61, round
+# 4, H2): ``enum`` held the builtins module as ``enum.bltns``, ``typing`` and
+# ``functools`` evaluate string annotations, and ``fractions``, ``statistics`` and
+# ``dataclasses`` reached those or ``types`` and ``random``. ``math`` and ``datetime``
+# stay because the walk in test_strategy_reach.py finds nothing sensitive through them;
+# that test judges any new entry by what it reaches, not by its name.
 ALLOWED_IMPORTS = frozenset(
     {
-        "__future__", "abc", "bisect", "collections", "collections.abc", "dataclasses",
-        "datetime", "decimal", "enum", "fractions", "functools", "heapq", "itertools",
-        "math", "numbers", "operator", "statistics", "typing",
+        "__future__", "collections.abc", "datetime", "math",
         "norse_research.formats",
         # The simulation engine (G1.9). H1's and H2's strategy paths may not overlap
         # (genesis, review N12), so the engine both share sits in the harness's paths
@@ -51,24 +59,33 @@ ALLOWED_IMPORTS = frozenset(
 )
 # Refused wherever the name appears, called or not (security review of PR 61, round 2):
 # ``s = setattr``, ``map(setattr, ...)`` or ``imp = __import__`` would otherwise undo
-# every other rule. A builtin is reachable only by its bare name or through
-# ``builtins`` and ``__builtins__``, both refused, so this is sound. ``type`` builds a
-# class at run time, a subclass of an engine class among them.
+# every other rule. ``type`` and ``__build_class__`` build a class at run time (round 4,
+# A2). A name alone does not keep a builtin out of reach: round 4 found the builtins
+# module as ``enum.bltns`` and in every frame's ``f_builtins``, so the allowlist is held
+# to what test_strategy_reach.py's walk shows harmless, and frames are refused below
+# and by the runner's audit hook.
 FORBIDDEN_BUILTINS = frozenset(
     {"open", "__import__", "eval", "exec", "compile", "breakpoint", "input", "getattr",
-     "setattr", "delattr", "vars", "globals", "locals", "type"}
+     "setattr", "delattr", "vars", "globals", "locals", "type", "__build_class__"}
 )
 # ``mro`` is the one way to a class's bases without a dunder; the bases of the archive's
 # row types (``formats.Kline``, ``formats.Funding``) are not sealed engine classes.
 # ``update_wrapper``, ``wraps`` and ``global_enum`` take attribute or module names as
 # strings and write into what they find: ``update_wrapper(f, x, (), ("__globals__",))``
 # rewrites the namespace of the module ``f`` was defined in, which no run-time seal can
-# stop, since a function's globals are that namespace itself.
+# stop, since a function's globals are that namespace itself. The frame and code names
+# reach every caller's frame from a generator, coroutine or traceback, and through it
+# the engine's live run, its locals and the runner's own state (round 4, M1); the runner's
+# audit hook refuses the four ways in to a frame as well, before any of them returns.
+FRAME_NAMES = frozenset(
+    {"gi_frame", "cr_frame", "ag_frame", "tb_frame", "f_back", "f_locals", "f_globals",
+     "f_builtins", "f_code", "gi_code", "cell_contents"}
+)
 FORBIDDEN_NAMES = frozenset(
     {"sys", "modules", "os", "io", "builtins", "importlib", "subprocess", "socket",
      "pathlib", "shutil", "inspect", "attrgetter", "methodcaller", "gc", "ctypes", "mro",
      "update_wrapper", "wraps", "global_enum"}
-)
+) | FRAME_NAMES
 DECLARED = ("CONFIGURATIONS", "PARAMETERS", "DEFAULTS")
 
 

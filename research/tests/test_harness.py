@@ -657,7 +657,7 @@ def test_a_strategy_cannot_change_or_reach_behind_the_code_it_imports():
         "def run(config, data):\n"
         "    book = Book(cash=0.0)\n    book.cash = 1.0\n    weights = {}\n"
         "    weights['X'] = 0.5\n    del weights['X']\n    return []\n",
-        "from dataclasses import dataclass\n@dataclass\nclass Mine:\n    x: int = 0\n",
+        "import math\n\n\nclass Mine:\n    def __init__(self):\n        self.x = math.sqrt(4.0)\n",
     )
     for source in accepted:
         assert problems(source) == [], source
