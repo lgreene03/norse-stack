@@ -1,16 +1,229 @@
 # Gate calibration (G1.7)
 
-Owner: quant. Written 2026-11-21. The study is
+Owner: quant. First written on 2026-11-21 for `prereg-v1`; rewritten on 2026-11-22 for
+`prereg-v2`, before its rerun. The study is
 [research/norse_research/calibration.py](../../research/norse_research/calibration.py), its
 tests [research/tests/test_calibration.py](../../research/tests/test_calibration.py), and
-the full run's output
+the rerun's output
 [research/calibration/gate-calibration-results.json](../../research/calibration/gate-calibration-results.json).
 Everything here was computed on synthetic data. No price, return or performance figure was
 computed on market data, nothing was read from the development or holdout files, and the
 dataset store was never opened; the one repository file the study reads is
-`docs/preregistration.json`, for the registered windows, grid sizes and budget.
+`docs/preregistration.json`, for the registered windows, grid sizes and budget and for the
+ids of the families `gate.calibration` judges.
 
-## Verdict
+## Status
+
+This report covers two full runs of one study, on the same families and at the same seed.
+
+**The `prereg-v1` run (2026-11-21), kept as disclosed history.** It calibrated the gate as
+`prereg-v1` registered it, with V the sample variance of every selectable run's Sharpe ratio
+across both hypotheses, against the clause "detects a planted Sharpe of 1.5". The gate was safe,
+passing at most 13 of 1,000 no-skill ledgers in any family, but it did not detect a planted 1.5:
+the planted hypothesis passed development in 144 to 335 of 1,000 ledgers in the four families,
+where more than 500 were required. Its results file is
+[gate-calibration-results-prereg-v1.json](../../research/calibration/gate-calibration-results-prereg-v1.json),
+SHA-256 `2eb307f3da3b425a036bf711207e2670c9641381e1a369d85094ad70037c4d9e`, and its report is
+"History: the `prereg-v1` run" below. On its findings the owner revised V (decision D22) and
+decided what a failed rerun means (D24).
+
+**The rerun under `prereg-v2`.** It calibrates the gate as `prereg-v2` registers it, with V the
+null variance 1/(T - 1) of the candidate's window, against the restated clause in section 10 of
+[PREREGISTRATION.md](../PREREGISTRATION.md) and `gate.calibration` in
+[preregistration.json](../preregistration.json) ("The clause the rerun is judged by", below).
+The rerun is decisive. The lead tags `prereg-v2` once it is recorded, whatever it finds (section
+16); if the gate does not meet the clause, `prereg-v2` is tagged as it stands, the gate is not
+revised again in this iteration, and the iteration closes NOT JUDGED (D24). So the study was
+fixed, committed and pushed before the run started, and nothing in it, in the results or in the
+thresholds was changed after it. Its verdict is the first paragraph of "Results of the rerun",
+which the run itself wrote.
+
+## The clause the rerun is judged by
+
+Fixed on 2026-11-22, before the rerun, in this section and in the code (`calibration.verdict`),
+and committed and pushed before the run started; the run record under "Reproduce" names that
+commit. Section 10, "Calibration", registers it, and `gate.calibration` (`condition`,
+`no_skill`, `detection`), which governs, lists the families by id:
+
+> No strategy is judged until both halves hold, at N = 30, in the families of G1.7's study at
+> #66's commit c2365ee (`norse_research.calibration.FAMILIES`, seed 20261121, 1,000 ledgers
+> each), unchanged for the rerun except V, which becomes the null variance, and the detection
+> constants, 2.0 in place of 1.5. No skill: in every one of the 17 no-skill families
+> separately, the gate produces a holdout candidate in at most 50 of 1,000 simulated ledgers
+> (5%); the two serially correlated families are reported only. Detection: in each of the four
+> single-planted families at an annualised Sharpe ratio of 2.0 (`single-H1-s2-low`,
+> `single-H1-s2-high`, `single-H2-s2-low` and `single-H2-s2-high`), the planted hypothesis
+> passes development (its candidate meets DEV-1 to DEV-5) in more than 500 of the 1,000
+> ledgers; the minimum of the four decides.
+
+How the study reads it:
+
+1. **Which families.** `calibration.verdict` takes the 17 `no_skill_families` and the four
+   `detection_families` by the ids `gate.calibration` lists, read from
+   `docs/preregistration.json`, never by a family's attributes, so no family added later could
+   join either half. The two `sensitivity_families` (`ar0.1-w0-a0` and `ar0.1-w0.9-a0.9`, every
+   shock AR(1) at 0.1) are outside "every one of the no-skill families" and reported only. A
+   results file without every one of the 21 judged families gives no verdict.
+2. **The no-skill half.** "Passes" is the gate producing a holdout candidate, the full
+   development gate including the candidate rule (reading 1 of the `prereg-v1` run,
+   unchanged). "At most 50 of 1,000" is `rate <= FALSE_PASS_LIMIT` with 0.05, in every family
+   separately.
+3. **The detection half.** The metric is `planted_passes` at N = 30, the one committed in
+   9ac814f: for a single-planted family, the planted hypothesis's candidate meets DEV-1 to
+   DEV-5. "More than 500 of the 1,000" is `rate > DETECTION_POWER` with 0.5, so 500 fails and
+   501 passes; the minimum decides because every one of the four must clear it. Whether that
+   candidate is the planted configuration is reported beside it (`planted_column_passes`) and
+   not judged.
+4. **What is reported only.** Power at 1.5 (the four single-planted families at 1.5), at
+   N = 14, for an edge shared within one hypothesis and for one shared by both; HOLD-1 end to
+   end; the serially correlated families; and `prereg-v1`'s pooled V at N = 30 as a
+   counterfactual (`counterfactual_pooled_v`), which no verdict reads.
+
+**What changed from c2365ee, and what did not.** Changed: V at N = 30 and N = 14 is the null
+variance, as `gate.trial_sharpe_variance` returns it (`judge`'s default); `DETECTION_SHARPE` is
+2.0; `verdict` selects by the registered ids, its 1.5 keys are renamed (`detection_planted_passes`
+and `detection_met`) and it adds `complete`, `no_skill_gate_passes` and
+`weakest_detection_family`; the unregistered counterfactual with V over each hypothesis's own
+runs is dropped, and `prereg-v1`'s pooled V is kept as a labelled counterfactual; and the results
+section of this report is written by the run (`--report`) and checked by a test against the
+committed file. Not changed: the 54 families, the seed 20261121, the 1,000 ledgers per family,
+the simulation and its constants, `PLANTED_COLUMN` and `PBO_ALWAYS`.
+`test_the_families_are_c2365ee_s_under_the_ids_gate_calibration_lists` pins them: every family's
+spec to their SHA-256 at c2365ee, each of the 23 registered families parameter by parameter, and
+the constants. The seed is kept so that the rerun pairs ledger for ledger with the `prereg-v1`
+run; with the gate fixed, it is no degree of freedom. Rebasing #66 onto main after #65 gave its
+three commits new hashes (8e89a02, 9ac814f and c2365ee became 5cd0c89, 515be05 and d888443)
+without changing a byte of the study; the pin is to c2365ee's content.
+
+**What had been seen before the rerun.** The full `prereg-v1` run of every family under the
+pooled V; section 12's analytic figures under the null V; and the quant role's reduced check of
+the revision (normal returns only, DEV-4 and DEV-5 taken as met), which found false passes in at
+most 0.14% of no-skill ledgers and a single planted 2.0 passing in 88% to 94% (section 15, item
+24). The rerun is the first full run of the study under the null V. Before it, the null-V code
+ran on the study's own ledgers only in tests: ledger 0 of `null-w0.9-a0.9` and ledger 500 of
+`single-H1-s1.5-high` in the equivalence test (neither hypothesis passes, and H1 passes, as under
+the pooled V), and two ledgers each of `null-w0.99-a0.99` and `single-H2-s2-high` in the smoke
+test, whose outcomes no test asserts or prints. The ledger on which the two forms of V disagree
+was found in a test-only family, whose id seeds ledgers outside the study.
+
+## What was calibrated
+
+The gate as section 10 registers it under `prereg-v2` and `norse_research.gate` implements it
+(G1.5 and G1.6, as merged in #56 and #59, with D21 and D22 as merged in #65): each hypothesis's
+candidate is its selectable run with the highest DEV-1 z, ties to the earlier configuration; it
+must meet DEV-1 to DEV-5; the holdout candidate is the passing hypothesis's candidate with the
+higher z, ties to H1. N is the registered budget of 30 (and 14, every configuration run once, as
+a sensitivity). V is the null variance 1/(T - 1) of the candidate's window for DEV-1, and of the
+excess series' window for DEV-2 (decision D22): it reads no run, so a real edge does not raise
+its own bar and neither hypothesis's bar depends on the other's runs. DEV-2 is volatility matched
+for H1 and beta matched for H2 (D15). The PBO matrices have 8 and 6 columns over the windows of
+section 3: H1 2,802 days from 2018-05-01, H2 2,185 days from 2020-01-08, both to 2025-12-31,
+with calendar years for DEV-4 taken from those dates. A simulated ledger **passes** when it has
+a holdout candidate, that is when at least one hypothesis passes development; that is the
+decision that would open the holdout. HOLD-1 is reported separately as an end-to-end figure, on
+304 further simulated days of the holdout candidate's own process.
+
+**How the gate is called.** Every public function of `norse_research.gate` takes only a ledger the
+gate itself issued (`gate_ledger`, or `_issue` in tests), so none can be called on a simulated
+return matrix, and writing 54,000 hash-chained ledgers would test the ledger rather than the
+statistics. The study therefore calls the statistics those functions are built from, on the same
+inputs in the same order: `gate.daily_sharpe`, `gate._deflated` (the DSR and its z, the
+zero-variance rule included), `sharpe.null_sharpe_variance` for V, as
+`gate.trial_sharpe_variance` returns it, `gate.EXCESS_MATCH` with `benchmark.excess_returns` for
+DEV-2, `cscv.cscv` with `GATE_BLOCKS` for DEV-3, `gate.sharpe_without_largest` for DEV-5 and
+`gate.Development` for every threshold and inequality. Three pieces are written out because their
+gate versions take the ledger: DEV-4 (`gate.sharpe_without_each_year`), the candidate rule
+(`gate.candidates`) and the holdout candidate rule (`gate._holdout_candidate`), each with the
+gate's own expression. To prove the composition is the gate,
+`test_the_study_judges_a_ledger_exactly_as_the_gate_does` writes three simulated ledgers into
+in-memory ledgers (all 14 configurations, both benchmarks and 16 failed reruns, so N is 30), runs
+`gate.development` and `gate.holdout_candidate` on them, and requires the same candidate and bit
+for bit the same DSR, z, excess DSR, PBO, DEV-4 and DEV-5 values and the same holdout candidate:
+for a ledger where neither hypothesis passes, one where H1 does, and one, from a test-only family,
+where H1 passes under the null V but would fail DEV-1 and DEV-2 under `prereg-v1`'s pooled V, so
+that a stale V fails the test on the decision itself. The study also checks, on every ledger,
+that the z it ranks by equals the z `gate._deflated` returns for the candidate.
+
+HOLD-1 has no implementation in the package yet (G3.2), so `calibration.hold_1` writes section
+10's formula out; the end-to-end figures rest on it and are reported, never judged.
+
+## The simulated ledgers
+
+Each ledger holds the 14 configurations' daily returns on the registered calendar (H1's window,
+H2's inside it, then the 304 holdout days) and the two benchmarks' returns. Configuration j of
+hypothesis h on day t returns
+
+    r = SIGMA * ( alpha + l_h * b_h(t) + v(t) * (a * F(t) + b * G_h(t) + d * e_j(t)) ),
+
+with b_h the standardised return of h's benchmark (its drift included, so a loading carries
+market exposure without skill), F a factor common to both hypotheses, G_h a factor per
+hypothesis and e_j one per configuration, all of unit variance. The loadings are solved from
+the family's correlations: within a hypothesis l_h^2 + a^2 + b^2, across the two l_1 l_2 c + a^2
+with c = 0.9 the correlation of B-H1 and B-H2 on common days, and l_h with the configuration's
+own benchmark. SIGMA is 1% a day and the benchmarks' volatility 3%; every statistic in the gate is
+scale free. alpha is 0 without skill and the planted annualised Sharpe ratio over the square root
+of 365 where an edge is planted; with the benchmarks driftless, as in every power family, the
+planted figure is both the configuration's Sharpe ratio and its alpha's. Shocks are normal, or
+Student t with 5 degrees of freedom (kurtosis 9); v is 1, or a persistent volatility regime shared
+by every series (log volatility AR(1) with coefficient 0.98 and standard deviation 0.4, scaled so
+that E[v^2] = 1); in two sensitivity families every shock is AR(1) with coefficient 0.1. A test
+checks the realised correlations, volatilities, shock shapes and planted means against these
+targets.
+
+**The families.** 54 families of 1,000 ledgers each.
+
+The 17 **no-skill families** are the ones the no-skill half rests on. Nine are what section 10
+requires: normal, serially independent returns, benchmarks unrelated to the strategies and
+without drift, correlated within each hypothesis at 0, 0.5, 0.9, 0.99 and 0.999 and across the
+two from 0 up to the within value, including the near-identical families. Three give the
+configurations market exposure without skill (H1 correlated 0.7 with B-H1, as a long and flat
+rule is; H2 0.2 or 0.5 with B-H2) in a market with an annualised Sharpe ratio of 0.5 or 1.0, the
+case DEV-2 exists for and the one that calibrates D15's beta-matched excess. Two are the power
+families' layout with nothing planted. Three add fat tails and a volatility regime at
+correlations 0, 0.9 and 0.99. Two **sensitivity families**, serially correlated returns, are
+reported but not judged.
+
+The 35 **power families** plant an edge in one hypothesis, the other without skill. H1's
+configurations are correlated 0.5 with B-H1, so that their volatility-matched excess has exactly
+the planted Sharpe ratio (section 12's formula (S - S_B) / sqrt(2 - 2 rho) with S_B = 0 and rho =
+0.5); H2's are uncorrelated with B-H2, so that the beta-matched excess has it too. For each
+hypothesis, a **single planted column** (the first registered configuration) or a **shared edge**
+(every configuration of the hypothesis), at Sharpe ratios of 1.0, 1.5 and 2.0, with correlations
+of 0.5 within and 0 across ("low") or 0.9 within and 0.5 across ("high"); a single column also at
+2.5 and 3.0; and, for contrast, both hypotheses sharing one edge of the same size. The four
+single-column families at 2.0 are the detection families.
+
+**Seeds.** Ledger i of family f draws from Python's `random.Random("20261121/f/i")`, so any ledger
+can be rebuilt alone (`calibration.simulate`). The study seed 20261121 was fixed before the first
+run.
+
+**What the study computes.** On every ledger: the outcome at N = 30 (registered) and at N = 14,
+both under the registered null V, and, as a counterfactual that is not the gate, the outcome at
+N = 30 under `prereg-v1`'s pooled V (`counterfactual_pooled_v`). With the seed and the families
+unchanged, that counterfactual should reproduce the `prereg-v1` run's N = 30 figures exactly,
+family by family, which checks that the simulation did not change. The PBO is computed for a
+hypothesis whenever it can decide the outcome (its candidate meets every other criterion under
+any of the three judgements) and always for the first 200 ledgers of each family, from which
+DEV-3's own pass rate is reported; where it is not computed the hypothesis fails another
+criterion anyway, so whether a ledger passes is exact for every ledger.
+
+## Results of the rerun (`prereg-v2`)
+
+<!-- results: begin. Generated from the results file by `python -m norse_research.calibration --report`; not edited by hand. -->
+The full rerun has not been run at this commit.
+<!-- results: end -->
+
+## History: the `prereg-v1` run (2026-11-21)
+
+This is the report of the first full run as it was committed in c2365ee (now d888443), kept as
+disclosed history. Only its headings, the link to its results file under that file's new name
+and one figure have changed: section 12's four-in-five Sharpe ratio for H2 at N = 30 reads 1.87
+in two places where it read 1.86, as section 12 of PREREGISTRATION.md was corrected in
+`prereg-v2`. It describes the gate under `prereg-v1`: where it says "the registered V" or "the
+gate", read `prereg-v1`'s pooled V. Its "Own V" column is the counterfactual this rerun dropped.
+Its findings led to decision D22.
+
+### Verdict
 
 **The gate does not pass calibration as section 10 of
 [PREREGISTRATION.md](../PREREGISTRATION.md) words it. It is safe, but it is weak.** The verdict is
@@ -46,102 +259,7 @@ still open in time: change control under section 16 closes only at the first led
 genesis entry, and the genesis entry has not been written, so a `prereg-v2` is possible before any
 trial. Any change to the gate needs its own calibration run.
 
-## What was calibrated
-
-The gate as section 10 registers it and `norse_research.gate` implements it (G1.5 and G1.6, as
-merged in #56 and #59): each hypothesis's candidate is its selectable run with the highest DEV-1
-z, ties to the earlier configuration; it must meet DEV-1 to DEV-5; the holdout candidate is the
-passing hypothesis's candidate with the higher z, ties to H1. N is the registered budget of 30
-(and 14, every configuration run once, as a sensitivity). V is the sample variance of every
-selectable run's daily Sharpe ratio across both hypotheses with no floor, and DEV-2's V the same
-over the excess-return Sharpe ratios; DEV-2 is volatility matched for H1 and beta matched for H2
-(D15). The PBO matrices have 8 and 6 columns over the windows of section 3: H1 2,802 days from
-2018-05-01, H2 2,185 days from 2020-01-08, both to 2025-12-31, with calendar years for DEV-4
-taken from those dates. A simulated ledger **passes** when it has a holdout candidate, that is
-when at least one hypothesis passes development; that is the decision that would open the
-holdout. HOLD-1 is reported separately as an end-to-end figure, on 304 further simulated days of
-the holdout candidate's own process.
-
-**How the gate is called.** Every public function of `norse_research.gate` takes only a ledger the
-gate itself issued (`gate_ledger`, or `_issue` in tests), so none can be called on a simulated
-return matrix, and writing 54,000 hash-chained ledgers would test the ledger rather than the
-statistics. The study therefore calls the statistics those functions are built from, on the same
-inputs in the same order: `gate.daily_sharpe`, `gate._deflated` (the DSR and its z, the
-zero-variance rule included), `sharpe.cross_trial_sharpe_variance` for V, `gate.EXCESS_MATCH`
-with `benchmark.excess_returns` for DEV-2, `cscv.cscv` with `GATE_BLOCKS` for DEV-3,
-`gate.sharpe_without_largest` for DEV-5 and `gate.Development` for every threshold and
-inequality. Three pieces are written out because their gate versions take the ledger: DEV-4
-(`gate.sharpe_without_each_year`), the candidate rule (`gate.candidates`) and the holdout
-candidate rule (`gate._holdout_candidate`), each with the gate's own expression. To prove the
-composition is the gate, `test_the_study_judges_a_ledger_exactly_as_the_gate_does` writes two
-simulated families into in-memory ledgers (all 14 configurations, both benchmarks and 16 failed
-reruns, so N is 30), runs `gate.development` and `gate.holdout_candidate` on them, and requires
-the same candidate and bit-for-bit the same DSR, z, excess DSR, PBO, DEV-4 and DEV-5 values and
-the same holdout candidate, for a ledger where neither hypothesis passes and one where H1 does.
-The study also checks, on every ledger, that the z it ranks by equals the z `gate._deflated`
-returns for the candidate.
-
-HOLD-1 has no implementation in the package yet (G3.2), so `calibration.hold_1` writes section
-10's formula out; the end-to-end figures rest on it and are reported, never judged.
-
-## The simulated ledgers
-
-Each ledger holds the 14 configurations' daily returns on the registered calendar (H1's window,
-H2's inside it, then the 304 holdout days) and the two benchmarks' returns. Configuration j of
-hypothesis h on day t returns
-
-    r = SIGMA * ( alpha + l_h * b_h(t) + v(t) * (a * F(t) + b * G_h(t) + d * e_j(t)) ),
-
-with b_h the standardised return of h's benchmark (its drift included, so a loading carries
-market exposure without skill), F a factor common to both hypotheses, G_h a factor per
-hypothesis and e_j one per configuration, all of unit variance. The loadings are solved from
-the family's correlations: within a hypothesis l_h^2 + a^2 + b^2, across the two l_1 l_2 c + a^2
-with c = 0.9 the correlation of B-H1 and B-H2 on common days, and l_h with the configuration's
-own benchmark. SIGMA is 1% a day and the benchmarks' volatility 3%; every statistic in the gate is
-scale free. alpha is 0 without skill and the planted annualised Sharpe ratio over the square root
-of 365 where an edge is planted; with the benchmarks driftless, as in every power family, the
-planted figure is both the configuration's Sharpe ratio and its alpha's. Shocks are normal, or
-Student t with 5 degrees of freedom (kurtosis 9); v is 1, or a persistent volatility regime shared
-by every series (log volatility AR(1) with coefficient 0.98 and standard deviation 0.4, scaled so
-that E[v^2] = 1); in two sensitivity families every shock is AR(1) with coefficient 0.1. A test
-checks the realised correlations, volatilities, shock shapes and planted means against these
-targets.
-
-**The families.** 54 families of 1,000 ledgers each.
-
-The 17 **no-skill families** are the ones the verdict rests on. Nine are what section 10 requires:
-normal, serially independent returns, benchmarks unrelated to the strategies and without drift,
-correlated within each hypothesis at 0, 0.5, 0.9, 0.99 and 0.999 and across the two from 0 up to the
-within value, including the near-identical families in which the two forms of V differ most.
-Three give the configurations market exposure without skill (H1 correlated 0.7 with B-H1, as a long
-and flat rule is; H2 0.2 or 0.5 with B-H2) in a market with an annualised Sharpe ratio of 0.5 or 1.0,
-the case DEV-2 exists for and the one that calibrates D15's beta-matched excess. Two are the power
-families' layout with nothing planted. Three add fat tails and a volatility regime at correlations 0,
-0.9 and 0.99. Two **sensitivity families**, serially correlated returns, are reported but not judged.
-
-The 35 **power families** plant an edge in one hypothesis, the other without skill. H1's
-configurations are correlated 0.5 with B-H1, so that their volatility-matched excess has exactly
-the planted Sharpe ratio (section 12's formula (S - S_B) / sqrt(2 - 2 rho) with S_B = 0 and rho =
-0.5); H2's are uncorrelated with B-H2, so that the beta-matched excess has it too. For each
-hypothesis, a **single planted column** (the first registered configuration) or a **shared edge**
-(every configuration of the hypothesis), at Sharpe ratios of 1.0, 1.5 and 2.0, with correlations
-of 0.5 within and 0 across ("low") or 0.9 within and 0.5 across ("high"); a single column also at
-2.5 and 3.0 to show where power reaches one half and four fifths; and, for contrast, both
-hypotheses sharing one edge of the same size.
-
-**Seeds.** Ledger i of family f draws from Python's `random.Random("20261121/f/i")`, so any ledger
-can be rebuilt alone (`calibration.simulate`). The study seed 20261121 was fixed before the first
-run.
-
-**What the study computes.** On every ledger: the outcome at N = 30 (registered), at N = 14, and
-under a counterfactual that is not registered, with V over each hypothesis's own runs only (at
-N = 30), which isolates the effect of pooling. The PBO is computed for a hypothesis whenever it
-can decide the outcome (its candidate meets every other criterion under any of the three
-judgements) and always for the first 200 ledgers of each family, from which DEV-3's own pass
-rate is reported; where it is not computed the hypothesis fails another criterion anyway, so
-whether a ledger passes is exact for every ledger.
-
-## Readings fixed before the full run
+### Readings fixed before the full run
 
 The registration leaves four things open. Each reading below was written into the code before the
 full run, and none of them moves a pass mark.
@@ -173,7 +291,7 @@ full run, and none of them moves a pass mark.
    own terms means more likely than not to pass. Four fifths, the usual power in a study design,
    would make the calibration fail by the registration's own arithmetic before any simulation:
    section 12 already puts the Sharpe ratio DEV-1 alone passes four times in five at 1.65 (H1) and
-   1.86 (H2) at N = 30, above 1.5. One half is not generous either: section 12's even-odds DEV-1
+   1.87 (H2) at N = 30, above 1.5. One half is not generous either: section 12's even-odds DEV-1
    mark for H2 at N = 30 is 1.52, so H2 at 1.5 sits at about even odds on DEV-1 alone before DEV-2
    to DEV-5 and the registered V are applied. *A single planted column:* section 10 says the gate
    must "detect a planted Sharpe of 1.5" and, separately, that "power must be reported for a family
@@ -204,14 +322,15 @@ single-column families at Sharpe ratios of 2.5 and 3.0, to locate where power re
 no judged family, reading, seed, threshold or line of the gate was changed. The full run's
 results are reported against this definition as it stands, whatever they show.
 
-## Results
+### Results
 
 Every figure below is from
-[gate-calibration-results.json](../../research/calibration/gate-calibration-results.json), whose
-SHA-256 is under "Reproduce"; the tables were generated from it, not typed. Counts are of 1,000
-ledgers; intervals are Clopper-Pearson at 95%.
+[gate-calibration-results-prereg-v1.json](../../research/calibration/gate-calibration-results-prereg-v1.json),
+whose SHA-256 is `2eb307f3da3b425a036bf711207e2670c9641381e1a369d85094ad70037c4d9e`; the tables
+were generated from it, not typed. Counts are of 1,000 ledgers; intervals are Clopper-Pearson at
+95%.
 
-### No-skill ledgers
+#### No-skill ledgers
 
 "Passes" is the gate producing a holdout candidate. "Within / across" are the correlations of two
 configurations of one hypothesis and of an H1 and an H2 configuration.
@@ -273,7 +392,7 @@ skill-less hypotheses (41.5% to 57.5%), as G1.3 and section 13 said. DEV-4 and D
 skill-less candidate far more often than not when its configurations are independent, because the
 candidate is the best of eight or six; they bind only together with the others.
 
-### Power
+#### Power
 
 The share of ledgers in which the planted hypothesis passes development at N = 30, the registered
 gate. Every single-column pass in the table had the planted configuration as its candidate. "Own V"
@@ -337,7 +456,7 @@ Which criterion binds, for the planted hypothesis at N = 30 (DEV-3 over the firs
 
 The figures for every power family and criterion are in the results file.
 
-## Why the gate is weak
+### Why the gate is weak
 
 The registered SR_0 is sqrt(V) times E[max Z_N], with E[max Z_30] = 2.0734 and V the sample variance
 of all 14 selectable runs' Sharpe ratios. Take the noise away and look at what the edge alone does
@@ -361,7 +480,7 @@ beside one that does not breaks that assumption, because the difference between 
 When both hypotheses share an edge of the same size, V is small again and power returns (506 to 747
 of 1,000 at 1.0 to 2.0), now limited by DEV-3, which a family of equals passes about half the time.
 
-## Findings
+### Findings
 
 Each with severity (what goes wrong if ignored) and confidence. None is a defect in the code: the
 gate computes what section 10 registers, bit for bit (the equivalence test).
@@ -379,7 +498,7 @@ gate computes what section 10 registers, bit for bit (the equivalence test).
 2. **High, confirmed.** A single planted configuration at a Sharpe ratio of 1.5 is detected in 144 to
    335 of 1,000 ledgers, below the definition's 500 in all four families; power reaches one half at
    about 2.0 and four fifths at about 2.5. Section 12's statement that DEV-1 alone passes a true
-   Sharpe ratio of 1.65 (H1) or 1.86 (H2) four times in five, and section 13's power figures, assume
+   Sharpe ratio of 1.65 (H1) or 1.87 (H2) four times in five, and section 13's power figures, assume
    V = 1/T; under the registered V, DEV-1 alone passes a planted 2.0 in 56.4% to 75.4% of ledgers.
    Section 13's warning that a FAIL means "no edge large enough to detect" holds with a larger
    threshold than it states.
@@ -427,6 +546,13 @@ gate computes what section 10 registers, bit for bit (the equivalence test).
     (9ac814f); a 20-ledger pilot had been seen before the code was first committed, as disclosed
     above.
 
+### How it was run
+
+The `prereg-v1` run took 7,085 seconds (about two hours) with 10 worker processes on an Apple M4
+(10 cores, 24 GB) under macOS 26.5.2 and Python 3.13.11, from commit 8e89a02. The machine was
+shared with other builds and the market-data recorder (load averages of 33 to 77), and the run was
+reniced to 15 after about 35 minutes so as not to starve the recorder.
+
 ## What this calibration cannot show
 
 The simulated configurations are a linear factor model with constant correlations and a constant
@@ -438,40 +564,39 @@ than DEV-1. The no-skill families do not include a skill-less strategy whose ret
 autocorrelated beyond 0.1, nor one whose exposure differs from its benchmark's in a way that drifts.
 The 16 entries that take N from 14 to 30 are taken to be failed reruns; a completed rerun would
 replace a selectable run rather than add a column, and under the null that is the same thing. A
-false-pass rate of 1.3% says nothing about the holdout, which is contaminated (D4).
+false-pass rate says nothing about the holdout, which is contaminated (D4).
 
-**Dependence on the ledger freeze (decision D21, pending).** Nothing calibrated here depends on the
-freeze. The study fixes N at 30 and at 14, whatever ledger point it would be counted to, and the
-candidate rules are applied to a complete family; whether development closes at a freeze or at the
-unseal changes neither.
+**Dependence on how development closes (decision D21).** Nothing calibrated here depends on it. The
+study fixes N at 30 and at 14, whatever ledger point it would be counted to, and the candidate rules
+are applied to a complete family; that development closes at the unseal rather than at a freeze
+changes neither.
 
 ## Reproduce
 
 From `research/` in a clean clone, with the pinned tools only:
 
 ```bash
-nice -n 15 python -m norse_research.calibration --workers 6
+nice -n 15 python -m norse_research.calibration --workers 6 --report
 ```
 
-It writes `research/calibration/gate-calibration-results.json` and prints its SHA-256 and the
-verdict. The committed file's SHA-256 is
-`2eb307f3da3b425a036bf711207e2670c9641381e1a369d85094ad70037c4d9e`, and it holds a SHA-256 of every
-family's per-ledger records. `test_the_committed_full_run_is_the_one_the_report_cites` checks that
-the committed file is the one named here, that its families and seed are the code's, and that its
-verdict is what `calibration.verdict` computes from it. The number of workers does not change the
-result.
+It writes `research/calibration/gate-calibration-results.json` and, between the markers of
+"Results of the rerun", the results section of this report, and prints the file's SHA-256 and the
+verdict. `test_the_committed_full_run_is_the_one_the_report_cites` checks that the committed file is
+the one the section names, that its families, seed and registration are the code's, that its verdict
+is what `calibration.verdict` computes from it, and that the section is exactly what
+`calibration.results_markdown` renders from it; at the commit before the rerun it checks that
+neither exists yet. The number of workers does not change the result. The counts reproduce on any
+platform; the per-ledger digests reproduce on the same platform, but may differ elsewhere because
+`random.gauss`, `random.gammavariate` and `NormalDist` call the C library's `log`, `exp` and `cos`,
+which can differ in the last bit between systems. Plan for hours in pure Python, and keep to
+`nice -n 15` and at most six workers on this Mac, which also records live market data.
 
-The committed run took 7,085 seconds (about two hours) with 10 worker processes on an Apple M4 (10
-cores, 24 GB) under macOS 26.5.2 and Python 3.13.11, from commit 8e89a02. The machine was shared with
-other builds and the market-data recorder (load averages of 33 to 77), and the run was reniced to 15
-after about 35 minutes so as not to starve the recorder; a run on an idle machine should be faster,
-but plan for hours in pure Python and keep to `nice -n 15` and at most six workers on this Mac. The
-counts reproduce on any platform; the per-ledger digests reproduce on the same platform, but may
-differ elsewhere because `random.gauss`, `random.gammavariate` and `NormalDist` call the C library's
-`log`, `exp` and `cos`, which can differ in the last bit between systems.
+**The rerun's record.** Added when the run ends: the commit it ran at, when it started and
+finished, and on what.
 
 CI runs a smoke version only (`test_smoke_run_reproduces_and_summarises`: two families, two ledgers
-each), with the equivalence test, the model's checks and the check on the committed file.
+each), with the equivalence test, the model's checks, the pin of the families and the check on the
+committed file.
 
 ```bash
 python -m pytest tests/ -q
