@@ -23,7 +23,7 @@ research/tests/test_sim_pcg64.py holds it to vectors numpy 2.5.5 generated
 
 from __future__ import annotations
 
-import itertools
+from itertools import cycle, islice
 
 from ..formats import EngineClass
 from .model import SimulationError
@@ -77,7 +77,7 @@ class SeedSequence(metaclass=EngineClass):
         count = n_words * (bits // 32)
         hash_const = INIT_B
         words32 = []
-        for value in itertools.islice(itertools.cycle(self.pool), count):
+        for value in islice(cycle(self.pool), count):
             value ^= hash_const
             hash_const = (hash_const * MULT_B) & MASK32
             value = (value * hash_const) & MASK32

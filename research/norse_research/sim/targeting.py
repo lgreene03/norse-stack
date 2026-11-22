@@ -10,10 +10,10 @@ exclusions, which are categories applied to every configuration (decision D14).
 
 from __future__ import annotations
 
-import bisect
-import itertools
+from bisect import bisect_right
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import pairwise
 
 from ..formats import FUNDING_TOLERANCE_MS, EngineClass, Funding
 from ..universe import base_asset, is_ranked, month_close_ms, rank_month_ends
@@ -111,8 +111,8 @@ def trailing_funding(settlements: Sequence[Funding], t: int, lookback_days: floa
     start = t - round(lookback_days * DAY_MS) + FUNDING_KNOWN_SLACK_MS
     end = t + FUNDING_KNOWN_SLACK_MS
     times = [s.calc_time for s in settlements]
-    lo = bisect.bisect_right(times, start)
-    hi = bisect.bisect_right(times, end)
+    lo = bisect_right(times, start)
+    hi = bisect_right(times, end)
     inside = [settlements[i] for i in range(lo, hi)]
     total = sum(s.rate for s in inside)
     covered = bool(inside)
@@ -123,7 +123,7 @@ def trailing_funding(settlements: Sequence[Funding], t: int, lookback_days: floa
             first.calc_time - start <= first.interval_hours * hour
             and end - last.calc_time < last.interval_hours * hour
         )
-        for prev, cur in itertools.pairwise(inside):
+        for prev, cur in pairwise(inside):
             allowed = {prev.interval_hours * hour, cur.interval_hours * hour}
             if not any(abs(cur.calc_time - prev.calc_time - a) <= FUNDING_TOLERANCE_MS
                        for a in allowed):

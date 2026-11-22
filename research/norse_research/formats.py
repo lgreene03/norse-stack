@@ -20,14 +20,14 @@ runner seals both before a strategy's module runs (security review of PR 61, rou
 
 from __future__ import annotations
 
-import io
-import zipfile
 from abc import ABCMeta
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from io import BytesIO
 from itertools import pairwise
 from types import MappingProxyType
 from typing import NamedTuple
+from zipfile import BadZipFile, ZipFile
 
 LICENCE = "CC BY-NC-SA 4.0 (Binance public data, data.binance.vision)"
 
@@ -233,8 +233,8 @@ def to_ms(value: int) -> int:
 def read_csv_member(zip_bytes: bytes, csv_name: str, max_uncompressed: int) -> str:
     """The single CSV inside an archive file, refusing anything else or anything large."""
     try:
-        archive = zipfile.ZipFile(io.BytesIO(zip_bytes))
-    except zipfile.BadZipFile as exc:
+        archive = ZipFile(BytesIO(zip_bytes))
+    except BadZipFile as exc:
         raise DataIntegrityError(f"{csv_name}: not a zip archive") from exc
     with archive:
         infos = archive.infolist()

@@ -352,13 +352,25 @@ write through a function's own globals, which are its module's namespace and bey
 any run-time seal. A strategy may construct engine objects, call engine functions and
 read engine tables; it must never try to change one.
 
-What remains is stated for review rather than closed. The standard library modules the
-engine calls through their attributes (`bisect`, `heapq`, `itertools`, `math`) are
-allowlisted and not sealed, so a strategy that binds one to a second name and replaces a
-function in it changes the engine's lookups for its run. And the live objects the engine
-lends a strategy keep their state behind private attributes, such as the book behind
-`BookView` and the rows behind a `SeriesView`, which the source check refuses only on an
-imported name. Both need deliberate code that is visible in the committed diff.
+Two residuals the seal left are closed. The engine and `formats` no longer call the
+standard library through its modules: each binds what it calls at import (`from bisect
+import bisect_left`, and likewise from `heapq`, `itertools`, `math`, `io` and
+`zipfile`), so a strategy that rebinds `bisect.bisect_left` changes nothing the engine
+uses, and no engine module hands out a standard library module. And a private attribute
+is read or written only on `self` or `cls`, which may be bound only as a method's first
+parameter, so `view._book.cash = 1e9` and `v = view; v._book` are refused while a
+strategy's own `self._x` is not. The named-tuple API (`row._replace`, `Kline._fields`) is
+public despite its underscore and may be read. A dunder may not be imported by name from
+any module, nor a private name from outside the strategy's own paths: `from collections
+import __builtins__ as b` handed over `exec`, through which a sealed engine module could
+be changed with `object.__setattr__`, and the source check had accepted it since G1.5.
+
+One route stays open and is stated for review. A method called through its class with
+another object, `Tamper.reach(view)`, binds `self` to that object, so `self._book` there
+reaches the book behind a `BookView`; no rule on names can tell what `self` holds. The
+sound closure is in the engine: a `BookView` that keeps a snapshot of the book at the
+decision, which `decide` cannot tell apart, since it runs at one instant. It needs
+deliberate code that is visible in the committed diff.
 
 huginn's executor and research gateway cost defaults, which G1.9's "Done when" also
 names, live in the huginn repository; a separate huginn pull request aligns them.

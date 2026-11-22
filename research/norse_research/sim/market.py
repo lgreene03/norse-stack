@@ -18,11 +18,11 @@ paper trading:
 
 from __future__ import annotations
 
-import bisect
-import itertools
+from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from itertools import pairwise
 
 from ..formats import INTERVAL_MS, DatasetSpec, EngineABCMeta, EngineClass, Kline
 from .model import DAY_MS, FUNDING_KNOWN_SLACK_MS, Instrument, SimulationError
@@ -81,7 +81,7 @@ class SeriesView(Sequence, metaclass=EngineABCMeta):
 
     def index_of(self, time: int) -> int | None:
         """The index of the row opening (or settling) exactly at ``time``."""
-        i = bisect.bisect_left(self._times, time, 0, self._count)
+        i = bisect_left(self._times, time, 0, self._count)
         return i if i < self._count and self._times[i] == time else None
 
     def at(self, time: int):
@@ -90,12 +90,12 @@ class SeriesView(Sequence, metaclass=EngineABCMeta):
 
     def last_at_or_before(self, time: int) -> int | None:
         """The index of the last known row opening (or settling) at or before ``time``."""
-        i = bisect.bisect_right(self._times, time, 0, self._count) - 1
+        i = bisect_right(self._times, time, 0, self._count) - 1
         return i if i >= 0 else None
 
     def index_after(self, time: int) -> int:
         """The index of the first known row opening (or settling) after ``time``."""
-        return bisect.bisect_right(self._times, time, 0, self._count)
+        return bisect_right(self._times, time, 0, self._count)
 
 
 class Segments(metaclass=EngineClass):
@@ -120,7 +120,7 @@ class Segments(metaclass=EngineClass):
 
     def start_of(self, index: int) -> tuple[int, int]:
         """The first open and first index of the instrument holding bar ``index``."""
-        k = bisect.bisect_right(self._start_index, index) - 1
+        k = bisect_right(self._start_index, index) - 1
         return self._starts[k], self._start_index[k]
 
 
@@ -137,7 +137,7 @@ class Series(metaclass=EngineClass):
         self.rows = list(rows)
         key = (lambda r: r.calc_time) if self.step is None else (lambda r: r.open_time)
         self.times = [key(r) for r in self.rows]
-        if any(b <= a for a, b in itertools.pairwise(self.times)):
+        if any(b <= a for a, b in pairwise(self.times)):
             raise SimulationError(f"{name}: rows are not in strictly increasing time order")
         self.available = [available_at(r, self.step) for r in self.rows]
         self._ends: dict[Instrument, int | None] = {}
@@ -149,7 +149,7 @@ class Series(metaclass=EngineClass):
 
     def known(self, now: int) -> int:
         """How many rows are known at ``now``."""
-        return bisect.bisect_right(self.available, now)
+        return bisect_right(self.available, now)
 
     def view(self, now: int) -> SeriesView:
         return SeriesView(self.name, self.rows, self.times, self.known(now))
@@ -178,7 +178,7 @@ class Series(metaclass=EngineClass):
         return self._ends[instrument]
 
     def _instrument_end(self, instrument: Instrument) -> int | None:
-        i = bisect.bisect_left(self.times, instrument.first_open)
+        i = bisect_left(self.times, instrument.first_open)
         if i >= len(self.times) or self.times[i] != instrument.first_open:
             raise SimulationError(f"{instrument} is not a run of {self.name}")
         while i + 1 < len(self.times) and self.times[i + 1] == self.times[i] + DAY_MS:
@@ -212,8 +212,8 @@ class RowsSource(FillSource):
         series = self._series.get(name)
         if series is None:
             raise SimulationError(f"{name} was not loaded")
-        lo = bisect.bisect_left(series.times, start)
-        hi = bisect.bisect_left(series.times, end)
+        lo = bisect_left(series.times, start)
+        hi = bisect_left(series.times, end)
         return series.rows[lo:hi]
 
 
@@ -236,7 +236,7 @@ def runs_of(spans) -> tuple[Span, ...]:
     runs = (spans,) if isinstance(spans, Span) else tuple(spans)
     if not runs or any(not isinstance(r, Span) or r.first_open > r.last_open for r in runs):
         raise SimulationError(f"spans must be Span runs, not {spans!r}")
-    if any(b.first_open <= a.last_open for a, b in itertools.pairwise(runs)):
+    if any(b.first_open <= a.last_open for a, b in pairwise(runs)):
         raise SimulationError("a series' runs must be in time order and not overlap")
     return runs
 

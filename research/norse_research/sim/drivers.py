@@ -25,11 +25,11 @@ stamped at 2026-01-01 00:00:00.000.
 
 from __future__ import annotations
 
-import bisect
-import heapq
-import itertools
+from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from heapq import heappop, heappush
+from itertools import count
 
 from ..formats import EngineClass, Funding, Kline
 from .book import Book
@@ -239,14 +239,14 @@ def backtest(strategy, market: Market, window: Window, costs: Costs) -> RunResul
                  window.end)
     run = _Run(strategy, window, costs)
     queue: list = []
-    counter = itertools.count()
+    counter = count()
 
     def schedule(time: int, priority: int, tiebreak: str, action) -> None:
-        heapq.heappush(queue, (time, priority, tiebreak, next(counter), action))
+        heappush(queue, (time, priority, tiebreak, next(counter), action))
 
     def drain(time: int, priority: int) -> None:
         while queue and queue[0][:2] < (time, priority):
-            heapq.heappop(queue)[-1]()
+            heappop(queue)[-1]()
 
     def ended(instrument: Instrument) -> bool:
         series = market.series.get(spot_series(instrument.symbol, "1d"))
@@ -317,9 +317,9 @@ def _schedule_step(run: _Run, market: Market, history: History, t: int, followin
         series = market.series.get(name)
         if series is None:
             raise SimulationError(f"{name} is not in this run's data")
-        lo = bisect.bisect_right(series.times, t)
+        lo = bisect_right(series.times, t)
         # A settlement at the window's last mark or later falls in no day of the window.
-        hi = bisect.bisect_left(series.times, min(following + 1, run.window.end))
+        hi = bisect_left(series.times, min(following + 1, run.window.end))
         for settlement in series.rows[lo:hi]:
             schedule(settlement.calc_time, FUNDING, name,
                      lambda s=symbol, f=settlement: run.accrue(
@@ -409,7 +409,7 @@ class Paper(metaclass=EngineClass):
         self._latest: dict[str, Kline] = {}
         self._ended: set[Instrument] = set()
         self._queue: list = []
-        self._counter = itertools.count()
+        self._counter = count()
         self._last_key: tuple = (-1, -1, "")
         self._checks: set[int] = set()
         self._stops: dict[str, set[int]] = {}
@@ -447,11 +447,11 @@ class Paper(metaclass=EngineClass):
     # --- internals -----------------------------------------------------------------
 
     def _schedule(self, time: int, priority: int, tiebreak: str, action) -> None:
-        heapq.heappush(self._queue, (time, priority, tiebreak, next(self._counter), action))
+        heappush(self._queue, (time, priority, tiebreak, next(self._counter), action))
 
     def _drain(self, time: int, priority: int) -> None:
         while self._queue and self._queue[0][:2] < (time, priority):
-            heapq.heappop(self._queue)[-1]()
+            heappop(self._queue)[-1]()
 
     def _append(self, name: str, row, time: int) -> None:
         self._rows.setdefault(name, []).append(row)

@@ -11,10 +11,12 @@ genesis step read it as text:
   name such as ``sys``, ``modules``, ``mro`` or ``attrgetter`` through which a module it
   may not import, or a class's bases, could be reached (L4, N9);
 * nothing a module imports may be changed or reached behind: no assignment to or
-  deletion of an imported name's attributes or items, no private attribute of one, no
-  subclass of a class from this package, and no ``import norse_research.<x>`` or bare
-  ``norse_research``, which would reach every module the runner has loaded (security
-  review round 3, E1 and E2);
+  deletion of an imported name's attributes or items, no subclass of a class from this
+  package, and no ``import norse_research.<x>`` or bare ``norse_research``, which would
+  reach every module the runner has loaded (security review round 3, E1 and E2);
+* a private attribute is read or written only on ``self`` or ``cls``, which are bound
+  only as a method's first parameter, and no dunder, nor a private name from outside
+  the strategy's own paths, is imported by name;
 * the pinned module declares ``CONFIGURATIONS``, ``PARAMETERS`` and ``DEFAULTS`` as
   literals assigned once, and defines the pinned function at its top level once, so
   what enters the configuration hash is read from the committed text (M4, N1, N4).
@@ -105,6 +107,7 @@ def disallowed_imports(
     tree = ast.parse(source)
     imported = _imported_names(tree, package)
     problems += _engine_tampering(tree, imported)
+    problems += _private_reach(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             problems += [
@@ -117,6 +120,15 @@ def disallowed_imports(
             problems += [
                 f"line {node.lineno}: import of {a.name}"
                 for a in node.names if a.name in FORBIDDEN_NAMES
+            ]
+            # A dunder from any module (``from collections import __builtins__`` hands
+            # over the builtins, ``exec`` among them), and a private name from any module
+            # outside the strategy's own paths, the same reach as ``module._x``.
+            own = any(inside(p, allowed_paths) for p in _module_paths(base))
+            problems += [
+                f"line {node.lineno}: import of private name {a.name}"
+                for a in node.names
+                if a.name.startswith("__") or (a.name.startswith("_") and not own)
             ]
         elif isinstance(node, ast.Name) and node.id in FORBIDDEN_BUILTINS:
             problems.append(f"line {node.lineno}: builtin {node.id}, called or not")
@@ -171,8 +183,6 @@ def _engine_tampering(tree: ast.AST, imported: dict[str, str]) -> list[str]:
       ``execution._apply = ...`` or ``model.Costs.total = 0.0``, would let one line in a
       hypothesis file change the shared engine's fills, costs or funding for its run
       while the ledger certifies the registered rules (E1).
-    * Reading a private (single underscore) attribute of an imported name reaches past
-      the module's public surface (E1).
     * Subclassing a class imported from this package would let a strategy hand the
       engine an altered rule object; the engine's interface needs no subclass (E1).
     * ``import norse_research.<x>`` binds the package root, whose attributes include
@@ -196,12 +206,6 @@ def _engine_tampering(tree: ast.AST, imported: dict[str, str]) -> list[str]:
                 continue
             if isinstance(node.ctx, ast.Store | ast.Del):
                 problems.append(f"line {node.lineno}: changes {root}, which is imported")
-            elif (
-                isinstance(node, ast.Attribute)
-                and node.attr.startswith("_")
-                and not node.attr.startswith("__")
-            ):
-                problems.append(f"line {node.lineno}: private attribute {node.attr} of {root}")
         elif isinstance(node, ast.ClassDef):
             for base in node.bases:
                 root = _root(base)
@@ -210,6 +214,70 @@ def _engine_tampering(tree: ast.AST, imported: dict[str, str]) -> list[str]:
                         f"line {node.lineno}: class {node.name} subclasses {root}, imported "
                         "from this package"
                     )
+    return problems
+
+
+SELF_NAMES = frozenset({"self", "cls"})
+# The named-tuple API, public despite its underscore (it keeps clear of field names):
+# each builds a new object or reads a constant, so reading one changes nothing.
+NAMED_TUPLE_API = frozenset({"_asdict", "_field_defaults", "_fields", "_make", "_replace"})
+
+
+def _is_staticmethod(decorator: ast.expr) -> bool:
+    return (isinstance(decorator, ast.Name) and decorator.id == "staticmethod") or (
+        isinstance(decorator, ast.Attribute) and decorator.attr == "staticmethod"
+    )
+
+
+def _private_reach(tree: ast.AST) -> list[str]:
+    """A private attribute is read or written only on ``self`` or ``cls`` (security
+    review of PR 61, closing the residual stated in round 2). An object the engine lends
+    a strategy keeps its state behind private attributes, the book behind a
+    ``BookView`` or the rows behind a ``SeriesView``, and a name cannot say whose object
+    it holds: ``view._book.cash = 1e9`` and ``v = view; v._book`` are refused alike,
+    while a strategy's own ``self._x`` is not. So that ``self`` and ``cls`` mean a
+    method's own object, they may be bound only as the first parameter of a method
+    defined in a class body (not a static method): never assigned, deleted, imported,
+    caught, matched or declared global, and never another parameter or a lambda's.
+    Reading the named-tuple API (``row._replace``, ``Kline._fields``) is not private."""
+    firsts = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef) and not any(
+                    _is_staticmethod(d) for d in item.decorator_list
+                ):
+                    params = [*item.args.posonlyargs, *item.args.args]
+                    if params:
+                        firsts.add(id(params[0]))
+    problems = []
+    for node in ast.walk(tree):
+        bound: list[str] = []
+        if isinstance(node, ast.Attribute):
+            private = node.attr.startswith("_") and not node.attr.startswith("__")
+            on_self = isinstance(node.value, ast.Name) and node.value.id in SELF_NAMES
+            api = node.attr in NAMED_TUPLE_API and isinstance(node.ctx, ast.Load)
+            if private and not on_self and not api:
+                problems.append(
+                    f"line {node.lineno}: private attribute {node.attr} of something other "
+                    "than self or cls"
+                )
+        elif isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+            bound = [node.id]
+        elif isinstance(node, ast.arg) and id(node) not in firsts:
+            bound = [node.arg]
+        elif isinstance(node, ast.alias):
+            bound = [node.asname or node.name.split(".")[0]]
+        elif isinstance(node, ast.ExceptHandler | ast.MatchAs | ast.MatchStar):
+            bound = [node.name] if node.name else []
+        elif isinstance(node, ast.MatchMapping):
+            bound = [node.rest] if node.rest else []
+        elif isinstance(node, ast.Global | ast.Nonlocal):
+            bound = list(node.names)
+        problems += [
+            f"line {node.lineno}: {name} bound other than as a method's first parameter"
+            for name in bound if name in SELF_NAMES
+        ]
     return problems
 
 

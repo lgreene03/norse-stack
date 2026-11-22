@@ -14,6 +14,7 @@ every dunder attribute, which is also all that could undo the seal.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import shutil
@@ -173,10 +174,12 @@ def code_root(tmp_path_factory):
     root = tmp_path_factory.mktemp("sealed") / "code"
     shutil.copytree(PACKAGE, root / "research" / "norse_research",
                     ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copy(Path(__file__).parent / "sim_example.py",
+                root / "research" / "norse_research" / "strategies" / "example.py")
     return root
 
 
-def run_in_runner(code_root: Path, tmp: Path, source: str) -> dict:
+def run_in_runner(code_root: Path, tmp: Path, source: str, configuration=None) -> dict:
     """``source`` as a pinned strategy module, run by the real runner in a fresh
     interpreter exactly as the harness starts it; no source check runs here."""
     module = code_root / "research" / "norse_research" / "strategies" / f"probe_{tmp.name}.py"
@@ -189,7 +192,8 @@ def run_in_runner(code_root: Path, tmp: Path, source: str) -> dict:
         "module_path": str(module.relative_to(code_root)),
         "module_name": f"norse_research.strategies.{module.stem}",
         "function": "run",
-        "configuration": {"window": {"first_return_day": "2021-03-01", "days": 1}},
+        "configuration": configuration or {"window": {"first_return_day": "2021-03-01",
+                                                      "days": 1}},
         "entry": "e" * 64,
         "manifest": "research/manifests/none.json",
         "store_root": None,
@@ -253,3 +257,74 @@ def test_the_runner_seals_every_engine_module_and_formats(code_root, tmp_path):
     engine = sorted(p.stem for p in (PACKAGE / "sim").glob("*.py") if p.stem != "__init__")
     assert engine == ["book", "drivers", "execution", "history", "market", "model", "pcg64",
                       "targeting"]
+
+
+# --- the standard library the engine calls ------------------------------------------------
+
+STDLIB = ("bisect", "heapq", "itertools", "math", "io", "zipfile")
+
+
+def engine_stdlib_names() -> dict[str, list[str]]:
+    """Every function the engine and ``formats`` bind from the standard library modules
+    a strategy may reach, read from their own imports."""
+    names: dict[str, list[str]] = {}
+    for path in [*sorted((PACKAGE / "sim").glob("*.py")), PACKAGE / "formats.py"]:
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom) and node.module in STDLIB[:4]:
+                names.setdefault(node.module, [])
+                names[node.module] += [a.name for a in node.names if a.name not in names[node.module]]
+    return names
+
+
+def test_the_engine_holds_no_standard_library_module_a_strategy_could_rebind():
+    """Security review of PR 61, the residual stated in round 2: the engine called
+    ``bisect.bisect_left`` and the like through the module, so a strategy that bound
+    ``bisect`` to a second name and replaced a function in it changed the engine's
+    lookups. Every engine and ``formats`` module now binds what it calls at import."""
+    for path in [*sorted((PACKAGE / "sim").glob("*.py")), PACKAGE / "formats.py"]:
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Import):
+                assert not [a.name for a in node.names if a.name in STDLIB], path.name
+    names = engine_stdlib_names()
+    assert set(names) == {"bisect", "heapq", "itertools", "math"}
+    assert "bisect_left" in names["bisect"] and "sqrt" in names["math"]
+
+
+def test_rebinding_bisect_no_longer_changes_series_view_index_of(code_root, tmp_path):
+    source = HEAD + (
+        "import bisect\n\nfrom norse_research.sim import SeriesView\n\n"
+        "b = bisect\nb.bisect_left = lambda *args, **kwargs: 0\n\n\n"
+        "def run(configuration, data_view):\n"
+        "    view = SeriesView('x', [10, 20, 30], [1, 2, 3], 3)\n"
+        "    return [('2021-03-01', float(view.index_of(3)))]\n"
+    )
+    result = run_in_runner(code_root, tmp_path, source)
+    assert result["ok"], result
+    assert result["returns"] == [["2021-03-01", 2.0]]  # before this change: None, a miss
+
+
+def test_a_backtest_ignores_every_rebound_standard_library_function(code_root, tmp_path):
+    """Every function the engine binds from ``bisect``, ``heapq``, ``itertools`` and
+    ``math`` is replaced in its module by one that fails, before the golden fixture's
+    scenario runs: the returns are still the golden ones."""
+    from test_sim_engine import RUNNER_STRATEGY
+
+    rebind = (
+        "import bisect, heapq, itertools, math  # noqa\n\n\n"
+        "def _rebound(*args, **kwargs):\n"
+        "    raise AssertionError('the engine called a rebound standard library function')\n\n\n"
+        "_MODULES = {'bisect': bisect, 'heapq': heapq, 'itertools': itertools, 'math': math}\n"
+        f"for _module, _names in {engine_stdlib_names()!r}.items():\n"
+        "    for _name in _names:\n"
+        "        setattr(_MODULES[_module], _name, _rebound)\n"
+    )
+    configuration = {
+        "window": {"first_return_day": "2021-03-01", "last_return_day": "2021-03-03", "days": 3},
+        "costs": {"fee_bps_per_side": 10, "slippage_bps_per_side": 2},
+    }
+    result = run_in_runner(code_root, tmp_path, rebind + RUNNER_STRATEGY, configuration)
+    assert result["ok"], result
+    golden = json.loads((Path(__file__).parent / "fixtures" / "sim-golden.json").read_text())
+    for (_, got), want in zip(result["returns"], golden["weights"]["expected"]["returns"],
+                              strict=True):
+        assert got == pytest.approx(want, rel=1e-12)

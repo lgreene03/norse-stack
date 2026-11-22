@@ -663,6 +663,58 @@ def test_a_strategy_cannot_change_or_reach_behind_the_code_it_imports():
         assert problems(source) == [], source
 
 
+def test_private_state_is_reached_only_through_self_or_cls():
+    """Security review of PR 61, the residual stated in round 2: a ``BookView`` keeps
+    the engine's live book behind ``_book``, and ``view._book.cash = 1e9`` changed it in
+    a sealed run. A private attribute is now read or written only on ``self`` or
+    ``cls``, which are bound only as a method's first parameter."""
+
+    def problems(source):
+        return disallowed_imports(source, "strategies.h1.probe", False, ["strategies/h1"])
+
+    decide = "class S:\n    def decide(self, history, book):\n"
+    refused = {
+        "the residual itself": decide + "        book._book.cash = 1e9\n",
+        "a read through a second name": decide + "        v = book\n        return v._book\n",
+        "the rows behind a series view":
+            decide + "        history.series('x')._rows[0] = None\n",
+        "self rebound": decide + "        self = book\n        self._book.cash = 1e9\n",
+        "self through a walrus": decide + "        (self := book)._book\n",
+        "self as a for target": decide + "        for self in (book,):\n            self._book\n",
+        "self as a second parameter": "class S:\n    def m(this, self):\n        self._book\n",
+        "self in a module function": "def f(self):\n    self._book.cash = 1e9\n",
+        "self in a lambda": "f = lambda self: self._book\n",
+        "self in a static method": "class S:\n    @staticmethod\n    def m(self):\n"
+                                   "        self._book\n",
+        "self imported": "from norse_research.sim import BookView as self\nself._x\n",
+        "self caught": "try:\n    pass\nexcept ValueError as self:\n    self._x\n",
+        "self matched": decide + "        match book:\n            case self:\n"
+                                 "                self._book\n",
+        "self declared global": "def f():\n    global self\n",
+        "an attribute of self's attribute": decide + "        self._view._book.cash = 1e9\n",
+        "a private name imported from the engine":
+            "from norse_research.formats import _engine_sealed\n",
+        "a module's builtins imported by name":
+            "from collections import __builtins__ as b\nb['exec']('1')\n",
+        "a dunder imported from the strategy's own package":
+            "from . import __builtins__ as b\n",
+    }
+    for case, source in refused.items():
+        assert problems(source), case
+    accepted = (
+        "class S:\n    def __init__(self):\n        self._x = 1\n\n"
+        "    def decide(self, history, book):\n        self._x += 1\n"
+        "        del self._x\n        return None\n\n"
+        "    @classmethod\n    def build(cls):\n        cls._made = True\n        return cls()\n",
+        "from norse_research.formats import Kline\n"
+        "row = Kline(0, 1.0, 1.0, 1.0, 1.0, 2.0, 1, 2.0, 1, 1.0, 1.0)\n"
+        "fields = Kline._fields\nrow = row._replace(close=2.0)\n",
+        "from .helpers import _shared\n",
+    )
+    for source in accepted:
+        assert problems(source) == [], source
+
+
 def test_a_forbidden_builtin_is_refused_by_name_before_anything_runs(world, calls):
     """Security review of PR 61, round 2, B1 and B6: a forbidden builtin bound to
     another name would undo the other rules (``s = setattr`` redoes E1; ``imp =

@@ -8,9 +8,9 @@ strategy cannot read past ``now``: ``SeriesView`` refuses any row not yet known.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Callable
 from dataclasses import dataclass
+from math import sqrt
 
 from ..formats import EngineClass
 from .market import Segments, SeriesView
@@ -119,4 +119,4 @@ class History(metaclass=EngineClass):
         state.next_index = max(state.next_index, len(view))
         if state.denominator == 0:
             return None
-        return math.sqrt(state.numerator / state.denominator) * math.sqrt(periods_per_year)
+        return sqrt(state.numerator / state.denominator) * sqrt(periods_per_year)
