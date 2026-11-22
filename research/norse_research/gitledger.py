@@ -17,7 +17,14 @@ runs with ``GIT_NO_REPLACE_OBJECTS`` set, and any ``refs/replace/`` ref is refus
 off (``core.hooksPath=/dev/null``, ``core.fsmonitor=false``), and a clone that
 configures either in any scope is refused: either would run a program of the clone's
 choosing inside the unseal's push, where it could read the proof before the remote
-holds it (security review of #65, H-1).
+holds it (security review of #65, H-1). The rest of that class is closed the same way:
+the clone's own configuration (local and worktree scope, and anything they include) may
+set nothing that runs a program or redirects a read or a push, such as a credential
+helper, an askpass or editor program, a text conversion or filter, an include, or a
+transport override (``REPOSITORY_SCOPE_REFUSED``); and every command except those that
+reach the remote, or resolve how they would, runs with ``GIT_CONFIG_NOSYSTEM=1``. The
+owner's global and system configuration stay in force for the push, because its
+credential helper lives there (holdout-seal.md).
 
 **Appending.** An append never touches the working tree, so it cannot dirty it. It
 takes a lock in the repository's git directory, fetches the remote ledger ref, checks
@@ -129,6 +136,26 @@ WITHDRAWN = ("ledger-freeze",)
 # program the clone chooses inside a ledger command (security review of #65, H-1).
 HARDENED = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
 _FALSE = frozenset({"false", "no", "off", "0"})
+# H-1's class, closed as a class rather than key by key: configuration in the clone itself
+# (the local and worktree scopes, and any file they include) that runs a program, or
+# redirects what the ledger and the seal read or where they push, is refused. Any of these
+# could run inside the unseal's push, which carries the proof. The owner's global and
+# system configuration is left alone, because the push's credential helper lives there
+# (on the owner's Mac, osxkeychain in the system scope; holdout-seal.md).
+REPOSITORY_SCOPES = frozenset({"local", "worktree"})
+REPOSITORY_SCOPE_REFUSED = re.compile(
+    r"credential\..*"
+    r"|core\.(sshcommand|askpass|editor|pager|gitproxy|alternaterefscommand|worktree)"
+    r"|sequence\.editor|gpg\.(.+\.)?program|include\.path|includeif\..*"
+    r"|url\..+\.(insteadof|pushinsteadof)|remote\..+\.(receivepack|uploadpack|proxy|vcs)"
+    r"|protocol\.(.+\.)?allow|http\..*(proxy|ssl).*|ssh\.variant"
+    r"|diff\.external|diff\..+\.(textconv|command)|merge\..+\.driver|filter\..*"
+    r"|uploadpack\.packobjectshook"
+)
+# The commands that reach the remote, or resolve how they would, read the system
+# configuration, where the owner's credential helper lives; every other ledger git command
+# runs with GIT_CONFIG_NOSYSTEM=1, so nothing in the system configuration reaches it.
+SYSTEM_SCOPE_COMMANDS = frozenset({"push", "fetch", "ls-remote", "remote", "config"})
 MILESTONE_TAG = re.compile(r"ledger-[a-z0-9][a-z0-9.-]*")
 SCRYPT_MAXMEM = 256 * 1024 * 1024
 # Configuration that would send fetches or pushes elsewhere while the URL still
@@ -210,8 +237,10 @@ class Git:
     def call(self, *args: str, input: bytes | None = None, env: Mapping | None = None):
         # Replacement objects could substitute one commit or blob for another in
         # every local check (M5); git never honours them here. Hooks and the file system
-        # monitor never run (H-1): a command-line setting overrides every file's.
-        full = {**os.environ, "GIT_NO_REPLACE_OBJECTS": "1", **(env or {})}
+        # monitor never run (H-1): a command-line setting overrides every file's. Only the
+        # commands that need the owner's credential helper read the system configuration.
+        scope = {} if args and args[0] in SYSTEM_SCOPE_COMMANDS else {"GIT_CONFIG_NOSYSTEM": "1"}
+        full = {**os.environ, "GIT_NO_REPLACE_OBJECTS": "1", **scope, **(env or {})}
         return subprocess.run(
             ["git", *HARDENED, *args], cwd=self.repo, input=input, capture_output=True,
             env=full, check=False,
@@ -308,7 +337,9 @@ class GitLedger:
 
     def check_repository(self) -> None:
         """No replacement refs, no URL rewriting, and no hooks path or file system
-        monitor, in any configuration scope."""
+        monitor, in any configuration scope; and in the clone's own configuration (local
+        and worktree, with what they include), nothing that runs a program or redirects a
+        read or a push (``REPOSITORY_SCOPE_REFUSED``)."""
         if self.git.text("for-each-ref", "--format=%(refname)", "refs/replace/"):
             raise RemoteNotPinned("refs/replace/ refs are refused: they substitute objects")
         found = self.git.try_text(
@@ -332,6 +363,22 @@ class GitLedger:
             if found:
                 kind = "URL rewriting" if "insteadof" in pattern else "a transport override"
                 raise RemoteNotPinned(f"{kind} is configured, which is refused: {found}")
+        # Then the rest of H-1's class in the clone's own configuration; the transport
+        # overrides above are refused in every scope, so they keep their own message.
+        listed = self.git.text("config", "--show-scope", "--name-only", "--list")
+        refused = sorted({
+            f"{name} ({scope})"
+            for scope, _, name in (line.partition("\t") for line in listed.splitlines())
+            if scope in REPOSITORY_SCOPES and REPOSITORY_SCOPE_REFUSED.fullmatch(name)
+        })
+        if refused:
+            raise RemoteNotPinned(
+                f"the clone's own configuration sets {', '.join(refused)}, which is refused: "
+                "each runs a program inside the ledger's git commands, or redirects what they "
+                "read or where they push, where it could read the unseal's proof (security "
+                "review of #65, H-1's class). Remove it with git config --local --unset, or "
+                "--worktree --unset"
+            )
 
     def check_remote(self, pinned: str) -> None:
         """The remote's resolved fetch and push URLs are the pinned one (H1)."""

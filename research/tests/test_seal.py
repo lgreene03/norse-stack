@@ -41,6 +41,7 @@ from ledger_fixtures import (
 )
 from norse_research import gate, gitledger, harness, ledger, rules, seal
 from norse_research.coverage import read_rows
+from norse_research.environment import EnvironmentRefused
 from norse_research.formats import DatasetSpec
 from norse_research.gitledger import LedgerOutOfStep, LedgerWriteError, check_key_record
 from norse_research.ledger import LEDGER_PATH, VerificationError, parse_ledger, unseal_of
@@ -779,13 +780,23 @@ def test_a_pre_push_hook_never_runs_in_the_owners_unseal(ready):
 def test_a_local_textconv_cannot_hide_a_line_of_the_diff_to_accept(tmp_path, monkeypatch):
     # Security review of #65, M-1 (probe P4): untracked .git/info/attributes and a
     # textconv in .git/config hid a loader line from the owner's git diff, which the
-    # refusal told the owner to run. The diff is now rendered from the blobs themselves.
+    # refusal told the owner to run. A textconv in the clone's own configuration is now
+    # refused outright (H-1's class); one in the owner's global configuration, which is
+    # left alone, still cannot hide the line, since the diff is rendered from the blobs.
     hidden = "_REBOUND = __import__('json').dumps  # hidden"
     world = a_grid_world(tmp_path, monkeypatch, loader_changed=True, loader_line=hidden)
     try:
         (world.repo / ".git" / "info").mkdir(exist_ok=True)
         (world.repo / ".git" / "info" / "attributes").write_text("*.py diff=quiet\n")
         git(world.repo, "config", "diff.quiet.textconv", "grep -v hidden")
+        read = key()
+        with pytest.raises(gitledger.RemoteNotPinned, match=r"diff\.quiet\.textconv \(local\)"):
+            unseal(world, {**request_for(world), "accepted_diff": None}, read=read)
+        assert read.calls == []
+        git(world.repo, "config", "--unset", "diff.quiet.textconv")
+        owner = world.tmp / "owner-global.cfg"
+        owner.write_text('[diff "quiet"]\n\ttextconv = grep -v hidden\n')
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(owner))
         assert git(world.repo, "status", "--porcelain") == ""
         candidate_commit = trial(world, CANDIDATE)[0].body["commit"]
         head = git(world.repo, "rev-parse", "HEAD")
@@ -803,6 +814,44 @@ def test_a_local_textconv_cannot_hide_a_line_of_the_diff_to_accept(tmp_path, mon
         assert gitledger._shown("ok\r# shown\x1b[8m‮") == "ok\\r# shown\\x1b[8m\\u202e"
     finally:
         world.close()
+
+
+def test_a_credential_helper_in_the_clone_refuses_the_unseal(ready):
+    # Security review of #65, H-1's class: a credential helper in the clone's own
+    # configuration would run inside the unseal's push, with the unseal's objects in
+    # reach. It refuses the unseal before the passphrase is asked for; once it is gone,
+    # the unseal is written and pushed as before.
+    request = request_for(ready)
+    for scope in ("--local", "--worktree"):
+        if scope == "--worktree":
+            git(ready.repo, "config", "extensions.worktreeConfig", "true")
+        git(ready.repo, "config", scope, "credential.helper", "store")
+        read = key()
+        with pytest.raises(gitledger.RemoteNotPinned, match=r"credential\.helper \("):
+            unseal(ready, request, read=read)
+        assert read.calls == [] and unseal_of(remote_entries(ready)) is None
+        git(ready.repo, "config", scope, "--unset", "credential.helper")
+    entry = unseal(ready, request, fetch=False)
+    assert unseal_of(remote_entries(ready)).hash == entry.hash
+
+
+def test_the_unseal_refuses_a_credential_program_in_its_environment(ready, monkeypatch):
+    # Security review of #65, H-1's class: GIT_ASKPASS and SSH_ASKPASS are programs git
+    # runs for a credential inside the unseal's push, so the unseal refuses them; GIT_SSH,
+    # GIT_SSH_COMMAND, GIT_EXEC_PATH and GIT_CONFIG_PARAMETERS are refused for every
+    # ledger write. Each is refused before the passphrase is asked for.
+    request = request_for(ready)
+    for name, refused in (("GIT_ASKPASS", SealRefused), ("SSH_ASKPASS", SealRefused),
+                          ("GIT_SSH", EnvironmentRefused),
+                          ("GIT_SSH_COMMAND", EnvironmentRefused),
+                          ("GIT_EXEC_PATH", EnvironmentRefused),
+                          ("GIT_CONFIG_PARAMETERS", EnvironmentRefused)):
+        monkeypatch.setenv(name, "/bin/echo")
+        read = key()
+        with pytest.raises(refused, match=name):
+            unseal(ready, request, read=read)
+        monkeypatch.delenv(name)
+        assert read.calls == [] and unseal_of(remote_entries(ready)) is None
 
 
 def test_a_gitattributes_change_since_the_candidate_refuses_the_unseal(ready):

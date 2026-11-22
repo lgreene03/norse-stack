@@ -32,6 +32,8 @@ def hermetic_git(tmp_path_factory):
         patch.setenv("GIT_CONFIG_GLOBAL", str(empty))
         patch.setenv("GIT_CONFIG_NOSYSTEM", "1")
         patch.setenv("GIT_TERMINAL_PROMPT", "0")
+        for program in ("GIT_ASKPASS", "SSH_ASKPASS"):  # an editor's terminal may set them
+            patch.delenv(program, raising=False)
         for role in ("AUTHOR", "COMMITTER"):
             patch.setenv(f"GIT_{role}_NAME", "ledger test")
             patch.setenv(f"GIT_{role}_EMAIL", "test@norse-stack.invalid")

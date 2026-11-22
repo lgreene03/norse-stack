@@ -662,7 +662,12 @@ or the seal (section 11, item 6), and no `.gitattributes` file may change; the u
 the full diff, rendered from the blobs themselves, then its hash, refuses unless the owner
 passes that exact hash, and records it, and replay recomputes it (security review round 3,
 T1; review of #65, M-1). Every ledger git command runs with hooks and the file system monitor
-off, and a clone configuring either is refused (review of #65, H-1). One result entry spends the seal. A run that
+off, and a clone configuring either is refused (review of #65, H-1); so is a clone whose own
+configuration sets anything else that runs a program or redirects a read or a push, a
+credential helper included, and the unseal refuses `GIT_ASKPASS` and `SSH_ASKPASS`. The
+owner's global and system configuration stay in force for the push, which needs the owner's
+credential helper, so what an agent writes there is a residual the owner checks before the
+unseal (holdout-seal.md). One result entry spends the seal. A run that
 fails may be retried under the same unseal, at the same commit, for the same configuration
 only, every attempt ledgered, until three runs have reached the unsealed stage (an attempt
 entry each); a run that fails before its attempt entry read nothing of the holdout and does
@@ -984,7 +989,11 @@ marks a test the goal's own done-when already names.
 | `test_the_unseal_command_names_the_genesis_tag_and_asks_for_the_diff` | The command's tag defaults to the genesis entry's, and without `--accept-diff` it prints the hash and refuses | T22, T24 |
 | `test_a_pre_push_hook_never_runs_in_the_owners_unseal` | A pre-push hook in the clone's `.git/hooks`, which an ordinary push runs, never runs in the unseal's push, so it cannot copy the proof out and fail the push (review of #65, H-1) | T22, T25 |
 | `test_a_hooks_path_or_a_file_system_monitor_is_refused` | A clone configuring `core.hooksPath` or `core.fsmonitor` is refused by the ledger and by the harness (review of #65, H-1) | T22, T25 |
-| `test_a_local_textconv_cannot_hide_a_line_of_the_diff_to_accept` | A local attributes file and text conversion that hide a loader line from the clone's `git diff` do not hide it from the diff the unseal prints, before the hash (review of #65, M-1) | T22 |
+| `test_a_local_textconv_cannot_hide_a_line_of_the_diff_to_accept` | A text conversion in the clone's own configuration refuses the unseal; one in the owner's global configuration, with a local attributes file, hides a loader line from the clone's `git diff` but not from the diff the unseal prints, before the hash (review of #65, M-1) | T22 |
+| `test_a_credential_helper_in_the_clone_refuses_the_unseal` | A credential helper in the clone's local or worktree configuration refuses the unseal before the passphrase; once removed, the unseal is pushed (review of #65, H-1's class) | T22, T25 |
+| `test_the_unseal_refuses_a_credential_program_in_its_environment` | `GIT_ASKPASS` and `SSH_ASKPASS` refuse the unseal, and `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_EXEC_PATH` and `GIT_CONFIG_PARAMETERS` every ledger write, before the passphrase (review of #65, H-1's class) | T22, T25 |
+| `test_repository_configuration_that_runs_a_program_is_refused` | Keys in the clone's own configuration that run a program or redirect a read or a push (credential helpers, askpass, filters, text conversions, gpg programs, protocol permissions, the pack-objects hook, includes, the sequence editor) are refused in the local and worktree scopes and through an include, by the ledger and the harness (review of #65, H-1's class) | T22, T25 |
+| `test_the_owners_global_configuration_is_left_alone_and_the_push_still_works` | The owner's global credential helper is not refused, the ordinary append and push still work, and only commands that reach the remote read the system configuration (review of #65, H-1's class) | T22, T25 |
 | `test_a_gitattributes_change_since_the_candidate_refuses_the_unseal` | A changed `.gitattributes`, at the root or nested, refuses the unseal before the key is asked for (review of #65, M-1) | T22 |
 | `test_the_candidate_command_prints_neither_the_diff_nor_its_hash` | The key-free `candidate` command lists the changed files only and points to the unseal for the diff and its hash (review of #65, L-2) | T22 |
 | `test_the_holdout_reaches_its_unsealed_stage_at_most_three_times` | Three runs that reach the unsealed stage and fail, then no more, at the harness and on replay (round 3, C1) | T22 |

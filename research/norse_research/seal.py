@@ -23,8 +23,12 @@ substituted at genesis is found then rather than at the unseal (security review 
 
 **The unseal** (``unseal``, the owner, once). There is no ledger freeze (decision
 D21): the unseal closes development, so no trial, benchmark or control run may be
-opened after it (a result of one opened before it is accepted and ignored). It is refused, before the passphrase is asked for, unless: the environment carries
-no override; the local ledger head is the remote's (T23) and the ledger verifies; each
+opened after it (a result of one opened before it is accepted and ignored). It is
+refused, before the passphrase is asked for, unless: the environment carries no override,
+nor ``GIT_ASKPASS`` or ``SSH_ASKPASS``, which git would run inside the push; the clone's
+own configuration sets nothing that runs a program or redirects a read or a push
+(``gitledger.REPOSITORY_SCOPE_REFUSED``); the local ledger head is the remote's (T23) and
+the ledger verifies; each
 hypothesis has a selectable run of every registered configuration or has exhausted its
 own entries and the reserve, since an unseal while the other grid can still run would
 stop it early ("early" means before that, T20); no unseal entry exists yet (T23); the tree is clean, HEAD is on main
@@ -122,6 +126,11 @@ MIN_PASSPHRASE_CHARACTERS = 20
 MIN_PASSPHRASE_WORDS = 6
 _WORD = re.compile(r"[^\W\d_]+")
 UNSEAL_REQUEST_KEYS = frozenset({"preregistration", "configuration_sha256", "accepted_diff"})
+# Programs git runs to ask for a credential when no helper supplies one. The unseal's push
+# carries the proof, so neither may be set for it (security review of #65, H-1's class).
+# GIT_SSH, GIT_SSH_COMMAND, GIT_EXEC_PATH, GIT_CONFIG_PARAMETERS and every other GIT_*
+# variable outside check_environment's allowlist are refused for every ledger write already.
+UNSEAL_ENVIRONMENT_REFUSED = ("GIT_ASKPASS", "SSH_ASKPASS")
 
 ReadKey = Callable[[str], str]
 
@@ -378,6 +387,12 @@ def unseal(
 
     repo = Path(repo)
     check_environment(os.environ, repo)
+    askpass = [name for name in UNSEAL_ENVIRONMENT_REFUSED if name in os.environ]
+    if askpass:
+        raise SealRefused(
+            f"{' and '.join(askpass)} is set, and git would run it inside the unseal's push, "
+            "which carries the proof; unset it for the unseal (security review of #65)"
+        )
     if not isinstance(request, Mapping) or set(request) != UNSEAL_REQUEST_KEYS:
         raise SealRefused(f"an unseal names exactly {sorted(UNSEAL_REQUEST_KEYS)}")
     ledger = GitLedger(repo, remote)

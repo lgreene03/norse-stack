@@ -154,7 +154,31 @@ that configures either is refused, since a hook in the clone's untracked `.git/h
 the proof out of the unseal's push and fail it, leaving an agent free to unseal at a commit of its
 own (security review of #65, H-1). Even so, an unseal whose push fails is an incident: before
 running it again, check the remote's ledger for an unseal entry and the clone's `.git/hooks` and
-configuration, then run it again at once from the same terminal. Only after the
+configuration, then run it again at once from the same terminal.
+
+The rest of that class is closed the same way. The clone's own configuration, its local and
+worktree scopes and any file they include, may set nothing that runs a program or redirects
+what the ledger and the seal read or where they push: no credential helper, `core.sshCommand`,
+`core.askPass`, `core.editor` or `core.pager`, `sequence.editor`, `gpg` program, include, URL
+rewrite, receive or upload pack program, protocol permission, HTTP proxy or SSL override, text
+conversion, filter, external diff or merge driver, or pack-objects hook (the full list is
+`gitledger.REPOSITORY_SCOPE_REFUSED`). The ledger, the harness and the seal refuse such a clone
+before anything is written, and the unseal refuses it before the passphrase is asked for. Every
+ledger git command except those that reach the remote, or resolve how they would, also runs with
+`GIT_CONFIG_NOSYSTEM=1`. The owner's global and system configuration are left alone for the push,
+and its credential helper is not blanked there (no `-c credential.helper=`), because the push
+needs the owner's own helper, which on the owner's Mac is osxkeychain in the system configuration
+(`/opt/homebrew/etc/gitconfig`); blanking it, or ignoring the system configuration, would break
+the push. That leaves a residual: a credential helper or askpass program written into the global
+or system configuration, both of which an agent running as the owner can write on this Mac,
+would still run in the unseal's push. So, just before the unseal, the owner checks that
+`git config --show-scope --show-origin --get-regexp '^(credential\.|core\.askpass)'` lists only
+the owner's own helper. (`core.sshCommand` and the other transport overrides are refused in every
+scope already.) The unseal also refuses `GIT_ASKPASS` and `SSH_ASKPASS` in its environment, since
+git runs them to ask for a credential during the push; an editor's built-in terminal may set
+`GIT_ASKPASS`, so unseal from a plain terminal. `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_EXEC_PATH`,
+`GIT_CONFIG_PARAMETERS` and every other `GIT_*` variable outside a short allowlist are refused for
+every ledger write. Only after the
 remote holds it are the holdout files fetched again (D17): every file the frozen holdout manifest
 pins, about 8,517 of them, each checked against its published CHECKSUM and against the manifest's
 SHA-256 and size before it is written, and then the whole manifest is verified, rows included. The

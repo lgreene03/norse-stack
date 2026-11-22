@@ -7,6 +7,7 @@ L3, L9 and L10.
 """
 
 import json
+import re
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -353,6 +354,75 @@ def test_a_hooks_path_or_a_file_system_monitor_is_refused(world):
     git(world.repo, "config", "core.fsmonitor", "false")  # switched off is no risk
     world.ledger.check_repository()
     assert gitledger.HARDENED == ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
+
+
+def test_repository_configuration_that_runs_a_program_is_refused(world):
+    # Security review of #65, H-1's class: a credential helper in the clone's own
+    # configuration runs inside the unseal's push, with the unseal's objects in reach, and
+    # so does any key that runs a program or redirects a read or a push. They are refused
+    # as a class in the local and worktree scopes, and through an include, by the ledger
+    # and the harness alike.
+    world.ledger.check_repository()
+    for name, value in (("credential.helper", "!f() { cat > /dev/null; }; f"),
+                        ("credential.https://github.com.helper", "store"),
+                        ("core.askPass", "/bin/echo"),
+                        ("filter.quiet.clean", "cat"),
+                        ("diff.quiet.textconv", "cat"),
+                        ("gpg.ssh.program", "/bin/echo"),
+                        ("protocol.file.allow", "always"),
+                        ("uploadpack.packObjectsHook", "/bin/echo"),
+                        ("includeIf.gitdir:/nowhere/.path", "/nowhere"),
+                        ("sequence.editor", "/bin/echo")):
+        git(world.repo, "config", name, value)
+        with pytest.raises(gitledger.RemoteNotPinned, match=rf"(?i){re.escape(name)} \(local\)"):
+            world.ledger.check_repository()
+        with pytest.raises(gitledger.RemoteNotPinned, match="H-1's class"):
+            trial(world, "B-H1")
+        git(world.repo, "config", "--unset", name)
+    git(world.repo, "config", "extensions.worktreeConfig", "true")
+    git(world.repo, "config", "--worktree", "credential.helper", "store")
+    with pytest.raises(gitledger.RemoteNotPinned, match=r"credential\.helper \(worktree\)"):
+        world.ledger.check_repository()
+    git(world.repo, "config", "--worktree", "--unset", "credential.helper")
+    included = world.tmp / "included.cfg"
+    included.write_text("[credential]\n\thelper = store\n")
+    git(world.repo, "config", "include.path", str(included))
+    with pytest.raises(gitledger.RemoteNotPinned, match=r"credential\.helper \(local\)"):
+        world.ledger.check_repository()
+    git(world.repo, "config", "--unset", "include.path")
+    world.ledger.check_repository()
+
+
+def test_the_owners_global_configuration_is_left_alone_and_the_push_still_works(
+    world, monkeypatch
+):
+    # The owner's own credential helper is in the global or the system configuration (on
+    # the owner's Mac, osxkeychain in the system's), and the push needs it, so those
+    # scopes are left alone (holdout-seal.md); the ordinary append and push still work.
+    # Only the commands that reach the remote, or resolve how they would, read the system
+    # configuration; every other ledger git command runs with GIT_CONFIG_NOSYSTEM=1.
+    owner = world.tmp / "owner-global.cfg"
+    owner.write_text("[credential]\n\thelper = osxkeychain\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(owner))
+    world.ledger.check_repository()
+    before = len(parse_ledger(world.remote_ledger()))
+    assert trial(world, "B-H1").status == "completed"
+    assert len(parse_ledger(world.remote_ledger())) == before + 2
+    world.ledger.verify()
+    seen = {}
+
+    def record(command, **kwargs):
+        seen[command[len(gitledger.HARDENED) + 1]] = kwargs["env"]
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.delenv("GIT_CONFIG_NOSYSTEM")
+    monkeypatch.setattr(gitledger.subprocess, "run", record)
+    remote_facing = ("push", "fetch", "ls-remote", "remote", "config")
+    local_only = ("cat-file", "diff", "diff-tree", "commit-tree", "status", "hash-object")
+    for subcommand in remote_facing + local_only:
+        gitledger.Git(world.repo).call(subcommand)
+    assert all("GIT_CONFIG_NOSYSTEM" not in seen[s] for s in remote_facing)
+    assert all(seen[s]["GIT_CONFIG_NOSYSTEM"] == "1" for s in local_only)
 
 
 def test_genesis_pins_only_the_newest_preregistration_tag(tmp_path, monkeypatch):
