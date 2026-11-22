@@ -334,3 +334,42 @@ killing a run straight after its attempt entry, or by starting one from a second
 key record's design is unchanged. Section 11, item 7 of the pre-registration and
 docs/research/holdout-seal.md, the owner's runbook for the seal, carry the rule; the
 operator runbook, docs/RUNBOOK.md, does not cover the holdout.
+
+**D26. Retire bragi, huginn-ai, heimdall and mimir.** Decided by the owner on 2026-11-22, on
+the G2.6 container review ([#68](https://github.com/lgreene03/norse-stack/pull/68),
+`docs/CONTAINERS.md`): "Retire all four." All four served the retired order-book-imbalance
+signal and none is used by H1 or H2. [#69](https://github.com/lgreene03/norse-stack/pull/69)
+removes them from compose, `services/`, CI, monitoring, the console and the documents. mimir's
+Docker volume (`norse-stack_mimir-data`, 404,379 rows of `features.obi.v1` that cannot be
+recomputed) is kept; compose no longer declares it, which does not delete it. obi-bridge stays
+frozen under D1 and falls back to `mlScore` 0.5 and `mlReady` 0 without huginn-ai. The running
+containers are removed by name after the merge, never by a whole-stack `docker compose up`.
+
+**D27. The unseal is signed with a one-time key; it reveals nothing.** Decided by the owner on
+2026-11-22: "Adopt the signature". The security role's second review of #65 (finding H-2, High)
+showed that the unseal's proof, the scrypt output it revealed, was a bearer token. While the
+unseal's commit was built and pushed it sat in loose objects in the owner's temporary folder,
+which every process of the owner's user can read, every agent session included. A background
+process copied it and failed the unseal before its push, and an agent then appended its own
+unseal through the public append, at a commit nobody had reviewed, which `verify()` accepted.
+No git configuration was involved, so hardening git could not close it. The passphrase now
+also derives, deterministically, a one-time hash-based signing key: Lamport's scheme over
+SHA-256, standard library only (`research/norse_research/lamport.py`). The key record commits
+to the SHA-256 of its public key, `signer_sha256`, beside the existing verifier. The unseal
+entry carries a signature over its own canonical bytes, everything but the signature itself:
+the candidate, the commit, the accepted diff hash and the previous entry's hash among them. It
+replaces the `proof`, so the scrypt output is never revealed. The append, `verify()` and replay
+check the signature against the record genesis pins, so a stolen signature authorises nothing
+but the entry the owner reviewed. The unseal's timestamp is its predecessor's, so a retry after
+a failed push signs the same bytes and reveals nothing new of the key. The owner's steps do not
+change: one passphrase, typed once. Any process of the owner's user can still fail the push and
+so deny the single unseal; that is detected, not prevented. No key record existed, so nothing
+was migrated; the owner creates the record with `seal key-record` as before, and no agent
+creates it. The same change closes the rest of that review in code: every ledger and seal git
+command runs with no global or system configuration, an allowlisted environment and, on the
+commands that reach the remote, only the owner's credential helper (M-3, L-5, L-6). It also
+pins the registration's content beside its tag (L-9) and closes L-7, L-8, L-10, I-5, I-6 and
+I-7, in [#70](https://github.com/lgreene03/norse-stack/pull/70). The format is in
+docs/research/trial-ledger.md and docs/research/holdout-seal.md. The security role is an AI
+agent the owner runs; its reviews are advice, not approvals or signatures, and the decision is
+the owner's alone.
