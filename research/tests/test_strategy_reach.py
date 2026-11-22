@@ -39,7 +39,7 @@ SENSITIVE_BUILTINS = {
 SENSITIVE_NAMES = frozenset({
     "get_type_hints", "singledispatch", "singledispatchmethod", "ForwardRef", "update_wrapper",
     "wraps", "global_enum", "attrgetter", "methodcaller", "literal_eval", "ZipFile", "BytesIO",
-    "BadZipFile", "make_dataclass", "bltns",
+    "BadZipFile", "make_dataclass", "bltns", "dataclass", "namedtuple", "NamedTuple",
 })
 DEPTH = 4
 
@@ -49,19 +49,47 @@ def accepted(name: str) -> bool:
                 or name in sources.FORBIDDEN_BUILTINS)
 
 
+def bindable_packages() -> list[str]:
+    """The packages a strategy can bind with a dotted import of an allowlisted module:
+    ``import collections.abc`` binds ``collections`` (security review round 5, B-L1), so
+    each such package is a root of the walk unless the source check refuses the form."""
+    return [
+        name.split(".")[0] for name in sorted(sources.ALLOWED_IMPORTS)
+        if "." in name and not sources.disallowed_imports(f"import {name}\n", "strategies.h1.x",
+                                                          False, ["strategies/h1"])
+    ]
+
+
 def roots() -> list[tuple[str, object]]:
     importlib.import_module("norse_research.sim")
-    names = sorted(sources.ALLOWED_IMPORTS)
+    names = sorted(sources.ALLOWED_IMPORTS) + bindable_packages()
     names += sorted(n for n in sys.modules if n.startswith("norse_research.sim."))
     return [(name, importlib.import_module(name)) for name in names]
 
 
-def walk() -> dict[str, str]:
+def from_a_sensitive_module(value) -> str | None:
+    """Where a reached callable was defined, when that is a sensitive module: a function
+    such as ``dataclasses.dataclass``, re-exported by an engine module, compiles text the
+    check never parsed (round 5, B-H1), and its name alone did not show it. Python's core
+    classes, defined in ``builtins`` and ``types`` (iterators, views, ``function``,
+    ``GenericAlias``), are reached through ``collections.abc`` and are inert without a
+    frame or a code object; the class that makes a code object is flagged below."""
+    home = getattr(value, "__module__", None)
+    if not (callable(value) and isinstance(home, str)):
+        return None
+    if home.split(".")[0] not in SENSITIVE_MODULES:
+        return None
+    if isinstance(value, type) and home in ("builtins", "types"):
+        return None
+    return f"{home}.{getattr(value, '__qualname__', '?')}"
+
+
+def walk(extra_roots=()) -> dict[str, str]:
     """Every sensitive object reached, with the shortest accepted path to it."""
     found: dict[str, str] = {}
     seen: set[int] = set()
     queue: list[tuple[object, str, int]] = []
-    for name, module in roots():
+    for name, module in [*roots(), *extra_roots]:
         seen.add(id(module))
         queue.append((module, name, 0))
     while queue:
@@ -82,6 +110,11 @@ def walk() -> dict[str, str]:
                 found.setdefault(f"{type(value).__name__}", here)
             if attr in SENSITIVE_NAMES:
                 found.setdefault(f"name {attr}", here)
+            home = from_a_sensitive_module(value)
+            if home is not None:
+                found.setdefault(f"defined in {home}", here)
+            if value is types.CodeType:
+                found.setdefault("class CodeType", here)
             descend = isinstance(value, types.ModuleType | type) or not callable(value)
             if descend and depth + 1 < DEPTH and id(value) not in seen:
                 seen.add(id(value))
@@ -113,3 +146,40 @@ def test_the_walk_finds_what_round_4_found_before_the_fix():
     assert found.get("module builtins", "").startswith("enum.bltns"), found
     assert "name get_type_hints" in found and "name singledispatch" in found, found
     assert "module types" in found, found
+
+
+def test_a_dotted_import_does_not_bind_a_package_the_walk_does_not_cover():
+    """``import collections.abc`` would bind ``collections``, whose ``namedtuple``
+    compiles text from field names. Today's rules leave nothing sensitive reachable from
+    it only because ``namedtuple`` is a forbidden name, so the check refuses the dotted
+    form outright and ``from collections.abc import ...`` stays allowed (security review
+    round 5, B-L1)."""
+    assert bindable_packages() == []
+    refused = sources.disallowed_imports("import collections.abc\n", "strategies.h1.x", False,
+                                         ["strategies/h1"])
+    assert refused and "binds collections" in refused[0], refused
+    assert sources.disallowed_imports("from collections.abc import Mapping\n", "strategies.h1.x",
+                                      False, ["strategies/h1"]) == []
+    package = [("collections", importlib.import_module("collections"))]
+    assert walk(package) == {}
+    saved = sources.FORBIDDEN_NAMES
+    try:
+        sources.FORBIDDEN_NAMES = saved - {"namedtuple"}
+        found = walk(package)
+    finally:
+        sources.FORBIDDEN_NAMES = saved
+    assert found.get("name namedtuple") == "collections.namedtuple", found
+
+
+def test_the_walk_flags_a_compiling_function_an_engine_module_re_exports():
+    """The walk has teeth for round 5: an engine module that bound ``dataclass`` publicly,
+    as ``formats`` did, is found by where the function was defined, not by its name
+    alone (security review round 5, B-H1)."""
+    import dataclasses
+
+    stand_in = types.ModuleType("norse_research.stand_in")
+    stand_in.decorate = dataclasses.dataclass
+    stand_in.slot = dataclasses.field
+    found = walk([("norse_research.stand_in", stand_in)])
+    assert found.get("defined in dataclasses.dataclass") == "norse_research.stand_in.decorate"
+    assert found.get("defined in dataclasses.field") == "norse_research.stand_in.slot"

@@ -9,7 +9,7 @@ strategy cannot read past ``now``: ``SeriesView`` refuses any row not yet known.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass as _dataclass
 from math import sqrt
 
 from ..formats import EngineClass
@@ -17,7 +17,7 @@ from .market import Segments, SeriesView
 from .model import DAY_MS, Instrument, SimulationError, spot_series
 
 
-@dataclass
+@_dataclass
 class _Ewm(metaclass=EngineClass):
     next_index: int
     numerator: float

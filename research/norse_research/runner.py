@@ -13,10 +13,13 @@ Before the strategy module is executed, an audit hook is installed: the process 
 read the interpreter's own library, the committed code it was given, and the dataset
 files the registered manifest pins, read-only, and nothing else; it may open no socket
 and start no process. The strategy's module-level code runs under the hook too. The
-hook refuses frames (``gi_frame``, ``cr_frame``, ``ag_frame``, ``tb_frame``) and the
-garbage collector too, since both reached the engine's live run, the runner's payload
-and the hook's own state (security review round 3, R1; PR 61, round 4, M1), and the
-source check refuses those names before anything runs. It is still not a sandbox:
+hook refuses frames (``gi_frame``, ``cr_frame``, ``ag_frame``, ``tb_frame`` and the
+``sys`` frame and trace calls) and the garbage collector too, since both reached the
+engine's live run, the runner's payload and the hook's own state (security review round
+3, R1; PR 61, round 4, M1; round 5, B-H1), and the source check refuses those names
+before anything runs. Once the engine is sealed it also refuses compiling any text that
+is not a file under the readable roots, which is how text the source check never parsed
+(``dataclass`` field names, string annotations) would run. It is still not a sandbox:
 Python cannot be sealed from inside itself, and the control against a deliberate
 escape is that the code is committed, recorded in the ledger and reviewed (threat
 T13). Also before the strategy module runs, the engine it may import is sealed
@@ -54,6 +57,11 @@ RESULT_PREFIX = "norse-strategy-result "
 # (security review of PR 61, round 4, M1). From a frame, ``f_back``, ``f_locals``,
 # ``f_globals`` and ``f_builtins`` raise nothing, so the way in is what is refused.
 FRAME_ENTRIES = frozenset({"gi_frame", "cr_frame", "ag_frame", "tb_frame"})
+# The ways to a frame through ``sys``, and the trace and profile hooks, which are handed
+# frames (security review round 5, B-H1: from compiled text, ``sys._getframe`` reached the
+# runner's frame and the tripwire's own file set again).
+FRAME_EVENTS = frozenset({"sys._getframe", "sys._getframemodulename", "sys._current_frames",
+                          "sys.settrace", "sys.setprofile"})
 
 
 class StrategyIOBlocked(PermissionError):
@@ -67,13 +75,21 @@ def _normal(path) -> str | None:
     return os.path.normpath(text) if os.path.isabs(text) else None
 
 
-def install_tripwire(roots: list[str], files: set[str]) -> None:
+def install_tripwire(roots: list[str], files: set[str]):
     """Allow read-only opens under ``roots`` and of exactly ``files``; refuse every
-    other file, socket and process event, every way in to a frame and every use of the
+    other file, socket and process event, every way to a frame and every use of the
     garbage collector, for the rest of this process. Frames and ``gc`` reached the
     engine's live run, the runner's payload and this hook's own file set (security
-    review of PR 61, round 4, M1)."""
+    review of PR 61, round 4, M1; round 5, B-H1).
+
+    Returns the switch that, once thrown, also refuses compiling any text that is not a
+    file under ``roots``: imports and the strategy module itself are files there, while
+    ``dataclass``, ``namedtuple``, ``eval`` and string annotations compile ``<string>``,
+    text the source check never parsed (round 5, B-H1). The runner throws it after the
+    engine is sealed, since the engine's own dataclasses compile text as they are
+    imported."""
     prefixes = tuple(os.path.normpath(r).rstrip(os.sep) + os.sep for r in roots)
+    compiling_text_refused = [False]
 
     def allowed(path) -> bool:
         text = _normal(path)
@@ -82,6 +98,12 @@ def install_tripwire(roots: list[str], files: set[str]) -> None:
     def hook(event: str, args: tuple) -> None:
         if event == "object.__getattr__" and args[1] in FRAME_ENTRIES:
             raise StrategyIOBlocked(f"a strategy run may not reach a frame ({args[1]})")
+        if event in FRAME_EVENTS:
+            raise StrategyIOBlocked(f"a strategy run may not reach a frame ({event})")
+        if event == "compile" and compiling_text_refused[0] and not (
+            isinstance(args[1], str | bytes) and allowed(args[1])
+        ):
+            raise StrategyIOBlocked(f"a strategy run may not compile text ({args[1]!r})")
         if event.startswith("gc."):
             raise StrategyIOBlocked(f"a strategy run may not use {event}")
         if event == "open":
@@ -98,6 +120,11 @@ def install_tripwire(roots: list[str], files: set[str]) -> None:
             raise StrategyIOBlocked(f"a strategy run may not use {event}")
 
     sys.addaudithook(hook)
+
+    def refuse_compiling_text() -> None:
+        compiling_text_refused[0] = True
+
+    return refuse_compiling_text
 
 
 def _freeze(value):
@@ -226,8 +253,9 @@ def run(payload: dict) -> tuple[list, list]:
     roots = [code_root, payload["pycache"], sys.prefix, sys.base_prefix, sys.exec_prefix,
              sys.base_exec_prefix]
     roots += [os.path.realpath(r) for r in roots]
-    install_tripwire(roots, files)
+    refuse_compiling_text = install_tripwire(roots, files)
     seal_engine()  # the engine is used, never changed, by the strategy
+    refuse_compiling_text()  # the engine compiled its own text while it was imported
     module = types.ModuleType(payload["module_name"])
     module.__file__ = module_file
     module.__package__ = payload["module_name"].rpartition(".")[0]

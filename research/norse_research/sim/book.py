@@ -15,13 +15,13 @@ book in the same order, add its terms in the same order too.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass as _dataclass
 
 from ..formats import EngineClass
 from .model import BUY, PERP, SPOT, SimulationError
 
 
-@dataclass
+@_dataclass
 class PerpPosition(metaclass=EngineClass):
     quantity: float  # signed: negative is short
     entry: float  # average entry price of the open quantity

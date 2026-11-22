@@ -698,3 +698,146 @@ def test_a_round_4_probe_is_refused(name, code_root, tmp_path):
         result = run_in_runner(code_root, tmp_path, source, configuration, function="run_evil")
         assert result["ok"] is False, f"{name}: ran, {result.get('returns')}"
         assert refusal in result["error"], result["error"]
+
+
+# --- security review round 5 (main b656d5f): the dataclass compile route --------------
+
+# Text the source check never parses becomes part of the __eq__ that dataclass compiles
+# from each field name, in the strategy module's own globals (B-H1).
+GADGET = """
+
+class Probe:
+    k: int = 0
+    __annotations__["k or (@CODE@) or self.k"] = int
+
+
+Probe = @DATACLASS@(init=False, repr=False)(Probe)
+Probe() == Probe()
+"""
+VWAP_CODE = "getattr(execution.execute_bar, '__globals__').__setitem__('vwap', lambda b: 1.0)"
+FRAME_CODE = ("[f.f_locals['files'].add('@STANDIN@') for f in "
+              "[__import__('sys')._getframe(i) for i in range(1, 5)] "
+              "if 'files' in f.f_locals and 'payload' in f.f_locals]")
+OPEN_CODE = "LEAK.append(open('@STANDIN@', 'rb').read())"
+BOOK_CODE = ("[f.f_locals['self'].book.__setattr__('cash', f.f_locals['self'].book.cash + 0.25) "
+             "for f in [__import__('sys')._getframe(i) for i in range(1, 8)] "
+             "if type(f.f_locals.get('self')).__name__ == '_Run'][:1]")
+
+
+def gadget(code: str, decorator: str) -> str:
+    return GADGET.replace("@CODE@", code).replace("@DATACLASS@", decorator)
+
+
+def d4(source_of_dataclass: str) -> str:
+    """D4: from decide, the engine's live run reached through sys._getframe."""
+    return source_of_dataclass + """
+
+class Box:
+    k: int = 0
+    __annotations__["k or (""" + BOOK_CODE + """) and 0 or self.k"] = int
+
+
+Box = dataclass(init=False, repr=False)(Box)
+
+
+class Wrapped:
+    def __init__(self, *args, **kwargs):
+        self.inner = Scripted(*args, **kwargs)
+        self.interval = self.inner.interval
+
+    def decide(self, history, book):
+        Box() == Box()
+        return self.inner.decide(history, book)
+
+
+def run_evil(configuration, data_view):
+    return run_backtest(golden_strategy(Wrapped), configuration,
+                        Market.from_rows(golden_rows(), HORIZON))
+"""
+
+
+ENGINE_DATACLASS = "from norse_research.formats import dataclass\n"
+STDLIB_DATACLASS = "from dataclasses import dataclass\n"
+EXECUTION = "from norse_research.sim import execution\n"
+COMPILE_REFUSED = "may not compile text"
+NOT_HANDED_OUT = "cannot import name 'dataclass'"
+# name: (source, refused by the source check, the refusal the runner gives)
+ROUND_5 = {
+    # The review's probes as written: the engine no longer hands out dataclass.
+    "D1 formats.dataclass: the fill price": (
+        ENGINE_DATACLASS + EXECUTION + gadget(VWAP_CODE, "dataclass") + FILLED,
+        True, NOT_HANDED_OUT),
+    "D2 model.dataclass: the fill price": (
+        "from norse_research.sim import execution, model\n" + gadget(VWAP_CODE, "model.dataclass")
+        + FILLED, True, "has no attribute 'dataclass'"),
+    "D3 dataclass and sys._getframe: the tripwire's file set": (
+        ENGINE_DATACLASS + "\nLEAK = []\n" + gadget(FRAME_CODE + " and 0 or " + OPEN_CODE, "dataclass")
+        + "LEAK = LEAK[0]\n" + GOLDEN_TO_EVIL, True, NOT_HANDED_OUT),
+    "D4 dataclass and sys._getframe: the engine's book": (
+        d4(ENGINE_DATACLASS), True, NOT_HANDED_OUT),
+    # The same gadgets with dataclass taken from the standard library: the source check
+    # refuses the import, and the runner refuses the compile however it is reached.
+    "D1s the fill price, dataclass from the standard library": (
+        STDLIB_DATACLASS + EXECUTION + gadget(VWAP_CODE, "dataclass") + FILLED,
+        True, COMPILE_REFUSED),
+    "D3s the tripwire's file set, dataclass from the standard library": (
+        STDLIB_DATACLASS + "\nLEAK = []\n" + gadget(FRAME_CODE + " and 0 or " + OPEN_CODE, "dataclass")
+        + "LEAK = LEAK[0]\n" + GOLDEN_TO_EVIL, True, COMPILE_REFUSED),
+    "D4s the engine's book, dataclass from the standard library": (
+        d4(STDLIB_DATACLASS), True, COMPILE_REFUSED),
+    "C1 eval of text through enum.bltns": (
+        "import enum\n\nenum.bltns.eval('1 + 1')\n" + FILLED, True, COMPILE_REFUSED),
+    # The frame calls of sys, each refused by the hook before it returns.
+    "S1 sys._getframe": ("import sys\n\nsys._getframe(0)\n" + FILLED, True,
+                         "may not reach a frame (sys._getframe)"),
+    "S2 sys._current_frames": ("import sys\n\nsys._current_frames()\n" + FILLED, True,
+                               "may not reach a frame (sys._current_frames)"),
+    "S3 sys.settrace": ("import sys\n\nsys.settrace(None)\n" + FILLED, True,
+                        "may not reach a frame (sys.settrace)"),
+    "S4 sys.setprofile": ("import sys\n\nsys.setprofile(None)\n" + FILLED, True,
+                          "may not reach a frame (sys.setprofile)"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(ROUND_5))
+def test_a_round_5_probe_is_refused(name, code_root, tmp_path):
+    """Security review round 5, B-H1: dataclass compiled text chosen through
+    ``__annotations__``, and from there ``sys._getframe`` reached the runner's frame and
+    the engine's live run. The source check refuses each probe, and the runner refuses it
+    too, whatever the check missed: the engine hands out no compiling helper, every
+    compile of text that is not a file is refused once the engine is sealed, and so is
+    every frame call of ``sys``."""
+    from test_sim_engine import RUNNER_STRATEGY
+
+    standin = tmp_path / "standin.bin"
+    standin.write_bytes(b"HOLDOUT-STAND-IN")
+    source, by_source, refusal = ROUND_5[name]
+    source = RUNNER_STRATEGY + source.replace("@STANDIN@", str(standin))
+    problems = disallowed_imports(source, "norse_research.strategies.probe", False,
+                                  ["research/norse_research/strategies"])
+    if by_source:
+        assert problems, f"{name}: the source check accepted it"
+    configuration = {
+        "window": {"first_return_day": "2021-03-01", "last_return_day": "2021-03-03", "days": 3},
+        "costs": {"fee_bps_per_side": 10, "slippage_bps_per_side": 2},
+    }
+    result = run_in_runner(code_root, tmp_path, source, configuration, function="run_evil")
+    assert result["ok"] is False, f"{name}: ran, {result.get('returns')}"
+    assert refusal in result["error"], result["error"]
+
+
+def test_the_golden_run_compiles_only_files_once_sealed(code_root, tmp_path):
+    """The compile refusal leaves a legitimate run golden: the strategy module and every
+    import are files under the readable roots."""
+    from test_sim_engine import RUNNER_STRATEGY
+
+    configuration = {
+        "window": {"first_return_day": "2021-03-01", "last_return_day": "2021-03-03", "days": 3},
+        "costs": {"fee_bps_per_side": 10, "slippage_bps_per_side": 2},
+    }
+    result = run_in_runner(code_root, tmp_path, RUNNER_STRATEGY, configuration)
+    assert result["ok"], result
+    golden = json.loads((Path(__file__).parent / "fixtures" / "sim-golden.json").read_text())
+    for (_, got), want in zip(result["returns"], golden["weights"]["expected"]["returns"],
+                              strict=True):
+        assert got == pytest.approx(want, rel=1e-12)

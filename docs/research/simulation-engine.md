@@ -355,16 +355,42 @@ reached from a generator's `gi_frame`, which led to the engine's live run, the r
 payload and the audit hook's own state. `build` now gives attributes only to the
 engine's own frozen objects while they are built. The allowlist holds only
 `__future__`, `collections.abc`, `math`, `datetime` and the engine, and a test walks
-every attribute path the check accepts from them, failing on any route to the
-builtins, a frame or code object, or a helper that evaluates text. The check refuses
+the attribute paths the check accepts from them, four levels deep through modules,
+classes and other objects, failing on any route to the builtins module or a
+forbidden builtin, a frame or code object, a sensitive module, or a helper named in its
+list. The check refuses
 the frame names, and the runner's audit hook refuses the four ways in to a frame and
 every use of the garbage collector. The metaclass refuses a subclass of an engine class
 made outside the engine, or made at all once the engine is sealed, under any name and
 by any route (`type`, `__build_class__`, a class statement). The loader's zip reader is
-held under private names. A `str.format` field name still walks attributes inside a
-string, dunders and closure cells included, so it can show a view's rows not yet known;
-in a backtest the strategy already holds those rows in the market it built, and nothing
-read that way changes the run. Applying the review showed that a
+held under private names.
+
+Round 5 of the review found that the walk, as round 4 stated it, missed a function by
+what it does: `formats.dataclass` and `sim.<module>.dataclass` were the standard
+library's `dataclass`, which compiles `__eq__` from text built of each field name, and a
+bare `__annotations__` entry in a class body put any code into that text. It replaced the
+fill price, and from the compiled code `sys._getframe` reached the runner's frame, the
+tripwire's file set and the engine's live book (B-H1). Now the engine binds `dataclass`
+and `field` under private names; the source check refuses `dataclass`, `field`,
+`make_dataclass`, `namedtuple`, `NamedTuple`, every bare dunder name but `__name__`, and
+`import collections.abc`, which would bind `collections` and its `namedtuple` (B-L1);
+the runner's audit hook refuses `sys._getframe`, `sys._current_frames`,
+`sys._getframemodulename`, `sys.settrace` and `sys.setprofile`, and once the engine is
+sealed it refuses compiling any text that is not a file under the run's readable roots;
+and the walk also flags any reached function, or class other than Python's core
+types, defined in a sensitive module, the class that makes code objects, and the
+packages a dotted import of an allowlisted module would bind.
+
+Two kinds of string the check does not parse remain, and they are not alike. A
+`str.format` field name walks attributes inside a string, dunders and closure cells
+included, so it can show a view's rows not yet known; in a backtest the strategy already
+holds those rows in the market it built, and nothing read that way changes the run.
+Text that would be executed, as `dataclass` field names were, is now refused by name in
+the source check and, whatever the check misses, by the compile refusal at run time. A
+write into a function's `__globals__` meets a run-time refusal only when it comes through
+compiled text or a frame: one that reached a builtin such as `getattr` by an attribute
+path, as `enum.bltns` did in round 4, is stopped by the source check and the walk alone,
+since no audit event fires on the write. Applying the review showed that a
 dunder in the strategy's source is not the only way past a seal: `functools.update_wrapper`,
 `functools.wraps` and `enum.global_enum` take attribute or module names as strings and
 write into what they find, and each replaced the fill price in a sealed run. The sealed

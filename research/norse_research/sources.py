@@ -81,11 +81,18 @@ FRAME_NAMES = frozenset(
     {"gi_frame", "cr_frame", "ag_frame", "tb_frame", "f_back", "f_locals", "f_globals",
      "f_builtins", "f_code", "gi_code", "cell_contents"}
 )
+# Helpers that build source text from names a strategy chooses and compile it, as
+# ``dataclass`` does for ``__eq__`` from each field name (security review round 5, B-H1:
+# one ``__annotations__`` entry replaced the fill price). The runner also refuses every
+# compile of text that is not a file once the engine is sealed.
+COMPILING_HELPERS = frozenset(
+    {"dataclass", "field", "make_dataclass", "namedtuple", "NamedTuple"}
+)
 FORBIDDEN_NAMES = frozenset(
     {"sys", "modules", "os", "io", "builtins", "importlib", "subprocess", "socket",
      "pathlib", "shutil", "inspect", "attrgetter", "methodcaller", "gc", "ctypes", "mro",
      "update_wrapper", "wraps", "global_enum"}
-) | FRAME_NAMES
+) | FRAME_NAMES | COMPILING_HELPERS
 DECLARED = ("CONFIGURATIONS", "PARAMETERS", "DEFAULTS")
 
 
@@ -133,6 +140,18 @@ def disallowed_imports(
             problems += [
                 f"line {node.lineno}: import {a.name}" for a in node.names if not allowed(a.name)
             ]
+            # ``import a.b`` binds ``a``, the package, not ``a.b``: ``import collections.abc``
+            # hands over ``collections.namedtuple`` (security review round 5, B-L1). For an
+            # allowlisted module the package must be allowed itself, or the name bound with
+            # ``as``, or the module imported from (``from collections.abc import Mapping``).
+            # A strategy's own modules are its own tree, as before (review N12).
+            problems += [
+                f"line {node.lineno}: import {a.name} binds {a.name.split('.')[0]}; use "
+                f"from {a.name} import ..."
+                for a in node.names
+                if a.asname is None and a.name in ALLOWED_IMPORTS and "." in a.name
+                and not allowed(a.name.split(".")[0])
+            ]
         elif isinstance(node, ast.ImportFrom):
             base = _resolved_base(node, package)
             if not allowed(base) and not all(allowed(f"{base}.{a.name}") for a in node.names):
@@ -157,8 +176,11 @@ def disallowed_imports(
         ):
             problems.append(f"line {node.lineno}: attribute {node.attr}")
         elif isinstance(node, ast.Name) and (
-            node.id in ("__builtins__", "__loader__", "__spec__") or node.id in FORBIDDEN_NAMES
+            (node.id.startswith("__") and node.id != "__name__") or node.id in FORBIDDEN_NAMES
         ):
+            # Every bare dunder but ``__name__``: ``__builtins__`` hands over the builtins,
+            # and ``__annotations__`` in a class body chose the text ``dataclass`` compiled
+            # (security review round 5, B-H1).
             problems.append(f"line {node.lineno}: name {node.id}")
     return problems
 

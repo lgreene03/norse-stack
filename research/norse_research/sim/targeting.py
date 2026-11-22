@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from bisect import bisect_right
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass as _dataclass
 from itertools import pairwise
 
 from ..formats import FUNDING_TOLERANCE_MS, EngineClass, Funding
@@ -87,7 +87,7 @@ def perpetual_of(spot_symbol: str, perpetuals: Iterable[str]) -> str | None:
 # --- sections 5 and 7: trailing funding -------------------------------------------------
 
 
-@dataclass(frozen=True)
+@_dataclass(frozen=True)
 class FundingWindow(metaclass=EngineClass):
     """The published settlements with ``calc_time`` in (t - L + 60 s, t + 60 s].
 
