@@ -3,21 +3,27 @@
 **No verdict on H1 or H2: the gate did not pass its calibration, so no strategy was judged.**
 
 The registration allowed a strategy to be judged only by a gate that had first shown, on
-simulated data, that it can tell skill from luck. It had to pass at most 5% of 1,000 simulated
-trial ledgers with no skill at N = 30, built on the registered windows with families of trials
-correlated within and across the two hypotheses, and it had to detect a planted net Sharpe
-ratio of 1.5. It did not pass: either a figure in the table below missed its mark, or the
-calibration did not complete before the verdict, and the table shows which. The report gives
-the method, the seeds, the code and the figures at 1.0 and 2.0.
+simulated data, that it can tell skill from luck. In every family of 1,000 simulated trial
+ledgers with no skill, built on the registered windows with trials correlated within and across
+the two hypotheses, it had to pass at most 5% at N = 30; and with one configuration carrying a
+planted net Sharpe ratio of 2.0, the planted hypothesis had to pass development in more than half
+of the 1,000 ledgers in each of the four such families. It did not pass: either a figure in the
+table below missed its mark, or the calibration did not complete before the verdict, and the
+table shows which. The gate had already been revised once, before any trial, after a first
+calibration of an earlier form of it (decision D22), and the registration rules out revising it
+again on the strength of this result (decision D24). The report gives the method, the seeds,
+the code and the figures at 1.0 and 1.5.
 
 | Calibration (G1.7), generated on {{GENERATED_AT}} | |
 |---|---|
-| Ledgers with no skill the full gate passed, of 1,000 at N = 30 (limit 5%) | {{CAL_NOSKILL_PASS_RATE}}, {{CAL_FALSE_PASS_RESULT}} |
-| Planted net Sharpe ratio of 1.5 in one configuration: share of H1 families passed | {{CAL_POWER_H1_SINGLE}} |
-| Planted net Sharpe ratio of 1.5 in one configuration: share of H2 families passed | {{CAL_POWER_H2_SINGLE}} |
-| Planted net Sharpe ratio of 1.5 shared by every configuration: share of H1 families passed | {{CAL_POWER_H1_SHARED}} |
-| Planted net Sharpe ratio of 1.5 shared by every configuration: share of H2 families passed | {{CAL_POWER_H2_SHARED}} |
-| Detection bar for the planted Sharpe ratio of 1.5 | {{CAL_POWER_BAR}}, {{CAL_POWER_RESULT}} |
+| Ledgers with no skill the full gate passed, of 1,000 at N = 30, in the worst family (limit 5% in every family) | {{CAL_NOSKILL_PASS_RATE}}, {{CAL_FALSE_PASS_RESULT}} |
+| Planted net Sharpe ratio of 2.0 in one configuration: share of ledgers in which H1 passed development, in its lower family | {{CAL_DETECTION_H1}} |
+| Planted net Sharpe ratio of 2.0 in one configuration: share of ledgers in which H2 passed development, in its lower family | {{CAL_DETECTION_H2}} |
+| Detection: more than half in each of the four families at 2.0 | {{CAL_DETECTION_RESULT}} |
+| Planted net Sharpe ratio of 1.5 in one configuration: share of H1 ledgers passed (reported) | {{CAL_POWER_H1_SINGLE}} |
+| Planted net Sharpe ratio of 1.5 in one configuration: share of H2 ledgers passed (reported) | {{CAL_POWER_H2_SINGLE}} |
+| Planted net Sharpe ratio of 1.5 shared by every configuration: share of H1 ledgers passed (reported) | {{CAL_POWER_H1_SHARED}} |
+| Planted net Sharpe ratio of 1.5 shared by every configuration: share of H2 ledgers passed (reported) | {{CAL_POWER_H2_SHARED}} |
 | Report | {{CAL_REPORT}} |
 
 So, as the registration requires, no strategy was judged. This is a result about the
@@ -26,10 +32,10 @@ strategy works, in either direction, and no development or holdout figure is rep
 because the registration gives such figures standing as evidence only through a calibrated
 gate. The holdout was never unsealed, and any trial entries in the ledger ({{N}} when this was
 published) stay there unjudged. Declaring the gate failed is not a way out of a bad result:
-calibration runs on simulated ledgers, before any strategy is judged, against the 5% limit
-registered with everything else and the detection bar the report states, with the date it was
-fixed. A gate that did not pass its own specification was not used, which is the rule working
-as written.
+calibration runs on simulated ledgers, before any strategy is judged, against the 5% limit and
+the detection bar registered with everything else, both fixed before the calibration they
+judge was run. A gate that did not pass its own specification was not used, which is the rule
+working as written.
 
 ### What was registered
 

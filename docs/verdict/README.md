@@ -45,7 +45,7 @@ and whether the ledger holds an unseal entry, so no one chooses.
 | 0 | The ledger's hash chain is broken, so the iteration is void | [OUTCOME_VOID.md](OUTCOME_VOID.md) |
 | 1 | The gate did not pass its calibration (G1.7), including a calibration that never completed, so no strategy was judged | [OUTCOME_GATE_NOT_CALIBRATED.md](OUTCOME_GATE_NOT_CALIBRATED.md) |
 | 2 | Either hypothesis is PASS | [OUTCOME_PASS.md](OUTCOME_PASS.md) |
-| 3 | Either hypothesis is NOT RUN | [OUTCOME_NOT_RUN.md](OUTCOME_NOT_RUN.md) |
+| 3 | Either hypothesis is NOT RUN, and neither is PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT | [OUTCOME_NOT_RUN.md](OUTCOME_NOT_RUN.md) |
 | 4 | Either hypothesis is PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT | [OUTCOME_PASSED_DEVELOPMENT_NOT_TESTED.md](OUTCOME_PASSED_DEVELOPMENT_NOT_TESTED.md) |
 | 5 | Both are FAIL and the ledger holds an unseal entry | [OUTCOME_FAIL_ON_HOLDOUT.md](OUTCOME_FAIL_ON_HOLDOUT.md) |
 | 6 | Both are FAIL and there is no unseal entry | [OUTCOME_FAIL.md](OUTCOME_FAIL.md) |
@@ -53,9 +53,13 @@ and whether the ledger holds an unseal entry, so no one chooses.
 Every combination that section 11 of the pre-registration allows lands in exactly one row. A
 pass by either hypothesis, whatever the other's verdict (FAIL, PASSED DEVELOPMENT, NOT TESTED ON
 THE HOLDOUT, or NOT RUN), is rule 2. A hypothesis that is NOT RUN with no pass beside it is rule
-3, whether the other failed in development, failed on the holdout or is NOT RUN as well.
-PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT without a pass beside it can only mean that the
-other hypothesis took the holdout and failed it, which is rule 4. Two fails are rule 5 when one
+3, whether the other failed in development, failed on the holdout or is NOT RUN as well, but not
+when the other passed development. PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT without a pass
+beside it means either that the other hypothesis took the holdout and failed it, or, under
+decision D23, that the other's grid was neither complete nor out of budget when the verdict was
+given, so no unseal could happen and the other is NOT RUN; both are rule 4, which is why rule 3
+leaves out a NOT RUN beside a development pass. Section 11 puts that verdict word before FAIL,
+so a development pass is never published as a fail because the holdout stayed sealed. Two fails are rule 5 when one
 of them passed development and failed on the holdout, including a holdout run that never
 returned a result, and rule 6 when neither passed development, so the holdout was never opened.
 A fail because a hypothesis's entries and the reserve ran out is a FAIL like any other. Rules 0
@@ -94,7 +98,10 @@ differences allowed are the filled values.
 ## Placeholders
 
 `H1_*` and `H2_*` are the same figure for each hypothesis. "The holdout hypothesis" is the one
-whose candidate took the holdout, and "the other hypothesis" is the remaining one.
+whose candidate took the holdout, and "the other hypothesis" is the remaining one. Where no
+candidate took the holdout because the other grid was unfinished (decision D23), "the other
+hypothesis" of OUTCOME_PASSED_DEVELOPMENT_NOT_TESTED.md is the one that passed development, and
+every holdout placeholder reads "not opened".
 
 | Placeholder | Value |
 |---|---|
@@ -120,15 +127,16 @@ whose candidate took the holdout, and "the other hypothesis" is the remaining on
 | `HOLDOUT_RETURN`, `HOLDOUT_SHARPE`, `HOLDOUT_BOUND`, `HOLD1` | the compound net return over the 304 holdout days, the annualised holdout Sharpe ratio, HOLD-1's lower bound annualised, and HOLD-1's result |
 | `HOLDOUT_CANDIDATE_MINTRL` | the candidate's minimum track record length against a Sharpe ratio of 0, in days, from its development statistics (section 10) |
 | `N` | the number of trial entries counted in N (section 9) |
-| `SR0` | DEV-1's SR0 (section 10) annualised: the Sharpe ratio the best of N skill-less trials is expected to show, with the ledger's N and V from the selectable runs' daily Sharpe ratios |
+| `H1_SR0`, `H2_SR0` | the hypothesis's DEV-1 SR0 (section 10) annualised: the Sharpe ratio the best of N independent skill-less trials over its window is expected to show, with the ledger's N and V = 1/(T − 1) of the window (decision D22), so it differs between the hypotheses only through their windows' lengths |
 | `DEV_CLOSE_ENTRY`, `DEV_CLOSE_DATE` | the hash and date of the last ledger entry counted in N: under `prereg-v1`, the last entry in the frozen ledger; under `prereg-v2` (decision D21, if adopted), the last entry before the unseal entry, or with no unseal entry the last entry at `LEDGER_HEAD` (open question 4) |
 | `LEDGER_HEAD`, `LEDGER_TAG` | the ledger entry hash the verdict was computed at, and the `ledger-*` milestone tag marking it; G1.5 tags the head at each milestone, and no verdict is computed at an untagged head |
 | `PREREG_TAG`, `PREREG_COMMIT` | the pre-registration tag the genesis entry names, and its commit |
 | `DEV_MANIFEST_SHA256`, `HOLDOUT_MANIFEST_SHA256` | the manifests' SHA-256, which must equal the registered c27499e97edd1d2288a7d38a7f0a890f9be108919dda22f7e3c9c119e725a55d and 806e1d6acdd90c5454297b78c42c37cfb6f522ebcb81f01b773ba66b9308ea77 unless a later `prereg-*` tag changed them |
-| `CAL_NOSKILL_PASS_RATE`, `CAL_FALSE_PASS_RESULT` | the share of the 1,000 no-skill ledgers the full gate passed, as a percentage, and whether the 5% limit was met |
-| `CAL_POWER_H1_SINGLE`, `CAL_POWER_H2_SINGLE` | the share of simulated families of that hypothesis the full gate passed when one configuration carries a planted net Sharpe ratio of 1.5, as a percentage |
-| `CAL_POWER_H1_SHARED`, `CAL_POWER_H2_SHARED` | the same when every configuration of the family shares that edge |
-| `CAL_POWER_BAR`, `CAL_POWER_RESULT` | the detection bar for the planted Sharpe ratio of 1.5 (open question 2), and whether it was met |
+| `CAL_NOSKILL_PASS_RATE`, `CAL_FALSE_PASS_RESULT` | the share of the 1,000 no-skill ledgers the full gate passed in its worst no-skill family, as a percentage, and whether the 5% limit was met in every family (section 10, "Calibration") |
+| `CAL_DETECTION_H1`, `CAL_DETECTION_H2` | with one configuration carrying a planted net Sharpe ratio of 2.0, the share of ledgers in which the planted hypothesis passed development, in the lower of its two such families, as a percentage |
+| `CAL_DETECTION_RESULT` | whether the detection half was met: more than half in each of the four single-planted families at 2.0, at N = 30 (section 10, "Calibration"; decision D22) |
+| `CAL_POWER_H1_SINGLE`, `CAL_POWER_H2_SINGLE` | reported only: the share of ledgers in which the planted hypothesis passed development when one configuration carries a planted net Sharpe ratio of 1.5, as a percentage |
+| `CAL_POWER_H1_SHARED`, `CAL_POWER_H2_SHARED` | the same when every configuration of the hypothesis shares that edge |
 | `CAL_REPORT`, `CAL_COMMAND` | the path of the calibration report (G1.7), and the command that reruns it |
 | `GENERATED_AT` | when the figures were generated (UTC) |
 | `VERDICT_COMMIT` | the commit on main at which the verdict, or the verification that voided it, was computed |
@@ -149,7 +157,8 @@ as a dated erratum below the section, never as an edit within it.
 
 | Date | Commit | Change |
 |---|---|---|
-| 2026-11-21 | this commit | all seven texts and this page, first version, revised before commit after the quant role's review |
+| 2026-11-21 | 24b7b7c | all seven texts and this page, first version, revised before commit after the quant role's review |
+| 2026-11-22 | this commit | for `prereg-v2` (#65): decision D22's null variance, so `SR0` becomes `H1_SR0` and `H2_SR0` and the five texts that state it no longer say it depends on how the runs differed; the calibration's restated clause (a planted 2.0 in each of four families, the planted hypothesis passing development), so rule 1's text, its table and the calibration placeholders change, the 1.5 figures are reported only, and open question 2 is settled; and decision D23, so PASSED DEVELOPMENT, NOT TESTED ON THE HOLDOUT also covers a development pass beside an unfinished grid, rule 3 leaves that combination to rule 4, and rule 4's text covers both of its cases. Corrections made after the quant and security roles' reviews of #65, which are AI agent roles, not approvals |
 
 ## Review
 
@@ -178,7 +187,12 @@ whichever way each is decided, except where a question says otherwise.
    no trial ran and could call it FAIL if trials had already run. Recommendation: the kill
    criterion governs, a calibration that never completed counts as not passed, and the
    published text is rule 1's, which carries no verdict word for either hypothesis.
-2. **Medium. "Detects a planted Sharpe of 1.5" has no registered number.** Section 10 and G1.7
+2. **Medium. "Detects a planted Sharpe of 1.5" has no registered number. Settled on 2026-11-22
+   by decision D22:** section 10 now registers the number, at N = 30, in each of the four
+   single-planted families at an annualised Sharpe ratio of 2.0, the planted hypothesis passing
+   development in more than 500 of 1,000 ledgers, with power at 1.5 reported; and, by decision
+   D24, a calibration rerun that misses it closes the iteration NOT JUDGED, which rule 1's text
+   publishes. The question as first written follows. Section 10 and G1.7
    ask the gate to detect it but name no power, the hypothesis, N, the family form or DEV-2's
    synthetic benchmark. A whole-gate bar of even odds would probably not be met: at N = 30
    DEV-1 alone needs 1.52 for H2 (section 12), and a shared edge roughly halves power again
