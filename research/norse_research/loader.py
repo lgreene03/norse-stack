@@ -25,12 +25,13 @@ The only way research code receives rows is ``DatasetLoader.load``. It:
   return day of H1's window) only inside an open ledger entry, which the harness
   sets after the entry is pushed (G1.5). This is the threat model's speed bump for
   T2: a script calling the loader directly is stopped and told why, though nothing
-  stops it reading files itself. Two read-only integrity audits, which compute no
-  return, pass ``integrity_audit=True``, and only they may (a test checks this): the
-  REST comparison of G1.1, which checks archive bars against the exchange, and the
-  universe check of quant review 1 of PR 62, C1 (``reconcile_universe``), which ranks
-  every development month end with H1's ``month_end_ranking`` and reports only whether
-  G0.6's published top tens agree; the owner approved it on 2026-11-22.
+  stops it reading files itself. The REST comparison of G1.1, which checks archive
+  bars against the exchange and computes no return, passes ``integrity_audit=True``
+  and is the only caller that may (a test checks this). Dated note: on 2026-11-22, with
+  the owner's approval, a one-off universe check (quant review 1 of PR 62, C1), the
+  module ``reconcile_universe`` of commit 05e338a, read development rows this way once.
+  It found H1's ranking equal to G0.6's at all 101 development month ends and was
+  removed afterwards on security review A-M1.
 
 Every result carries the manifest's SHA-256 and the files read, which is what a
 ledger entry cites (G1.5).

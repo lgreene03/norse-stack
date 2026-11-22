@@ -1276,18 +1276,14 @@ def test_the_harness_exposes_no_network_submission_surface():
         assert not imported & servers, f"{path.name} imports {imported & servers}"
 
 
-def test_only_the_two_integrity_audits_pass_the_integrity_audit_flag():
-    # G1.5, threat T2: the REST comparison (datasets.py) and the universe check of quant
-    # review 1, C1 (reconcile_universe.py, owner's approval of 2026-11-22), both read-only
-    # and computing no return, are the only callers that read out-of-sample development
-    # rows outside a ledger entry; each passes the flag once.
+def test_only_the_rest_comparison_passes_the_integrity_audit_flag():
     callers = [
-        path.relative_to(RESEARCH / "norse_research").as_posix()
+        path.name
         for path in sorted((RESEARCH / "norse_research").rglob("*.py"))
         for node in ast.walk(ast.parse(path.read_text()))
         if isinstance(node, ast.keyword) and node.arg == "integrity_audit"
     ]
-    assert callers == ["datasets.py", "reconcile_universe.py"]
+    assert callers == ["datasets.py"]
 
 
 def test_only_the_harness_opens_a_ledger_entry_for_the_loader():

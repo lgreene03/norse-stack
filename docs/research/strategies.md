@@ -193,6 +193,19 @@ item 5 requires. `rank_month_ends` would leave them out anyway, since it never r
 with no volume in the window; the skip makes it hold by the manifests' metadata rather than by
 the rows.
 
+**The ranking reproduces G0.6's (check C1, dated 2026-11-22).** Quant review 1 asked whether
+step 3, run on the pinned development files, gives the top tens G0.6 published in
+research/coverage/universe-candidates.json (`development_ranking`), since any difference
+would now stop every H1 run at choice 16's guard. With the owner's approval, a one-off
+module (`reconcile_universe`, commit 05e338a; the run itself used its pre-rebase twin
+2a08c64, whose module and `trend.py` are identical) ranked every development month end with
+`month_end_ranking`, the guard included, and compared. Result: equal at all 101 development
+month ends, 2017-08 to 2025-12; the check printed nothing else. It read the out-of-sample
+rows outside a ledger entry as a second integrity-audit caller of the loader, so on security
+review (A-M1: it ran unpinned strategy code outside the runner with those rows in reach) the
+module and its tests were removed once it had run, and the REST comparison is again the
+loader's only such caller (threat model, T2).
+
 What each configuration reads: H1 reads every spot daily USDT series the listing names (619 in
 the development manifest, which by its metadata hold 702,301 rows in 23,459 files, loaded
 whole by every H1, B-H1 and C-H1 run), every spot 15-minute series lazily for fills (107),
