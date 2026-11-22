@@ -14,7 +14,7 @@ in `values.yaml` defaults to `1` precisely because of the constraints below.
 | **huginn** | singleton | No (by default) | Strategy state + position must be shared & deduped across replicas, or partition the symbol universe so no two replicas trade the same instrument. |
 | **sleipnir** | shardable | Yes (Kafka consumer group) | Per-replica rate limiter and any local SQLite ledger must move to shared/idempotent stores; fills must be idempotent on `(intent_id)`. |
 | **muninn** | singleton (ingestion) / stateless (query) | Partial | Ingestion is a singleton (duplicate market-data writes); the query/API surface is stateless and replicable if split out. |
-| **odin / huginn-ai** | singleton consumers | No (by default) | Both maintain in-memory accounting/model state keyed off the fills stream; replicas would double-count unless they share a deduped store. |
+| **odin** | singleton consumer | No (by default) | Maintains in-memory accounting state keyed off the fills stream; replicas would double-count unless they share a deduped store. |
 
 ## The shared-dedup requirement
 
@@ -37,8 +37,8 @@ Therefore, **before** raising any `replicaCount`:
 > or a Redis seen-set with TTL), so dedup is correct regardless of which replica
 > handles a given message after a rebalance.
 
-The existing duplicate-fill alerts (`HuginnAiDuplicateFills`, `OdinDuplicateFills`
-in `monitoring/alerts/norse-stack.yml`) are the canary: if they fire after you
+The existing duplicate-fill alert (`OdinDuplicateFills` in
+`monitoring/alerts/norse-stack.yml`) is the canary: if they fire after you
 scale out, the shared-dedup requirement was not met.
 
 ## Per-service detail
@@ -80,14 +80,14 @@ scale out, the shared-dedup requirement was not met.
   not run ingestion. The current single Deployment couples both, so it inherits
   the singleton constraint until split.
 
-### odin & huginn-ai — analytics / ML consumers (SINGLETON)
+### odin — analytics consumer (SINGLETON)
 
-- Both consume `executions.fills.v1` and maintain **in-memory accounting**
-  (`odin` portfolio from `INITIAL_CASH`) or **model state** (`huginn-ai`
-  retraining). Replicas would double-count fills / train divergent models.
+- Consumes `executions.fills.v1` and maintains **in-memory accounting**
+  (portfolio from `INITIAL_CASH`). Replicas would double-count fills.
 - Not part of the core Helm chart; if added, gate on the shared-dedup
-  requirement above (shared portfolio store / shared model store + leader
-  election for training).
+  requirement above (shared portfolio store).
+- huginn-ai, the other singleton consumer listed here, was retired by G2.6 on
+  2026-11-22 ([CONTAINERS.md](CONTAINERS.md)).
 
 ## Stateless infrastructure note
 

@@ -9,7 +9,7 @@
 
 SHELL := /bin/bash
 
-.PHONY: help bootstrap clone build up up-ghcr smoke down config bench \
+.PHONY: help bootstrap clone build up up-ghcr smoke down config \
 	heartbeat-install heartbeat-uninstall heartbeat-status
 
 help: ## Show this help
@@ -48,9 +48,6 @@ smoke: ## Run the end-to-end smoke test
 
 config: ## Validate the compose configuration
 	docker compose config -q && echo "compose config OK"
-
-bench: ## Run the storage-path latency microbenchmark (Mimir point-in-time store)
-	python3 services/mimir/bench_pit.py
 
 down: ## Tear down the stack and volumes
 	docker compose down -v

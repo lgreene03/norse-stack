@@ -2,8 +2,8 @@
 
 The Norse Stack is a local, end-to-end quantitative trading **simulation**: real
 (unauthenticated) Binance public market data flows through feature computation, a
-cost-aware strategy engine, and a simulated execution gateway, with analytics,
-ML, and full observability layered on top. Execution is **sim-only** — no orders
+cost-aware strategy engine, and a simulated execution gateway, with analytics
+and full observability layered on top. Execution is **sim-only** — no orders
 ever reach a real exchange.
 
 This document is the source of truth for the topology. GitHub renders the
@@ -15,9 +15,11 @@ contracts are documented in [`CONTRACTS.md`](CONTRACTS.md)).
 
 ## Container topology
 
-The 21 long-running services from `docker-compose.yml` (the full stack is 23
+The 17 long-running services from `docker-compose.yml` (the full stack is 19
 containers — `topic-init` and `minio-init` are one-shot bootstrap jobs that
 provision Kafka topics / the MinIO bucket and then exit, so they are omitted here).
+bragi, huginn-ai, mimir and heimdall were retired on 2026-11-22 by the owner's
+decision (G2.6, [CONTAINERS.md](CONTAINERS.md)).
 Solid edges are Kafka topics (labelled with the topic name); dashed edges are
 synchronous calls (HTTP/gRPC, JDBC, S3, OTLP) or scrapes.
 
@@ -35,17 +37,13 @@ flowchart LR
         sleipnir["sleipnir<br/>Go execution gateway<br/>sim fills · risk"]
     end
 
-    subgraph analytics["Analytics, explainability & ML"]
+    subgraph analytics["Analytics"]
         odin["odin<br/>Python<br/>analytics (Sharpe, VaR, cost)"]
-        bragi["bragi<br/>Python<br/>trade explainability"]
-        huginnai["huginn-ai<br/>Python<br/>XGBoost signal-quality model<br/>served, not a live signal"]
     end
 
-    subgraph planes["Research, data & execution-quality planes"]
-        mimir["mimir<br/>Python<br/>point-in-time feature store"]
+    subgraph planes["Research & execution-quality planes"]
         research["research-gateway<br/>Go<br/>walk-forward/PBO as a service"]
         forseti["forseti<br/>Python<br/>execution TCA · market impact"]
-        heimdall["heimdall<br/>Python<br/>Gaussian-HMM regime"]
     end
 
     subgraph infra["Shared infrastructure"]
@@ -78,18 +76,12 @@ flowchart LR
     redpanda -->|"executions.intents.v1"| sleipnir
     sleipnir -->|"executions.fills.v1"| redpanda
 
-    %% ── Fills + features fan-out to analytics ───────────────────────
+    %% ── Fills fan-out to analytics ──────────────────────────────────
     redpanda -->|"executions.fills.v1"| huginn
     redpanda -->|"executions.fills.v1"| odin
-    redpanda -->|"executions.fills.v1"| bragi
-    redpanda -->|"features.obi.v1 + fills"| huginnai
-    redpanda -->|"features.obi.v1"| bragi
 
-    %% ── Platform planes: feature store, regime, execution-quality ───
-    redpanda -->|"features.obi.v1"| mimir
-    redpanda -->|"features.obi.v1"| heimdall
+    %% ── Platform planes: execution-quality ──────────────────────────
     redpanda -->|"executions.fills.v1"| forseti
-    heimdall -.->|"warm-start /api/features/history"| mimir
     %% research-gateway is a standalone sidecar: it serves earlier runs read-only
     %% over HTTP and starts none (G1.2), off the live Kafka path, so it has no topic edge.
 
@@ -136,7 +128,7 @@ sequenceDiagram
     participant K as Redpanda
     participant H as huginn
     participant S as sleipnir
-    participant O as odin / bragi / huginn-ai
+    participant O as odin
 
     B->>OB: order book snapshot
     OB->>OB: compute 10-layer OBI feature
@@ -155,10 +147,9 @@ sequenceDiagram
         K->>H: deliver executions.fills.v1
         H->>H: update portfolio (cash, position, PnL)
         K->>O: deliver executions.fills.v1
-        O->>O: analytics, explainability, ML labels
+        O->>O: analytics
     else edge below hurdle
         H->>H: block trade (no intent)
-        Note over H: logged to bragi as a<br/>blocked decision
     end
 ```
 
@@ -172,7 +163,7 @@ provisioned by [`../scripts/provision-topics.sh`](../scripts/provision-topics.sh
 |-------|----------|-----------|
 | `events.trade` | muninn | (warehouse / replay) |
 | `features.vwap.1m.v1` | muninn | (warehouse / replay) |
-| `features.obi.v1` | obi-bridge | huginn, bragi, huginn-ai |
+| `features.obi.v1` | obi-bridge | huginn |
 | `prices.realtime.v1` | huginn | (live exit monitoring) |
 | `executions.intents.v1` | huginn | sleipnir |
-| `executions.fills.v1` | sleipnir | huginn, odin, bragi, huginn-ai |
+| `executions.fills.v1` | sleipnir | huginn, odin |

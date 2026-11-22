@@ -14,7 +14,7 @@ boundaries in the Norse Stack. Producers and consumers MUST agree on these.
 | Topic                   | Producer        | Consumers              | Cleanup  | Retention | Partitions |
 |-------------------------|-----------------|------------------------|----------|-----------|------------|
 | `prices.realtime.v1`    | obi-bridge (WS) | huginn                 | delete   | 6h        | 6          |
-| `features.obi.v1`       | obi-bridge / muninn | huginn, huginn-ai, bragi | delete | 24h     | 3          |
+| `features.obi.v1`       | obi-bridge / muninn | huginn           | delete   | 24h       | 3          |
 | `features.vwap.1m.v1`   | muninn          | huginn                 | delete   | 24h       | 3          |
 | `events.trade`          | (ingest/smoke)  | muninn                 | delete   | 24h       | 3          |
 | `executions.intents.v1` | huginn          | sleipnir               | delete   | 7d        | 3          |
@@ -44,7 +44,8 @@ All topics use `cleanup.policy=delete` (time-bounded). Replication factor is 1
 ## `features.obi.v1` — OBI feature event
 
 Produced by `services/obi-bridge/bridge.py`. Consumed by Huginn
-(`internal/model.FeatureEvent`), Huginn-AI, and Bragi.
+(`internal/model.FeatureEvent`). Huginn-AI, Bragi, Mimir and Heimdall also
+consumed it until G2.6 retired them on 2026-11-22 (docs/CONTAINERS.md).
 
 Huginn decodes `values` as `map[string]float64`; **every entry in `values` MUST
 be numeric** or the whole event is dropped. Non-numeric metadata (ids, version
@@ -93,8 +94,8 @@ strings) lives at the top level only.
 | `fearGreed`        | Crypto Fear & Greed Index (0–100). |
 | `fundingRate`      | Perpetual funding rate (per 8h). |
 | `oiChange`         | Open-interest % change since last poll. |
-| `mlScore`          | Huginn-AI XGBoost confidence (0-1); provenance carried in the feature payload, consulted by the OBI strategy only when `STRATEGY_OBI_ML_GATE` is enabled (off by default). |
-| `mlReady`          | 1.0 if the ML model is trained, else 0.0. |
+| `mlScore`          | Always 0.5: Huginn-AI, its source, was retired under G2.6 on 2026-11-22 (docs/CONTAINERS.md), and obi-bridge falls back to 0.5 when the call fails. obi-bridge is frozen (D1), so the field stays in the payload. Consulted by the OBI strategy only when `STRATEGY_OBI_ML_GATE` is enabled (off by default). |
+| `mlReady`          | Always 0.0 since Huginn-AI's retirement (G2.6); it was 1.0 only when a trained model answered. |
 | `newsSentiment`    | Always 0.0: news-sentinel, its source, was stopped on 2026-11-21 and retired under G2.6 (docs/CONTAINERS.md). obi-bridge is frozen (D1), so the field stays in the payload. |
 | `regimeVolAnn`     | Annualized realized volatility. |
 | `regimeHurst`      | Hurst-exponent proxy. |

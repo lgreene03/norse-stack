@@ -58,8 +58,8 @@ Given that boundary, the following are **deliberate omissions**, not gaps:
 - **No Kafka SASL / mTLS on Redpanda.** The broker is reachable only from the
   trusted local network and the `127.0.0.1` external listener. Broker-level
   authn/authz is out of scope for the single-host sim.
-- **Permissive CORS (`*`) on the read-only analytics APIs** (odin, bragi,
-  huginn-ai). These expose read-only data on loopback;
+- **Permissive CORS (`*`) on the read-only analytics APIs** (odin). These
+  expose read-only data on loopback;
   `ACCESS_CONTROL_ALLOW_ORIGIN` can be tightened per deployment (see
   `.env.example`) but defaults open for local dashboards.
 

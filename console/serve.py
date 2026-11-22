@@ -16,19 +16,18 @@ Proxied paths (browser → console origin → backend):
     /api/breaker       → huginn  :8083/api/breaker/{trigger,reset}  (POST, HALT)
     /api/research[/*]  → research:8094/api/research[/*]  (GET only, with the
                          gateway's bearer token; run submission is disabled)
-    /api/features      → mimir   :8095/api/features
-    /api/features/history → mimir:8095/api/features/history
-    /api/sources       → mimir   :8095/api/sources
     /api/tca           → forseti :8096/api/tca
     /api/tca/fills     → forseti :8096/api/tca/fills
     /api/impact[/schedule] → forseti :8096/api/impact[/schedule] (market impact)
     /api/capacity      → forseti :8096/api/capacity  (strategy capacity)
-    /api/regime[/*]    → heimdall:8097/api/regime[/history|/model]  (HMM regime)
-    /api/health/<svc>  → <svc>/healthz  (huginn|sleipnir|odin|muninn|redpanda-console|heimdall|forseti)
+    /api/health/<svc>  → <svc>/healthz  (huginn|sleipnir|odin|muninn|redpanda-console|forseti)
+
+The feature-store (mimir) and regime (heimdall) routes were removed with those
+services by G2.6 on 2026-11-22 (docs/CONTAINERS.md).
 
 Backend hosts are 127.0.0.1 by default and overridable via env vars
 (HUGINN_HOST, ODIN_HOST, SLEIPNIR_HOST, MUNINN_HOST, REDPANDA_CONSOLE_HOST,
-RESEARCH_HOST, MIMIR_HOST, FORSETI_HOST, HEIMDALL_HOST).
+RESEARCH_HOST, FORSETI_HOST).
 
 A backend being down NEVER crashes the console: the proxy returns 502 with a
 JSON {"error": ...} body and short timeouts so a hung backend can't wedge the
@@ -84,11 +83,9 @@ ODIN_HOST = os.environ.get("ODIN_HOST", "127.0.0.1")
 SLEIPNIR_HOST = os.environ.get("SLEIPNIR_HOST", "127.0.0.1")
 MUNINN_HOST = os.environ.get("MUNINN_HOST", "127.0.0.1")
 REDPANDA_CONSOLE_HOST = os.environ.get("REDPANDA_CONSOLE_HOST", "127.0.0.1")
-# New services (in-compose: research/mimir/forseti; loopback default for dev).
+# New services (in-compose: research/forseti; loopback default for dev).
 RESEARCH_HOST = os.environ.get("RESEARCH_HOST", "127.0.0.1")
-MIMIR_HOST = os.environ.get("MIMIR_HOST", "127.0.0.1")
 FORSETI_HOST = os.environ.get("FORSETI_HOST", "127.0.0.1")
-HEIMDALL_HOST = os.environ.get("HEIMDALL_HOST", "127.0.0.1")
 
 # Research gateway bearer token: a file named by path, never an env value or a
 # command-line argument (G0.4). Read on each proxied request, so creating the
@@ -104,9 +101,7 @@ RESEARCH_RUNS_DISABLED = (
 HUGINN = (HUGINN_HOST, 8083)
 ODIN = (ODIN_HOST, 8086)
 RESEARCH = (RESEARCH_HOST, 8094)
-MIMIR = (MIMIR_HOST, 8095)
 FORSETI = (FORSETI_HOST, 8096)
-HEIMDALL = (HEIMDALL_HOST, 8097)
 
 # Health-check service map: svc name → (host, port). Matches the footer dots.
 HEALTH_TARGETS = {
@@ -115,7 +110,6 @@ HEALTH_TARGETS = {
     "odin": (ODIN_HOST, 8086),
     "muninn": (MUNINN_HOST, 8080),
     "redpanda-console": (REDPANDA_CONSOLE_HOST, 8088),
-    "heimdall": (HEIMDALL_HOST, 8097),
     "forseti": (FORSETI_HOST, 8096),
 }
 
@@ -127,10 +121,6 @@ GET_ROUTES = {
     "/api/validation": (HUGINN[0], HUGINN[1], "/api/validation"),
     "/api/portfolio": (ODIN[0], ODIN[1], "/api/portfolio"),
     "/api/equity": (ODIN[0], ODIN[1], "/api/equity"),
-    # Feature store / Mimir (point-in-time, no lookahead).
-    "/api/features": (MIMIR[0], MIMIR[1], "/api/features"),
-    "/api/features/history": (MIMIR[0], MIMIR[1], "/api/features/history"),
-    "/api/sources": (MIMIR[0], MIMIR[1], "/api/sources"),
     # Execution TCA / Forseti.
     "/api/tca": (FORSETI[0], FORSETI[1], "/api/tca"),
     "/api/tca/fills": (FORSETI[0], FORSETI[1], "/api/tca/fills"),
@@ -138,10 +128,6 @@ GET_ROUTES = {
     "/api/impact": (FORSETI[0], FORSETI[1], "/api/impact"),
     "/api/impact/schedule": (FORSETI[0], FORSETI[1], "/api/impact/schedule"),
     "/api/capacity": (FORSETI[0], FORSETI[1], "/api/capacity"),
-    # Market-regime / Heimdall (Gaussian HMM, Baum-Welch, causal filtering).
-    "/api/regime": (HEIMDALL[0], HEIMDALL[1], "/api/regime"),
-    "/api/regime/history": (HEIMDALL[0], HEIMDALL[1], "/api/regime/history"),
-    "/api/regime/model": (HEIMDALL[0], HEIMDALL[1], "/api/regime/model"),
 }
 
 
@@ -350,7 +336,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         """Return True if the path was a proxied API route (and handled).
 
         The query string is forwarded verbatim so endpoints that key on it
-        (e.g. Mimir's ?as_of=/?instrument=, ?limit=) work through the proxy.
+        (e.g. Forseti's ?instrument=&size=, ?edgeBps=) work through the proxy.
         """
         parts = self.path.split("?", 1)
         path = parts[0]
@@ -451,8 +437,8 @@ def main():
         print("Norse Console serving %s" % DIRECTORY)
         print("  -> %s  (bound to %s)" % (url, BIND_HOST))
         print("  proxy: huginn=%s:8083  odin=%s:8086" % (HUGINN_HOST, ODIN_HOST))
-        print("  proxy: research=%s:8094  mimir=%s:8095  forseti=%s:8096  heimdall=%s:8097"
-              % (RESEARCH_HOST, MIMIR_HOST, FORSETI_HOST, HEIMDALL_HOST))
+        print("  proxy: research=%s:8094  forseti=%s:8096"
+              % (RESEARCH_HOST, FORSETI_HOST))
         # Say whether the research token is usable; never print the token.
         print(token_status())
         print("  (Ctrl-C to stop)")

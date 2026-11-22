@@ -60,14 +60,6 @@
             <div data-nc="fills-today" style="font-family:'JetBrains Mono',monospace;font-size:21px;font-weight:600;line-height:1">22</div>
           </div>
           <div style="width:1px;background:#16243a;margin:14px 0"></div>
-          <div style="display:flex;flex-direction:column;gap:5px;padding:14px 18px;justify-content:center">
-            <div style="font-size:10px;color:#6b7c95;letter-spacing:.08em;font-weight:600">REGIME</div>
-            <div data-nc="regime-pill" style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:6px;background:#0e1a30;border:1px solid #23436e;width:fit-content">
-              <span data-nc="regime-dot" style="width:6px;height:6px;border-radius:50%;background:#5b8def"></span>
-              <span data-nc="regime" style="font-size:11.5px;font-weight:700;letter-spacing:.08em;color:#5b8def">TREND</span>
-            </div>
-          </div>
-          <div style="width:1px;background:#16243a;margin:14px 0"></div>
           <!-- services -->
           <div style="display:flex;flex-direction:column;gap:6px;padding:14px 18px;justify-content:center;min-width:200px">
             <div style="font-size:10px;color:#6b7c95;letter-spacing:.08em;font-weight:600">SERVICES</div>
@@ -753,59 +745,6 @@
       </div>
     </section>
 
-    <!-- ============ (7) FEATURE STORE · MIMIR ============ -->
-    <section data-screen-label="Feature Store" style="background:#0a111e;border:1px solid #1b2b42;border-radius:12px;padding:16px 18px 18px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:8px">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span style="font-size:13px;font-weight:700;letter-spacing:.06em;color:#cdd7e6">FEATURE STORE · MIMIR</span>
-          <span style="font-size:10px;color:#5b6a82;letter-spacing:.06em">mimir:8095 · point-in-time, no lookahead</span>
-        </div>
-      </div>
-
-      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px">
-        <!-- freshness table -->
-        <div style="flex:1 1 380px;min-width:340px;background:#070d17;border:1px solid #16233a;border-radius:10px;overflow:hidden">
-          <div style="padding:10px 14px;font-size:10.5px;color:#7787a0;font-weight:600;letter-spacing:.06em;border-bottom:1px solid #14202f">SOURCE FRESHNESS · /api/sources</div>
-          <table style="width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace">
-            <thead>
-              <tr style="font-size:9.5px;color:#5b6a82;text-align:right">
-                <th style="text-align:left;padding:8px 14px;font-weight:600;letter-spacing:.04em">INSTRUMENT</th>
-                <th style="padding:8px 8px;font-weight:600">COUNT</th>
-                <th style="padding:8px 8px;font-weight:600">LAST EVENT</th>
-                <th style="padding:8px 14px;font-weight:600">INGEST LAG</th>
-              </tr>
-            </thead>
-            <tbody data-nc="fs-sources-body">
-              <tr><td colspan="4" style="padding:16px 14px;text-align:center;color:#4f5e75;font-size:11.5px;font-style:italic">connecting to mimir…</td></tr>
-            </tbody>
-          </table>
-        </div>
-
-        <!-- as-of lookup -->
-        <div style="flex:1 1 380px;min-width:340px;background:#070d17;border:1px solid #16233a;border-radius:10px;overflow:hidden;display:flex;flex-direction:column">
-          <div style="display:flex;align-items:flex-end;gap:10px;padding:10px 14px;border-bottom:1px solid #14202f;flex-wrap:wrap">
-            <label style="display:flex;flex-direction:column;gap:5px;flex:1 1 200px">
-              <span style="font-size:9.5px;color:#7787a0;font-weight:600;letter-spacing:.06em">AS-OF LOOKUP (event_time ≤ as_of AND ingest_time ≤ as_of)</span>
-              <input data-nc="fs-asof" type="datetime-local" step="1" style="background:#0c1726;border:1px solid #23344c;color:#dbe4f0;font-family:'JetBrains Mono',monospace;font-size:12px;padding:7px 9px;border-radius:7px">
-            </label>
-          </div>
-          <table style="width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace">
-            <thead>
-              <tr style="font-size:9.5px;color:#5b6a82;text-align:right">
-                <th style="text-align:left;padding:8px 14px;font-weight:600;letter-spacing:.04em">INSTRUMENT</th>
-                <th style="padding:8px 8px;font-weight:600">EVENT TIME</th>
-                <th style="padding:8px 14px;font-weight:600">INGEST TIME</th>
-              </tr>
-            </thead>
-            <tbody data-nc="fs-features-body">
-              <tr><td colspan="3" style="padding:16px 14px;text-align:center;color:#4f5e75;font-size:11.5px;font-style:italic">connecting to mimir…</td></tr>
-            </tbody>
-          </table>
-          <div data-nc="fs-basis" style="padding:9px 14px;border-top:1px solid #14202f;margin-top:auto;font-size:10px;color:#5b6a82;font-family:'JetBrains Mono',monospace">—</div>
-        </div>
-      </div>
-    </section>
-
     <!-- ============ (8) EXECUTION TCA · FORSETI ============ -->
     <section data-screen-label="Execution TCA" style="background:#0a111e;border:1px solid #1b2b42;border-radius:12px;padding:16px 18px 18px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:8px">
@@ -860,67 +799,6 @@
       </div>
     </section>
 
-    <!-- MARKET REGIME · HEIMDALL -->
-    <section data-screen-label="Market Regime" style="background:#0a111e;border:1px solid #1b2b42;border-radius:12px;padding:16px 18px 18px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:8px">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span style="font-size:13px;font-weight:700;letter-spacing:.06em;color:#cdd7e6">MARKET REGIME · HEIMDALL</span>
-          <span style="font-size:10px;color:#5b6a82;letter-spacing:.06em">heimdall:8097 · Gaussian HMM · Baum-Welch · causal forward-filter</span>
-        </div>
-        <span data-nc="regime-basis" style="font-size:10.5px;color:#6b7c95;font-family:'JetBrains Mono',monospace">—</span>
-      </div>
-
-      <!-- regime tiles -->
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px;margin-top:10px">
-        <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
-          <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">CURRENT REGIME</span>
-          <span data-nc="hmm-regime" style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#9fb0c8;line-height:1">—</span>
-          <span style="font-size:9.5px;color:#4f5e75">forward-filtered state</span>
-        </div>
-        <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
-          <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">CONFIDENCE</span>
-          <span data-nc="hmm-prob" style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#9fb0c8;line-height:1">—</span>
-          <span style="font-size:9.5px;color:#4f5e75">P(current state)</span>
-        </div>
-        <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
-          <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">STATES (K)</span>
-          <span data-nc="hmm-nstates" style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#9fb0c8;line-height:1">—</span>
-          <span style="font-size:9.5px;color:#4f5e75">hidden regimes</span>
-        </div>
-        <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
-          <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">LOG-LIKELIHOOD</span>
-          <span data-nc="hmm-loglik" style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#9fb0c8;line-height:1">—</span>
-          <span style="font-size:9.5px;color:#4f5e75">fit quality</span>
-        </div>
-        <div style="background:#070d17;border:1px solid #16233a;border-radius:9px;padding:11px 12px;display:flex;flex-direction:column;gap:5px">
-          <span style="font-size:9.5px;color:#6b7c95;font-weight:600;letter-spacing:.05em">OBSERVATIONS</span>
-          <span data-nc="hmm-nobs" style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;color:#9fb0c8;line-height:1">—</span>
-          <span style="font-size:9.5px;color:#4f5e75">rolling window</span>
-        </div>
-      </div>
-
-      <!-- per-state table -->
-      <div style="background:#070d17;border:1px solid #16233a;border-radius:10px;overflow:hidden;margin-top:14px">
-        <div style="padding:10px 14px;font-size:10.5px;color:#7787a0;font-weight:600;letter-spacing:.06em;border-bottom:1px solid #14202f">HIDDEN STATES · stationary vs current</div>
-        <table style="width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace">
-          <thead>
-            <tr style="font-size:9.5px;color:#5b6a82;text-align:right">
-              <th style="text-align:left;padding:8px 14px;font-weight:600;letter-spacing:.04em">STATE</th>
-              <th style="text-align:left;padding:8px 8px;font-weight:600">LABEL</th>
-              <th style="padding:8px 8px;font-weight:600">STATIONARY</th>
-              <th style="padding:8px 14px;font-weight:600">CURRENT P</th>
-            </tr>
-          </thead>
-          <tbody data-nc="hmm-states-body">
-            <tr><td colspan="4" style="padding:16px 14px;text-align:center;color:#4f5e75;font-size:11.5px;font-style:italic">connecting to heimdall…</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div style="margin-top:10px;font-size:10px;color:#5b6a82;line-height:1.55">
-        Regime labels are <b style="color:#7787a0">descriptive</b> — derived from the fitted means and covariances, not from any forward return. Simulation only; no measured out-of-sample edge (PBO&nbsp;=&nbsp;1.0).
-      </div>
-    </section>
-
     <!-- MARKET IMPACT & CAPACITY · FORSETI -->
     <section data-screen-label="Market Impact" style="background:#0a111e;border:1px solid #1b2b42;border-radius:12px;padding:16px 18px 18px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:8px">
@@ -966,7 +844,7 @@
 
     <!-- footer -->
     <div style="display:flex;align-items:center;justify-content:space-between;padding:2px 4px;margin-top:2px">
-      <span style="font-size:10px;color:#3f4d62;font-family:'JetBrains Mono',monospace">muninn · huginn · sleipnir · odin · heimdall · forseti · redpanda</span>
+      <span style="font-size:10px;color:#3f4d62;font-family:'JetBrains Mono',monospace">muninn · huginn · sleipnir · odin · forseti · redpanda</span>
       <span data-nc="status-badge" style="display:inline-flex;align-items:center;gap:6px;font-size:10px;color:#7e6a3a;background:#211a0c;border:1px solid #3d3214;padding:4px 10px;border-radius:6px;letter-spacing:.04em;font-weight:600">
         <span data-nc="status-dot" style="width:6px;height:6px;border-radius:50%;background:#f3b13c"></span><span data-nc="status-text">DEMO DATA · not connected to live endpoints</span>
       </span>

@@ -156,9 +156,8 @@ Notes:
 | `HuginnNoFeatures` | No features consumed for 5m | See §5 "No features" |
 | `NoFillsExecuted` | No Huginn fills for 10m | Check breaker not halted (§2); check Sleipnir |
 | `SleipnirNoFills` | Sleipnir filled nothing for 10m | Check Sleipnir health + intents topic |
-| `HuginnAiFillsRejectedBurst` / `OdinFillsRejectedBurst` | >20% fills rejected | Inspect malformed/duplicate fill events |
-| `HuginnAiDuplicateFills` / `OdinDuplicateFills` | Duplicate fills observed | Check consumer offsets / replay overlap |
-| `HuginnAiModelPersistFailures` | Model save failing for 10m | See §5 "Model persistence" |
+| `OdinFillsRejectedBurst` | >20% fills rejected | Inspect malformed/duplicate fill events |
+| `OdinDuplicateFills` | Duplicate fills observed | Check consumer offsets / replay overlap |
 | `HuginnStatePersistErrors` | Strategy-state save failing | Check Huginn Postgres connectivity |
 | `TargetDown` | A Prometheus target is `up == 0` | `docker compose ps`, restart the down service |
 
@@ -199,13 +198,6 @@ Topics and their retention (per `docs/CONTRACTS.md`):
 1. `docker compose ps` to find the unhealthy/exited container.
 2. `docker compose logs --tail=100 <service>`.
 3. `docker compose up -d <service>` to recreate it.
-
-**huginn-ai model persistence failing (`HuginnAiModelPersistFailures`):**
-- The model is written under `MODEL_DIR` (default `/data/huginn-ai`). The
-  container runs as a non-root user that owns that directory; if you mount an
-  external volume there, ensure it is writable by uid `10001`. Persistence
-  failures are non-fatal (the service keeps serving the in-memory model) but
-  the model is lost on restart until the next retrain.
 
 **Muninn checkpoint / restart caveat (READ BEFORE restarting Muninn):**
 - Muninn's `CheckpointManager` uses **Java serialization** for checkpoints.

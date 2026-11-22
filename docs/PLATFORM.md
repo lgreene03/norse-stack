@@ -47,13 +47,10 @@ flowchart LR
         R1[muninn-py: IC / forward returns]
     end
     subgraph PLANES[Self-serve platform planes]
-        M1[Mimir: point-in-time<br/>feature store :8095]
         RG[Research gateway:<br/>earlier runs, read-only :8094]
         FT[Forseti: execution TCA +<br/>market impact / capacity :8096]
-        HD[Heimdall: market-regime<br/>Gaussian HMM / Baum-Welch :8097]
     end
 
-    M1 --> F1
     A1 --> F1
     A2 --> F1
     F1 --> S1 & S2 & S3
@@ -194,6 +191,12 @@ path. Submit a job with `POST /api/research/runs`, poll it with
 
 ### Mimir — the point-in-time data plane (port 8095)
 
+**Retired on 2026-11-22 by the owner's decision (G2.6,
+[CONTAINERS.md](CONTAINERS.md)).** It stored the retired order-book-imbalance
+signal's features; H1 and H2 read manifest-pinned archives, where the loader and the
+holdout seal prevent look-ahead instead. Its data volume is kept. The rest of this
+section describes the service as it was built.
+
 A **point-in-time (no-lookahead) feature store.** Every record is stamped with
 both an `event_time` (when the fact was true in the market) and an `ingest_time`
 (when the platform learned it). An as-of query
@@ -238,6 +241,10 @@ an edge claim.
 
 ### Heimdall — the market-regime plane (port 8097)
 
+**Retired on 2026-11-22 by the owner's decision (G2.6,
+[CONTAINERS.md](CONTAINERS.md)).** No registered hypothesis uses regimes. The rest of
+this section describes the service as it was built.
+
 **A Gaussian HMM fit with Baum-Welch (EM)** over a rolling window of feature
 events, reporting the **causal forward-filtered** regime — the state inferred using
 only information available up to each instant, never smoothed with the future.
@@ -256,7 +263,8 @@ per-state means and covariances. Labels (calm / trending / turbulent / choppy) a
 Together these are the same ethic as the validation gate, projected onto four
 planes: **research** (is the edge real?), **data** (is the input free of
 lookahead?), **execution** (did the costs behave as modeled, and how far could this
-scale?), and **regime** (what state is the market in — descriptively?).
+scale?), and **regime** (what state is the market in — descriptively?). Since G2.6
+retired Mimir and Heimdall on 2026-11-22, only the research and execution planes run.
 
 ## The loop, in one sentence
 
@@ -271,5 +279,5 @@ validation gate is non-negotiable and applies to all of them equally.
 - [`ADDING_AN_ALPHA.md`](ADDING_AN_ALPHA.md) — the concrete recipe.
 - [`EDGE_VERDICT.md`](EDGE_VERDICT.md) — the honest no-edge result and why it is a
   feature.
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — the 22-container service topology.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — the 19-container service topology.
 - [`RESULTS.md`](RESULTS.md) — full unedited backtester/walk-forward output.

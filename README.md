@@ -8,7 +8,7 @@
 [![muninn-py CI](https://github.com/lgreene03/muninn-py/actions/workflows/ci.yml/badge.svg)](https://github.com/lgreene03/muninn-py/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Norse Stack is a 22-container distributed crypto trading system that ingests live Binance market data, computes 10 independent signal layers, executes quantitative strategies with regime-aware threshold adaptation, routes orders through TWAP/VWAP execution algorithms, and monitors everything through Prometheus and Grafana. Named after figures from Norse mythology.
+Norse Stack is a 19-container distributed crypto trading system that ingests live Binance market data, computes 10 independent signal layers, executes quantitative strategies with regime-aware threshold adaptation, routes orders through TWAP/VWAP execution algorithms, and monitors everything through Prometheus and Grafana. Named after figures from Norse mythology.
 
 ## Quant platform, not a bot
 
@@ -73,7 +73,7 @@ Two short, specific write-ups of senior-level findings on this stack — real nu
 ## Architecture
 
 > **See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** for the full rendered
-> diagrams — a 22-container topology with Kafka topics on every edge, plus a
+> diagrams — a 19-container topology with Kafka topics on every edge, plus a
 > single-trade sequence diagram (feature → signal → cost-hurdle gate → intent →
 > risk → fill → portfolio + analytics). GitHub renders the mermaid natively.
 
@@ -89,13 +89,13 @@ The quick ASCII view:
                         │  │ Engine   │            │ Engine   │◄─────────│ Gateway  │ │
                         │  └──────────┘            └────┬─────┘  fills   └──────────┘ │
                         │       │                       │                      │       │
-                        │       │              ┌────────┼────────┐             │       │
-                        │       ▼              ▼        ▼        ▼             │       │
-                        │  ┌──────────┐  ┌─────────┐ ┌──────┐ ┌─────────┐    │       │
-                        │  │OBI-BRIDGE│  │  ODIN   │ │BRAGI │ │HUGINN-AI│    │       │
-                        │  │ 10-Layer │  │Analytics│ │Explain│ │  ML/    │    │       │
-                        │  │ Signals  │  │ Monitor │ │Engine │ │ XGBoost │    │       │
-                        │  └──────────┘  └─────────┘ └──────┘ └─────────┘    │       │
+                        │       │              ┌────────┘                      │       │
+                        │       ▼              ▼                               │       │
+                        │  ┌──────────┐  ┌─────────┐                           │       │
+                        │  │OBI-BRIDGE│  │  ODIN   │                           │       │
+                        │  │ 10-Layer │  │Analytics│                           │       │
+                        │  │ Signals  │  │ Monitor │                           │       │
+                        │  └──────────┘  └─────────┘                           │       │
                         │                                                     │       │
                         │                      ┌──────────────────┐           │       │
                         │                      │   OBSERVABILITY  │           │       │
@@ -116,13 +116,11 @@ The quick ASCII view:
 | **[Sleipnir](https://github.com/lgreene03/sleipnir)** | Go 1.25 | Order execution gateway with TWAP/VWAP algorithms, rate limiting, pre-trade risk |
 | **Obi-Bridge** | Python | Real-time 10-layer signal computation from live Binance order books |
 | **Odin** | Python | Performance analytics: Sharpe, Sortino, CVaR, VaR, Monte Carlo, correlation matrix |
-| **Bragi** | Python | Trade explainability engine with human-readable decision logs |
-| **Huginn-AI** | Python | XGBoost signal-quality model, served with versioning, provenance and online retraining; not a live signal in the shipped config (OBI ML gate off by default) |
 | **Research Gateway** | Go 1.25 | Read-only since G1.2: serves earlier walk-forward runs behind a bearer token and starts none; trials run through `research/norse_research` |
-| **Mimir** | Python | Point-in-time (no-lookahead) feature store: event_time + ingest_time, as-of queries |
 | **Forseti** | Python | Execution TCA from real fills, plus market-impact (square-root law) and strategy-capacity modelling |
-| **Heimdall** | Python | Market-regime detector: Gaussian HMM fit with Baum-Welch, causal forward-filtered state |
 | **[muninn-py](https://github.com/lgreene03/muninn-py)** | Python | Research SDK: Polars DataFrames, IC analysis, Streamlit dashboard |
+
+Bragi (trade explainability), Huginn-AI (XGBoost signal-quality model), Mimir (point-in-time feature store) and Heimdall (HMM market-regime detector) served the retired order-book-imbalance signal and were retired on 2026-11-22 by the owner's decision (G2.6, [docs/CONTAINERS.md](docs/CONTAINERS.md)).
 
 ### Signal Layers (Obi-Bridge)
 
@@ -137,7 +135,7 @@ The bridge computes 10 independent signal layers from live Binance data, each ca
 | 5 | Fear & Greed Index | Market-wide sentiment indicator |
 | 6 | Funding Rate | Perpetual futures positioning pressure |
 | 7 | Open Interest Cascade | Futures contract count delta |
-| 8 | ML Confidence | XGBoost probability, carried as provenance; consumed only when STRATEGY_OBI_ML_GATE is on (off by default) |
+| 8 | ML Confidence | Always the neutral 0.5 (`mlReady` 0) since huginn-ai was retired (G2.6, [docs/CONTAINERS.md](docs/CONTAINERS.md)); consumed only when STRATEGY_OBI_ML_GATE is on (off by default) |
 | 9 | News Sentiment | Always 0 since news-sentinel was retired (G2.6, [docs/CONTAINERS.md](docs/CONTAINERS.md)) |
 | 10 | Regime Detection | Hurst exponent + autocorrelation classification |
 
@@ -158,7 +156,7 @@ Exchange → Muninn (trades → features via Redpanda)
               ↓
          Huginn (fill → portfolio update → PnL tracking)
               ↓
-    Odin (analytics) + Bragi (explainability) + Prometheus/Grafana (metrics)
+    Odin (analytics) + Prometheus/Grafana (metrics)
 ```
 
 ---
@@ -235,13 +233,9 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 | 8083 | Huginn API | http://localhost:8083/api/snapshot |
 | 8085 | Sleipnir API | http://localhost:8085/healthz |
 | 8086 | Odin Analytics | http://localhost:8086/api/analytics |
-| 8087 | Bragi Explainer | http://localhost:8087/api/decisions |
 | 8088 | Redpanda Console | http://localhost:8088 |
-| 8092 | Huginn-AI ML | http://localhost:8092/api/model/status |
 | 8094 | Research Gateway | http://localhost:8094/api/research/runs |
-| 8095 | Mimir Feature Store | http://localhost:8095/api/features |
 | 8096 | Forseti TCA / Impact | http://localhost:8096/api/tca · http://localhost:8096/api/impact |
-| 8097 | Heimdall Regime | http://localhost:8097/api/regime |
 | 8098 | Recording Audit (G0.15) | http://localhost:8098/metrics |
 | 9091 | Prometheus | http://localhost:9091 |
 | 9093 | Alertmanager | http://localhost:9093 |
@@ -282,14 +276,6 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 - `GET /api/research/runs` lists, and `GET /api/research/runs/{id}` returns, runs that earlier versions persisted. Both need `Authorization: Bearer <token>`, with the token in the untracked `secrets/research_token` ([RUNBOOK, section 1.1](docs/RUNBOOK.md)). The console adds it to research reads; it binds 127.0.0.1 and refuses a foreign Host header, so only local processes can use it. The gateway sends no CORS headers and refuses a Host header other than 127.0.0.1, localhost or research on 8094.
 - Walk-forward itself still runs offline through huginn's `cmd/walkforward`; the published results are in [docs/EDGE_VERDICT.md](docs/EDGE_VERDICT.md).
 
-### Mimir (point-in-time feature store)
-- `GET /api/features?as_of=<t>` — as-of query returning only data known at instant `t` (no lookahead)
-- `GET /api/features/history` — auditable record history with event_time and ingest_time
-- `GET /api/sources` — registered data sources
-- Stamps both `event_time` (when a fact was true) and `ingest_time` (when the platform learned it); onboarding a source replays the topic and stamps a fresh `ingest_time`
-- Idempotent ingestion: keyed on the feature payload's `eventId` (UNIQUE index + `INSERT OR IGNORE`), so a consumer replay or the Heimdall warm-start re-read stores each event once rather than duplicating history
-- **What it demonstrates:** prevents the #1 backtest sin — lookahead bias — structurally at the data layer
-
 ### Forseti (execution TCA + market impact / capacity)
 - `GET /api/tca` — aggregate transaction-cost analysis: realized slippage, maker/taker mix, fees, implementation shortfall
 - `GET /api/tca/fills` — the underlying per-fill records
@@ -299,23 +285,15 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 - Never fabricates a benchmark: with no arrival price (e.g. simulated/paper fills) it reports slippage as `null` rather than inventing a number
 - **What it demonstrates:** independently measures whether the `CostHurdle` gate actually works in execution, and models how far a strategy could scale before impact eats the (hypothetical) edge — execution-quality rigor
 
-### Heimdall (market-regime detection — Gaussian HMM)
-- `GET /api/regime` — current market regime from a Gaussian HMM fit with Baum-Welch (EM): causal forward-filtered `currentRegime`, full `stateProbs`, `transitionMatrix`, `stationary` distribution, `logLikelihood`
-- `GET /api/regime/history` — recent regime assignments over the rolling window
-- `GET /api/regime/model` — fitted per-state means/covariances and the deterministic label derivation
-- Fits a 3-state HMM over a rolling window of `features.obi.v1`, refits online, and warm-starts from Mimir's persisted history so it is trained on boot. Regime **labels** (calm / trending / turbulent / choppy) are derived from the fitted parameters — descriptive, not predictive.
-- **What it demonstrates:** the HMM/Baum-Welch regime-modelling lineage that Renaissance's Medallion fund is documented to have used — implemented honestly, as a descriptive lens with no edge claim (0/4 OOS-profitable folds on both the 24h fixture and the six-month run — see [docs/EDGE_VERDICT.md](docs/EDGE_VERDICT.md))
-
 ### Observability
-- Prometheus scraping Huginn, Sleipnir, Odin, Huginn-AI, and Muninn metrics (15s interval)
-- Alert rules (`monitoring/alerts/`) for pipeline stalls (no features/fills), fill rejection & duplicate bursts, model/state persistence failures, and target-down, routed through Alertmanager
+- Prometheus scraping Huginn, Sleipnir, Odin, and Muninn metrics (15s interval)
+- Alert rules (`monitoring/alerts/`) for pipeline stalls (no features/fills), fill rejection & duplicate bursts, strategy-state persistence failures, and target-down, routed through Alertmanager
 - 11-panel auto-provisioned Grafana dashboard: signal-to-decision latency (p50/p95/p99), feature event age, orders by side, risk halt status, max drawdown gauge, portfolio value, realized PnL, and more
 - Distributed tracing via OpenTelemetry (Tempo-compatible)
 
 ### Python service resilience
-- **Per-message decode isolation:** odin/bragi/huginn-ai decode each Kafka record inside its own try/except; a poison (undecodable) record increments a `*_decode_failure_total` counter and is republished to a `<topic>.dlq` topic (best-effort) instead of stalling or dropping the rest of the batch.
-- **Consumer-thread liveness:** each consumer publishes a per-cycle heartbeat. `/healthz` (odin, bragi, huginn-ai) returns `503` once the heartbeat is stale beyond `HEALTH_MAX_STALENESS_SECS`, so a wedged consumer is detectable even while the HTTP server is up. Health reports OK until the loop has started so container startup isn't failed closed during Kafka connect/retry.
-- **Bragi replay-safety:** Bragi consumes from `earliest` (configurable via `AUTO_OFFSET_RESET`) and dedups on feature `eventId` / fill `execution_id` with a bounded seen-set, so a restart rebuilds the decision log without losing or double-counting events.
+- **Per-message decode isolation:** odin decodes each Kafka record inside its own try/except; a poison (undecodable) record increments a `*_decode_failure_total` counter and is republished to a `<topic>.dlq` topic (best-effort) instead of stalling or dropping the rest of the batch.
+- **Consumer-thread liveness:** each consumer publishes a per-cycle heartbeat. `/healthz` (odin) returns `503` once the heartbeat is stale beyond `HEALTH_MAX_STALENESS_SECS`, so a wedged consumer is detectable even while the HTTP server is up. Health reports OK until the loop has started so container startup isn't failed closed during Kafka connect/retry.
 - **obi-bridge batched flush:** the producer flushes once per poll cycle (all symbols together) rather than synchronously per message.
 - **Configurable CORS:** the read-only HTTP APIs default to `Access-Control-Allow-Origin: *` but can be locked to a single origin via `ACCESS_CONTROL_ALLOW_ORIGIN` (see `.env.example`).
 
@@ -326,7 +304,7 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 - **Deterministic replay.** Muninn's feature engine produces byte-identical outputs from the same input events, enforced by ArchUnit rules and CI integration tests.
 - **One computation path.** Live and replay use the same code — no separate batch pipeline.
 - **Kafka-native boundaries.** Services communicate exclusively through Redpanda topics. No shared databases, no direct RPC (except Huginn's optional gRPC for programmatic queries).
-- **Local-first.** The full 22-container stack runs on a single machine. No cloud services required.
+- **Local-first.** The full 19-container stack runs on a single machine. No cloud services required.
 - **Sim mode everywhere.** Sleipnir's sim exchange and Muninn's synthetic trade ingestion mean the entire pipeline is testable without exchange credentials.
 
 ---
@@ -357,7 +335,6 @@ go run ./cmd/walkforward --data ../norse-stack/data/features-*.jsonl
 | Execution Gateway | Go 1.25, Binance REST/WS, SQLite, TWAP/VWAP algos |
 | Signal Bridge | Python 3.10+, Binance WebSocket, regime detection |
 | Analytics | Python 3.10+, Monte Carlo, variance-covariance VaR |
-| ML Pipeline | Python, XGBoost, online retraining |
 | Research SDK | Python 3.10+, Polars, pandas, Pydantic v2, httpx |
 | Message Broker | Redpanda (Kafka-compatible) |
 | Storage | PostgreSQL 16, MinIO (S3-compatible), Parquet/Iceberg |
