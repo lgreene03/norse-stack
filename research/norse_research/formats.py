@@ -63,6 +63,36 @@ def seal_engine_classes() -> None:
     _engine_sealed = True
 
 
+class Frozen(metaclass=EngineClass):
+    """Base of the engine objects a strategy can hold or is lent: their attributes are
+    given once, by ``build`` in ``__init__``, and can never be set or deleted after, so
+    nothing a strategy does to one, under any name, changes what the engine reads from
+    it later (security review of PR 61, the sweep of what a strategy can reach). State
+    such an object must keep changing is held in closures, with no attribute path to it."""
+
+    __slots__ = ("_complete",)
+
+    def __setattr__(self, name: str, value) -> None:
+        raise AttributeError(f"{type(self).__name__} is read-only: {name} cannot be set")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError(f"{type(self).__name__} is read-only: {name} cannot be deleted")
+
+
+def build(instance: Frozen, **attributes) -> None:
+    """Give a ``Frozen`` object its attributes, once, while it is built: a second call,
+    on an object already built, is refused, so ``build`` cannot reopen one."""
+    try:
+        object.__getattribute__(instance, "_complete")
+    except AttributeError:
+        pass
+    else:
+        raise AttributeError(f"{type(instance).__name__} is already built")
+    for name, value in attributes.items():
+        object.__setattr__(instance, name, value)
+    object.__setattr__(instance, "_complete", True)
+
+
 def read_only(mapping: Mapping) -> Mapping:
     """A read-only view of a copy of ``mapping``: the module-level tables a strategy can
     reach, so none can be changed in place (``update``, an item store)."""

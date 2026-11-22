@@ -24,7 +24,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from itertools import pairwise
 
-from ..formats import INTERVAL_MS, DatasetSpec, EngineABCMeta, EngineClass, Kline
+from ..formats import (
+    INTERVAL_MS,
+    DatasetSpec,
+    EngineABCMeta,
+    EngineClass,
+    Frozen,
+    Kline,
+    build,
+    read_only,
+)
 from .model import DAY_MS, FUNDING_KNOWN_SLACK_MS, Instrument, SimulationError
 
 FILL_INTERVAL = "15m"
@@ -53,55 +62,61 @@ def vwap(bar: Kline) -> float:
     return bar.quote_volume / bar.volume
 
 
-class SeriesView(Sequence, metaclass=EngineABCMeta):
+class SeriesView(Sequence, Frozen, metaclass=EngineABCMeta):
     """The first ``count`` rows of a series: what is known at the moment it is taken.
 
     The batch and streaming drivers both hand strategies this class over the rows known
-    so far, so the two compute from identical inputs in identical order."""
+    so far, so the two compute from identical inputs in identical order. Its lookups are
+    closures that stop at ``count``, held as its attributes: none leads to a later row
+    or to the list the engine reads, and nothing about the view can be changed once it
+    is built (security review of PR 61).
 
-    __slots__ = ("_count", "_rows", "_times", "name")
+    ``index_of(time)``: the index of the row opening (or settling) exactly at ``time``.
+    ``at(time)``: that row, or None. ``last_at_or_before(time)``: the index of the last
+    known row opening (or settling) at or before ``time``. ``index_after(time)``: the
+    index of the first known row opening (or settling) after ``time``."""
+
+    __slots__ = ("_count", "_row", "at", "index_after", "index_of", "last_at_or_before",
+                 "name")
 
     def __init__(self, name: str, rows: Sequence, times: Sequence[int], count: int) -> None:
-        self.name = name
-        self._rows = rows
-        self._times = times
-        self._count = count
+        def row(index: int):
+            if 0 <= index < count:
+                return rows[index]
+            raise IndexError("row not known at this time")
+
+        def index_of(time: int) -> int | None:
+            i = bisect_left(times, time, 0, count)
+            return i if i < count and times[i] == time else None
+
+        def at(time: int):
+            i = bisect_left(times, time, 0, count)
+            return rows[i] if i < count and times[i] == time else None
+
+        def last_at_or_before(time: int) -> int | None:
+            i = bisect_right(times, time, 0, count) - 1
+            return i if i >= 0 else None
+
+        def index_after(time: int) -> int:
+            return bisect_right(times, time, 0, count)
+
+        build(self, name=name, _count=count, _row=row, index_of=index_of, at=at,
+              last_at_or_before=last_at_or_before, index_after=index_after)
 
     def __len__(self) -> int:
         return self._count
 
     def __getitem__(self, index):
         if isinstance(index, slice):
-            return [self._rows[i] for i in range(*index.indices(self._count))]
-        if index < 0:
-            index += self._count
-        if not 0 <= index < self._count:
-            raise IndexError("row not known at this time")
-        return self._rows[index]
-
-    def index_of(self, time: int) -> int | None:
-        """The index of the row opening (or settling) exactly at ``time``."""
-        i = bisect_left(self._times, time, 0, self._count)
-        return i if i < self._count and self._times[i] == time else None
-
-    def at(self, time: int):
-        i = self.index_of(time)
-        return None if i is None else self._rows[i]
-
-    def last_at_or_before(self, time: int) -> int | None:
-        """The index of the last known row opening (or settling) at or before ``time``."""
-        i = bisect_right(self._times, time, 0, self._count) - 1
-        return i if i >= 0 else None
-
-    def index_after(self, time: int) -> int:
-        """The index of the first known row opening (or settling) after ``time``."""
-        return bisect_right(self._times, time, 0, self._count)
+            return [self._row(i) for i in range(*index.indices(self._count))]
+        return self._row(index + self._count if index < 0 else index)
 
 
 class Segments(metaclass=EngineClass):
     """Section 4: a spot symbol's daily bars split into instruments at every missing
     daily bar. Fed bars in order, by the backtest all at once and by paper trading as
-    they arrive, so both see the same instruments."""
+    they arrive, so both see the same instruments. Only the paper driver keeps one that
+    grows; what a series holds, and what a history lends, is ``fixed()``."""
 
     __slots__ = ("_last", "_start_index", "_starts")
 
@@ -123,36 +138,74 @@ class Segments(metaclass=EngineClass):
         k = bisect_right(self._start_index, index) - 1
         return self._starts[k], self._start_index[k]
 
+    def fixed(self) -> FixedSegments:
+        """The instruments so far, as they can never change."""
+        return FixedSegments(self._starts, self._start_index)
 
-class Series(metaclass=EngineClass):
+
+class FixedSegments(Frozen):
+    """``Segments`` that can never change: held in tuples, built once."""
+
+    __slots__ = ("_start_index", "_starts")
+
+    def __init__(self, starts: Iterable[int], start_index: Iterable[int]) -> None:
+        build(self, _starts=tuple(starts), _start_index=tuple(start_index))
+
+    def start_of(self, index: int) -> tuple[int, int]:
+        """The first open and first index of the instrument holding bar ``index``."""
+        k = bisect_right(self._start_index, index) - 1
+        return self._starts[k], self._start_index[k]
+
+
+class Series(Frozen):
     """A whole series held in memory, with each row's availability instant.
 
     ``horizon`` is where the data was read up to: a daily series whose rows stop
-    before it has ended there (section 4), and one that reaches it has not."""
+    before it has ended there (section 4), and one that reaches it has not. Its rows,
+    times and availability are tuples and nothing about it can be changed once built,
+    so a strategy holding the market cannot alter what the engine reads (security
+    review of PR 61); the one memo it keeps is inside a closure."""
 
     def __init__(self, name: str, rows: Iterable, horizon: int | None = None) -> None:
-        self.name = name
-        self.horizon = horizon
-        self.step = step_of(name)
-        self.rows = list(rows)
-        key = (lambda r: r.calc_time) if self.step is None else (lambda r: r.open_time)
-        self.times = [key(r) for r in self.rows]
-        if any(b <= a for a, b in pairwise(self.times)):
+        step = step_of(name)
+        rows = tuple(rows)
+        key = (lambda r: r.calc_time) if step is None else (lambda r: r.open_time)
+        times = tuple(key(r) for r in rows)
+        if any(b <= a for a, b in pairwise(times)):
             raise SimulationError(f"{name}: rows are not in strictly increasing time order")
-        self.available = [available_at(r, self.step) for r in self.rows]
-        self._ends: dict[Instrument, int | None] = {}
-        self.segments: Segments | None = None
-        if self.step == DAY_MS and name.startswith("spot/"):
-            self.segments = Segments()
-            for i, t in enumerate(self.times):
-                self.segments.add(t, i)
+        segments = None
+        if step == DAY_MS and name.startswith("spot/"):
+            growing = Segments()
+            for i, t in enumerate(times):
+                growing.add(t, i)
+            segments = growing.fixed()
+        available = tuple(available_at(r, step) for r in rows)
+        ends: dict[Instrument, int | None] = {}
+        latest: list = [None, None]  # the known count and its view
+
+        def instrument_end(instrument: Instrument) -> int | None:
+            if instrument not in ends:
+                ends[instrument] = _instrument_end(name, times, horizon, instrument)
+            return ends[instrument]
+
+        def view(now: int) -> SeriesView:
+            # A view cannot change, so the engine and the strategy may share the one for
+            # the rows known now; a run asks for it many times at one instant.
+            count = bisect_right(available, now)
+            if latest[0] != count:
+                latest[0], latest[1] = count, SeriesView(name, rows, times, count)
+            return latest[1]
+
+        build(self, name=name, horizon=horizon, step=step, rows=rows, times=times,
+              available=available, segments=segments, _instrument_end=instrument_end,
+              _view=view)
 
     def known(self, now: int) -> int:
         """How many rows are known at ``now``."""
         return bisect_right(self.available, now)
 
     def view(self, now: int) -> SeriesView:
-        return SeriesView(self.name, self.rows, self.times, self.known(now))
+        return self._view(now)
 
     def stops(self) -> list[int]:
         """Every instant a run of this daily series stops: the close of each run's last
@@ -173,40 +226,45 @@ class Series(metaclass=EngineClass):
         """The instant ``instrument`` stops trading: the close of its last daily bar,
         when a later day has no bar. Section 4 looks one bar ahead "only to learn that
         a bar is the last one"; None while the series continues."""
-        if instrument not in self._ends:
-            self._ends[instrument] = self._instrument_end(instrument)
-        return self._ends[instrument]
+        return self._instrument_end(instrument)
 
-    def _instrument_end(self, instrument: Instrument) -> int | None:
-        i = bisect_left(self.times, instrument.first_open)
-        if i >= len(self.times) or self.times[i] != instrument.first_open:
-            raise SimulationError(f"{instrument} is not a run of {self.name}")
-        while i + 1 < len(self.times) and self.times[i + 1] == self.times[i] + DAY_MS:
-            i += 1
-        close = self.times[i] + DAY_MS
-        if i + 1 < len(self.times):
-            return close  # a later bar follows a missing day
-        # The series' last row ends the instrument only if the data was read past it,
-        # so a run never ends an instrument at the edge of the data it loaded.
-        return close if self.horizon is not None and close < self.horizon else None
+
+def _instrument_end(name: str, times: Sequence[int], horizon: int | None,
+                    instrument: Instrument) -> int | None:
+    i = bisect_left(times, instrument.first_open)
+    if i >= len(times) or times[i] != instrument.first_open:
+        raise SimulationError(f"{instrument} is not a run of {name}")
+    while i + 1 < len(times) and times[i + 1] == times[i] + DAY_MS:
+        i += 1
+    close = times[i] + DAY_MS
+    if i + 1 < len(times):
+        return close  # a later bar follows a missing day
+    # The series' last row ends the instrument only if the data was read past it,
+    # so a run never ends an instrument at the edge of the data it loaded.
+    return close if horizon is not None and close < horizon else None
 
 
 # --- fill bars: 15-minute series, read lazily -------------------------------------------
 
 
-class FillSource(metaclass=EngineClass):
+class FillSource(Frozen):
     """Where the backtest reads 15-minute bars: only to find fills (section 5, Fills)
-    and funding marks (section 5, Funding). They are never shown to a strategy."""
+    and funding marks (section 5, Funding). They are never shown to a strategy, and each
+    call returns a list of its own."""
 
     def bars(self, name: str, start: int, end: int) -> list[Kline]:  # pragma: no cover
         raise NotImplementedError
+
+    def crossed(self) -> dict[str, set]:
+        """The recorded gaps its loads crossed, by series."""
+        return {}
 
 
 class RowsSource(FillSource):
     """15-minute bars already in memory (synthetic data and small runs)."""
 
     def __init__(self, series: Mapping[str, Iterable[Kline]]) -> None:
-        self._series = {name: Series(name, rows) for name, rows in series.items()}
+        build(self, _series=read_only({name: Series(name, rows) for name, rows in series.items()}))
 
     def bars(self, name: str, start: int, end: int) -> list[Kline]:
         series = self._series.get(name)
@@ -214,7 +272,7 @@ class RowsSource(FillSource):
             raise SimulationError(f"{name} was not loaded")
         lo = bisect_left(series.times, start)
         hi = bisect_left(series.times, end)
-        return series.rows[lo:hi]
+        return list(series.rows[lo:hi])
 
 
 @dataclass(frozen=True)
@@ -281,28 +339,33 @@ def _load_runs(load: Callable, name: str, runs: Sequence[Span], lo: int, hi: int
 class ViewSource(FillSource):
     """15-minute bars read through the runner's ``DataView`` a calendar month at a
     time, as a fill search reaches them, keeping only the months in use: the
-    candidates' 15-minute bars would not fit in memory at once."""
+    candidates' 15-minute bars would not fit in memory at once. The cache and the gaps
+    crossed are held in closures, so nothing outside can alter what a fill reads."""
 
     def __init__(self, load: Callable, spans: Mapping, keep_months: int = 3) -> None:
-        self._load = load
-        self._spans = {name: runs_of(s) for name, s in spans.items()}
-        self._cache: dict[tuple[str, int], list[Kline]] = {}
-        self._order: list[tuple[str, int]] = []
-        self._keep = keep_months * max(1, len(self._spans))
-        self.gaps: dict[str, set] = {}
+        runs_by_name = {name: runs_of(s) for name, s in spans.items()}
+        cache: dict[tuple[str, int], tuple[Kline, ...]] = {}
+        order: list[tuple[str, int]] = []
+        keep = keep_months * max(1, len(runs_by_name))
+        gaps: dict[str, set] = {}
 
-    def _month(self, name: str, month_start: int) -> list[Kline]:
-        key = (name, month_start)
-        if key not in self._cache:
-            runs = self._spans.get(name)
-            if runs is None:
-                raise SimulationError(f"{name} has no recorded span, so it cannot be read")
-            self._cache[key] = _load_runs(self._load, name, runs, month_start,
-                                          _next_month(month_start), self.gaps)
-            self._order.append(key)
-            while len(self._order) > self._keep:
-                self._cache.pop(self._order.pop(0), None)
-        return self._cache[key]
+        def month(name: str, month_start: int) -> tuple[Kline, ...]:
+            key = (name, month_start)
+            if key not in cache:
+                runs = runs_by_name.get(name)
+                if runs is None:
+                    raise SimulationError(f"{name} has no recorded span, so it cannot be read")
+                cache[key] = tuple(_load_runs(load, name, runs, month_start,
+                                              _next_month(month_start), gaps))
+                order.append(key)
+                while len(order) > keep:
+                    cache.pop(order.pop(0), None)
+            return cache[key]
+
+        def crossed() -> dict[str, set]:
+            return {name: set(found) for name, found in gaps.items()}
+
+        build(self, _month=month, _crossed=crossed)
 
     def bars(self, name: str, start: int, end: int) -> list[Kline]:
         out: list[Kline] = []
@@ -311,6 +374,9 @@ class ViewSource(FillSource):
             out.extend(r for r in self._month(name, month) if start <= r.open_time < end)
             month = _next_month(month)
         return out
+
+    def crossed(self) -> dict[str, set]:
+        return self._crossed()
 
 
 def _dt(ms: int) -> datetime:
@@ -331,31 +397,32 @@ def _next_month(month_start: int) -> int:
 # --- the backtest's market --------------------------------------------------------------
 
 
-class Market(metaclass=EngineClass):
+class Market(Frozen):
     """Everything a backtest reads: the series a strategy may see (daily and four-hour
-    bars, funding), held whole, and a ``FillSource`` for 15-minute bars.
+    bars, funding), held whole, and a ``FillSource`` for 15-minute bars. A strategy that
+    builds one keeps it, so it is read-only once built, its series in a read-only
+    mapping (security review of PR 61).
 
     ``horizon`` is the end of the data, the run's window end: a daily series whose rows
     stop before it has ended (section 4); one that runs to it has not.
     """
 
-    def __init__(self, series: Mapping[str, Iterable], fills: FillSource, horizon: int) -> None:
-        self.series: dict[str, Series] = {}
+    def __init__(self, series: Mapping[str, Iterable], fills: FillSource, horizon: int,
+                 gaps: Mapping[str, Iterable] | None = None) -> None:
+        held: dict[str, Series] = {}
         for name, rows in series.items():
             if name.endswith("/" + FILL_INTERVAL):
                 raise SimulationError(f"{name}: 15-minute bars belong in the fill source")
-            self.series[name] = Series(name, rows, horizon)
-        self.fills = fills
-        self.horizon = horizon
-        self.gaps: dict[str, set] = {}
+            held[name] = Series(name, rows, horizon)
+        build(self, series=read_only(held), fills=fills, horizon=horizon,
+              gaps=read_only({n: frozenset(g) for n, g in (gaps or {}).items()}))
 
     def crossed_gaps(self) -> dict[str, list]:
-        """The recorded gaps every load returned, by series (section 5, Gaps), for the
-        run's ledger entry once the runner has a channel for them."""
+        """The recorded gaps every load returned, by series (section 5, Gaps). The
+        ledger takes the loader's; the tests take these."""
         merged: dict[str, set] = {n: set(g) for n, g in self.gaps.items()}
-        if isinstance(self.fills, ViewSource):
-            for name, gaps in self.fills.gaps.items():
-                merged.setdefault(name, set()).update(gaps)
+        for name, gaps in self.fills.crossed().items():
+            merged.setdefault(name, set()).update(gaps)
         return {name: sorted(gaps) for name, gaps in sorted(merged.items()) if gaps}
 
     @classmethod
@@ -397,6 +464,4 @@ class Market(metaclass=EngineClass):
                 )
             whole[name] = _load_runs(data_view.load, name, runs, runs[0].first_open, horizon,
                                      gaps)
-        market = cls(whole, ViewSource(data_view.load, fill_spans), horizon)
-        market.gaps = gaps
-        return market
+        return cls(whole, ViewSource(data_view.load, fill_spans), horizon, gaps)

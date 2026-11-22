@@ -26,6 +26,10 @@ class _Ewm(metaclass=EngineClass):
 
 
 class History(metaclass=EngineClass):
+    """What a strategy sees at a decision. The engine lends the strategy a copy
+    (``lent``) and reads its own, so whatever a strategy sets on the one it holds
+    reaches only that copy (security review of PR 61)."""
+
     def __init__(
         self,
         now: int,

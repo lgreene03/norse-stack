@@ -374,6 +374,15 @@ class Reach:
     def history_views(self):
         self._views = None
 
+    def view_count(self):
+        self._count = 10 ** 9
+
+    def view_lookup(self):
+        self.index_of = lambda time: 0
+
+    def view_row_ahead(self):
+        return self._row(10 ** 6)
+
 
 VIEW = (Tamper.reach, Reach.book_spot, Reach.spot, Reach.perp, Reach.carry, Reach.marks,
         Reach.cash)
@@ -386,13 +395,37 @@ class Tampering(Scripted):
 
     routes = "view"
     attempts = 0
+    market = None
 
     def decide(self, history, book):
         decision = super().decide(history, book)
         if Tampering.routes == "view":
             attempts = [(a, book) for a in VIEW]
-        else:
+        elif Tampering.routes == "history":
             attempts = [(a, history) for a in HISTORY]
+        elif Tampering.routes == "series":
+            attempts = []
+            for name in ("spot/klines/AAAUSDT/1d", "spot/klines/BBBUSDT/1d"):
+                view = history.series(name)
+                known = len(view)
+                for attempt in (Reach.view_count, Reach.view_lookup):
+                    try:
+                        attempt(view)
+                    except Exception:
+                        pass
+                    Tampering.attempts += 1
+                # The next daily bar opens now and closes a day later: not yet known.
+                for ahead in (lambda v=view: Reach.view_row_ahead(v),
+                              lambda v=view, k=known: v[k],
+                              lambda v=view: v.at(HORIZON - D)):
+                    try:
+                        row = ahead()
+                    except (IndexError, AttributeError):
+                        continue
+                    if row is not None and row.open_time >= history.now:
+                        raise AssertionError(f"read a row not yet known: {row}")
+        else:
+            attempts = market_attempts(Tampering.market) if Tampering.market else []
         for attempt, lent in attempts:
             try:
                 attempt(lent)
@@ -405,6 +438,22 @@ class Tampering(Scripted):
         return decision
 
 
+def market_attempts(market):
+    """Everything public on the market a strategy built and passed to the engine."""
+    attempts = [(lambda m: setattr(m, "horizon", 0), market),
+                (lambda m: setattr(m, "series", {}), market),
+                (lambda m: setattr(m, "fills", None), market),
+                (lambda m: m.series.clear(), market),
+                (lambda m: setattr(m.fills, "_series", {}), market)]
+    for series in market.series.values():
+        attempts += [(lambda s: setattr(s, "rows", ()), series),
+                     (lambda s: setattr(s, "times", ()), series),
+                     (lambda s: setattr(s, "horizon", 0), series),
+                     (lambda s: s.segments.add(0, 0), series),
+                     (lambda s: s.rows.append(None), series)]
+    return attempts
+
+
 def run_tampered(configuration, data_view):
     Tampering.routes = configuration["routes"]
     window = Window.from_configuration(configuration)
@@ -413,9 +462,11 @@ def run_tampered(configuration, data_view):
         runs = []
         for kind in (Scripted, Tampering):
             if driver == "backtest":
-                runs.append(backtest(golden_strategy(kind), Market.from_rows(golden_rows(), HORIZON),
-                                     window, costs))
+                market = Market.from_rows(golden_rows(), HORIZON)
+                Tampering.market = market
+                runs.append(backtest(golden_strategy(kind), market, window, costs))
             else:
+                Tampering.market = None
                 runs.append(paper_run(golden_strategy(kind), golden_rows(), window, costs))
         clean, tampered = runs
         for name in ("orders", "fills", "lapses", "accruals", "marks", "skips", "returns"):
@@ -427,7 +478,7 @@ def run_tampered(configuration, data_view):
 '''
 
 
-@pytest.mark.parametrize("routes", ["view", "history"])
+@pytest.mark.parametrize("routes", ["view", "history", "series", "market"])
 def test_nothing_a_strategy_does_to_what_it_is_lent_changes_the_run(routes, code_root, tmp_path):
     """Security review of PR 61, the route stated after round 2: ``Tamper.reach(view)``,
     a method called through its class with the view as ``self``, reached the live book
@@ -435,7 +486,10 @@ def test_nothing_a_strategy_does_to_what_it_is_lent_changes_the_run(routes, code
     and no reference to the book, and a strategy gets its own history while the engine
     keeps the one it builds the orders from. Every route below, the exact probe among
     them, leaves the orders, fills, lapses, accruals, marks, skips and returns of both
-    drivers as they are without it, and the returns are the golden ones."""
+    drivers as they are without it, and the returns are the golden ones. The sweep adds
+    the series views a history lends (a larger ``_count``, replaced lookups, and every
+    way to read a row not yet known) and everything public on the market the strategy
+    built and passed to the engine."""
     from test_sim_engine import RUNNER_STRATEGY
 
     configuration = {

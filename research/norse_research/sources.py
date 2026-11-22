@@ -14,9 +14,11 @@ genesis step read it as text:
   deletion of an imported name's attributes or items, no subclass of a class from this
   package, and no ``import norse_research.<x>`` or bare ``norse_research``, which would
   reach every module the runner has loaded (security review round 3, E1 and E2);
-* a private attribute is read or written only on ``self`` or ``cls``, which are bound
-  only as a method's first parameter, and no dunder, nor a private name from outside
-  the strategy's own paths, is imported by name;
+* a private attribute is read or written only on the first parameter, ``self`` or
+  ``cls``, of the method it sits in, a method defined directly in a class body; those
+  names are bound nowhere else; a class's own methods are not reached through the class
+  (``C.m(x)``); and no dunder, nor a private name from outside the strategy's own paths,
+  is imported by name;
 * the pinned module declares ``CONFIGURATIONS``, ``PARAMETERS`` and ``DEFAULTS`` as
   literals assigned once, and defines the pinned function at its top level once, so
   what enters the configuration hash is read from the committed text (M4, N1, N4).
@@ -108,6 +110,7 @@ def disallowed_imports(
     imported = _imported_names(tree, package)
     problems += _engine_tampering(tree, imported)
     problems += _private_reach(tree)
+    problems += _class_calls(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             problems += [
@@ -250,19 +253,10 @@ def _private_reach(tree: ast.AST) -> list[str]:
                     params = [*item.args.posonlyargs, *item.args.args]
                     if params:
                         firsts.add(id(params[0]))
-    problems = []
+    problems = _private_attributes(tree)
     for node in ast.walk(tree):
         bound: list[str] = []
-        if isinstance(node, ast.Attribute):
-            private = node.attr.startswith("_") and not node.attr.startswith("__")
-            on_self = isinstance(node.value, ast.Name) and node.value.id in SELF_NAMES
-            api = node.attr in NAMED_TUPLE_API and isinstance(node.ctx, ast.Load)
-            if private and not on_self and not api:
-                problems.append(
-                    f"line {node.lineno}: private attribute {node.attr} of something other "
-                    "than self or cls"
-                )
-        elif isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
             bound = [node.id]
         elif isinstance(node, ast.arg) and id(node) not in firsts:
             bound = [node.arg]
@@ -279,6 +273,81 @@ def _private_reach(tree: ast.AST) -> list[str]:
             for name in bound if name in SELF_NAMES
         ]
     return problems
+
+
+def _private_attributes(tree: ast.AST) -> list[str]:
+    """Each private attribute read or written other than on the first parameter of the
+    method it sits in, a method defined directly in a class body of this file (security
+    review of PR 61, the rule at its root). A function defined at module level, or
+    anywhere outside a class body, does not qualify, whatever its parameter is called;
+    a function or lambda nested inside a method sees that method's parameter."""
+    problems: list[str] = []
+
+    def visit(node: ast.AST, allowed: frozenset[str], class_body: bool) -> None:
+        if isinstance(node, ast.ClassDef):
+            for child in [*node.bases, *node.keywords, *node.decorator_list]:
+                visit(child, allowed, False)
+            for child in node.body:
+                visit(child, allowed, True)
+            return
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            for child in [*node.decorator_list, node.args]:
+                visit(child, allowed, False)
+            params = [*node.args.posonlyargs, *node.args.args]
+            method = class_body and params and not any(
+                _is_staticmethod(d) for d in node.decorator_list)
+            inner = frozenset({params[0].arg}) if method else allowed
+            for child in node.body:
+                visit(child, inner, False)
+            return
+        if isinstance(node, ast.Attribute):
+            private = node.attr.startswith("_") and not node.attr.startswith("__")
+            api = node.attr in NAMED_TUPLE_API and isinstance(node.ctx, ast.Load)
+            mine = isinstance(node.value, ast.Name) and node.value.id in allowed & SELF_NAMES
+            if private and not api and not mine:
+                problems.append(
+                    f"line {node.lineno}: private attribute {node.attr} other than on the "
+                    "first parameter of the method it sits in"
+                )
+        for child in ast.iter_child_nodes(node):
+            visit(child, allowed, False)
+
+    visit(tree, frozenset(), False)
+    return problems
+
+
+def _class_calls(tree: ast.AST) -> list[str]:
+    """Each plain method of a class defined in this file reached through the class,
+    ``C.m(x)`` or ``f = C.m``, which would bind ``self`` to whatever is passed (security
+    review of PR 61): a method is called on an instance, ``self.m()`` or ``C().m()``.
+    Class and static methods, and class attributes that are not methods, stay
+    reachable; a method inherited from another class of this file counts as the
+    class's own."""
+    classes = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)}
+
+    def plain_methods(name: str, seen: frozenset[str] = frozenset()) -> set[str]:
+        if name not in classes or name in seen:
+            return set()
+        node = classes[name]
+        own = {
+            item.name for item in node.body
+            if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef)
+            and not any(_is_staticmethod(d) or (isinstance(d, ast.Name) and d.id == "classmethod")
+                        for d in item.decorator_list)
+        }
+        for base in node.bases:
+            if isinstance(base, ast.Name):
+                own |= plain_methods(base.id, seen | {name})
+        return own
+
+    methods = {name: plain_methods(name) for name in classes}
+    return [
+        f"line {node.lineno}: method {node.attr} reached through class {node.value.id}, which "
+        "would bind self to whatever is passed"
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+        and node.attr in methods.get(node.value.id, ())
+    ]
 
 
 def strategy_declarations(source: str, function: str) -> tuple[frozenset, frozenset, dict]:

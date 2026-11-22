@@ -45,7 +45,16 @@ from .execution import (
     unit_of,
 )
 from .history import History
-from .market import Market, Segments, Series, SeriesView, available_at, has_volume, step_of
+from .market import (
+    FixedSegments,
+    Market,
+    Segments,
+    Series,
+    SeriesView,
+    available_at,
+    has_volume,
+    step_of,
+)
 from .model import (
     DAY_MS,
     FIFTEEN_MINUTES_MS,
@@ -421,7 +430,7 @@ class Paper(metaclass=EngineClass):
     so a long run holds no more than the series a strategy reads."""
 
     def __init__(self, strategy, window: Window, costs: Costs) -> None:
-        self.run = _Run(strategy, window, costs)
+        self._run = _Run(strategy, window, costs)
         self.window = window
         self._rows: dict[str, list] = {}
         self._times: dict[str, list[int]] = {}
@@ -451,7 +460,7 @@ class Paper(metaclass=EngineClass):
             symbol = event.series.split("/")[2]
             if event.row.calc_time < self.window.end:  # later ones fall in no day
                 self._schedule(event.row.calc_time, FUNDING, event.series,
-                               lambda s=symbol, f=event.row: self.run.accrue(
+                               lambda s=symbol, f=event.row: self._run.accrue(
                                    s, f, self._funding_mark(s, f.calc_time)))
         elif isinstance(event, InstrumentEnded):
             self._end(event)
@@ -462,7 +471,7 @@ class Paper(metaclass=EngineClass):
 
     def finish(self) -> RunResult:
         self._drain(self.window.end, DECIDE)
-        return self.run.finish()
+        return self._run.finish()
 
     # --- internals -----------------------------------------------------------------
 
@@ -484,7 +493,7 @@ class Paper(metaclass=EngineClass):
             close = row.open_time + FIFTEEN_MINUTES_MS
             wanted = any(
                 fill_series(o) == name and o.decided_at <= row.open_time < o.deadline
-                for legs in self.run.pending.values() for o in legs
+                for legs in self._run.pending.values() for o in legs
             )
             if wanted and has_volume(row) and close not in self._checks:
                 self._checks.add(close)
@@ -499,15 +508,15 @@ class Paper(metaclass=EngineClass):
         self._checks.discard(close)
         bar_open = close - FIFTEEN_MINUTES_MS
         legs: list[tuple[Order, Kline]] = []
-        for unit in sorted(self.run.pending):
-            orders = self.run.pending[unit]
+        for unit in sorted(self._run.pending):
+            orders = self._run.pending[unit]
             if not all(o.decided_at <= bar_open < o.deadline for o in orders):
                 continue
             bars = [self._latest.get(fill_series(o)) for o in orders]
             if all(b is not None and b.open_time == bar_open and has_volume(b) for b in bars):
                 legs.extend(zip(orders, bars, strict=True))
         if legs:
-            self.run.fill(legs)
+            self._run.fill(legs)
 
     def _end(self, event: InstrumentEnded) -> None:
         end = event.last_open + DAY_MS
@@ -524,24 +533,29 @@ class Paper(metaclass=EngineClass):
             if all(end in self._stops.get(s, ()) for s in OUTAGE_WITNESSES):
                 raise SimulationError(outage_message(end))
         self._schedule(end, HALT, event.symbol,
-                       lambda s=event.symbol, b=self._rows[name][index]: self.run.halt(s, b, end))
+                       lambda s=event.symbol, b=self._rows[name][index]: self._run.halt(s, b, end))
 
     def _tick(self, t: int) -> None:
-        history = History(t, self.run.strategy.interval, self._view_or_none,
-                          self._segments.get, lambda i: i in self._ended, self.run.cache)
-        if t in self.run.mark_times:
-            self.run.mark(history)
+        history = History(t, self._run.strategy.interval, self._view_or_none,
+                          self._fixed_segments, lambda i: i in self._ended, self._run.cache)
+        if t in self._run.mark_times:
+            self._run.mark(history)
         self._drain(t, DECIDE)  # closes and funding stamped at t, after the mark
-        if t in self.run.decision_times:
-            for order in self.run.decide(history):
+        if t in self._run.decision_times:
+            for order in self._run.decide(history):
                 unit = unit_of(order)
-                if order is self.run.pending[unit][0]:
+                if order is self._run.pending[unit][0]:
                     self._schedule(order.deadline, LAPSE, unit,
-                                   lambda u=unit, d=order.deadline: self.run.lapse(u, d))
+                                   lambda u=unit, d=order.deadline: self._run.lapse(u, d))
 
     def _view(self, name: str) -> SeriesView:
         rows = self._rows.get(name, [])
         return SeriesView(name, rows, self._times.get(name, []), len(rows))
+
+    def _fixed_segments(self, name: str) -> FixedSegments | None:
+        """The instruments so far, as a copy that cannot change: what a history lends."""
+        segments = self._segments.get(name)
+        return segments.fixed() if segments is not None else None
 
     def _view_or_none(self, name: str) -> SeriesView | None:
         return self._view(name) if name in self._rows else None

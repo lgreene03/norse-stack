@@ -193,6 +193,9 @@ def test_the_engine_imports_nothing_a_strategy_may_not():
         problems = disallowed_imports(path.read_text(), name, path.stem == "__init__",
                                       ["research/norse_research/sim"])
         problems = [p for p in problems if "norse_research.universe" not in p]
+        # The engine's own classes build on formats.Frozen and EngineClass; the rule
+        # against subclassing a class from this package is about strategies (E1).
+        problems = [p for p in problems if "imported from this package" not in p]
         assert problems == [], path.name
     universe_imports = disallowed_imports((PACKAGE / "universe.py").read_text(),
                                           "norse_research.universe")
@@ -387,7 +390,7 @@ def test_market_from_view_loads_whole_series_and_defers_fill_bars(rows):
     assert market.series["spot/klines/AAAUSDT/1d"].rows[-1].open_time == horizon - sim.DAY_MS
     assert "spot/klines/AAAUSDT/15m" not in market.series
     funding = rows["um/fundingRate/BTCUSDT"]
-    assert market.series["um/fundingRate/BTCUSDT"].rows == [
+    assert list(market.series["um/fundingRate/BTCUSDT"].rows) == [
         f for f in funding if f.calc_time < horizon]
 
 

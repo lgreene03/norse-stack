@@ -715,6 +715,44 @@ def test_private_state_is_reached_only_through_self_or_cls():
         assert problems(source) == [], source
 
 
+def test_the_private_rule_follows_scope_and_a_method_is_not_reached_through_its_class():
+    """Security review of PR 61, the rule at its root. A private attribute is allowed
+    only on the first parameter of the method it sits in, a method defined directly in
+    a class body; and ``C.m(x)`` would bind ``self`` to ``x``, so a class's own methods
+    are not reached through the class."""
+
+    def problems(source):
+        return disallowed_imports(source, "strategies.h1.probe", False, ["strategies/h1"])
+
+    method = "class C:\n    def m(self):\n        return self._x\n\n\n"
+    refused = {
+        "a module function's parameter named self": "def f(self):\n    return self._x\n",
+        "a function nested in a function, not in a class body":
+            "def outer():\n    def m(self):\n        return self._x\n    return m\n",
+        "a private attribute at module level": "self = None\nself._x\n",
+        "C.m(x), the probe's shape": method + "C.m(object())\n",
+        "a method referenced through its class": method + "f = C.m\n",
+        "a method mapped through its class": method + "list(map(C.m, [object()]))\n",
+        "an inherited method through a subclass":
+            method + "class D(C):\n    pass\n\n\nD.m(object())\n",
+        "a method through its class from inside another method":
+            method + "class E:\n    def go(self, view):\n        return C.m(view)\n",
+    }
+    for case, source in refused.items():
+        assert problems(source), case
+    assert any("reached through class C" in p for p in problems(method + "C.m(object())\n"))
+    accepted = (
+        "class C:\n    LIMIT = 3\n\n    def __init__(self):\n        self._seen = []\n\n"
+        "    def m(self):\n        keep = lambda: self._seen\n"
+        "        return [self._seen for _ in range(C.LIMIT)], keep()\n\n"
+        "    @classmethod\n    def build(cls):\n        cls._made = True\n        return cls()\n\n"
+        "    @staticmethod\n    def helper(x):\n        return x\n\n\n"
+        "c = C.build()\nc.m()\nC.helper(1)\nC().m()\n",
+    )
+    for source in accepted:
+        assert problems(source) == [], source
+
+
 def test_a_forbidden_builtin_is_refused_by_name_before_anything_runs(world, calls):
     """Security review of PR 61, round 2, B1 and B6: a forbidden builtin bound to
     another name would undo the other rules (``s = setattr`` redoes E1; ``imp =

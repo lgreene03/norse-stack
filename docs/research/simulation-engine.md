@@ -378,12 +378,23 @@ set). A test runs the exact probe and `view._book`-style routes through class me
 the runner, rewrites every slot of the view, and finds the orders, fills, lapses,
 accruals, marks, skips and returns of both drivers unchanged and the returns golden.
 
-One route of the same kind stays open and is stated for review. The series views a
-strategy is lent keep the run's state behind private attributes, and a method called
-through its class reaches them: raising `_count` reveals rows not yet known, and `_rows`
-is the live list the engine marks and fills from. Both need deliberate code that is
-visible in the committed diff. Closing it would make `SeriesView` frozen and hold its rows
-and times only inside closures.
+A sweep then covered everything a strategy can hold or is lent. A `SeriesView` is
+read-only once built and holds its rows and times only inside closures that stop at the
+rows known, so no attribute leads to a later row or to the list the engine reads; a
+series hands out one view per known count, which the engine and the strategy may share
+because it cannot change. A `Series` keeps its rows, times and availability as tuples,
+its instruments as fixed `FixedSegments`, and its one memo in a closure; a `Market` holds
+its series in a read-only mapping; both, and the fill sources, are `formats.Frozen`:
+their attributes are given once, by `formats.build`, and can never be set again, and the
+fill cache lives in a closure. So a strategy that keeps the market it built cannot
+change what the engine reads from it. The source rule was tightened at its root: a
+private attribute is allowed only on the first parameter of the method it sits in, a
+method defined directly in a class body, and a class's own methods may not be reached
+through the class (`C.m(x)`, `f = C.m`), since that binds `self` to whatever is passed.
+A runner test tries every route above with the source check out of the way, and the
+orders, fills and returns of both drivers stay as they are and golden; it fails on the
+engine before the sweep. On a 2,809-day synthetic market the backtests cost 3 to 10
+percent more time, with byte-identical orders, fills and returns.
 
 huginn's executor and research gateway cost defaults, which G1.9's "Done when" also
 names, live in the huginn repository; a separate huginn pull request aligns them.
